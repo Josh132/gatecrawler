@@ -5,9 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gate Crawler</title>
 <link rel="stylesheet" href="style.css">
+<style>
+  /* the graded frame is stacked over the 2d canvas; it stays hidden until
+     postfx.js gets a webgl context, so a fallback is just the plain canvas */
+  #fx { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
+  #dbg { z-index: 2; }
+</style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<canvas id="fx"></canvas>
 <div id="dbg"></div>
 <script type="module" src="src/main.js"></script>
 </body>

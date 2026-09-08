@@ -9,6 +9,7 @@ import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import { buildHub, drawStation } from './hub.js';
+import { createPostFX } from './postfx.js';
 import {
   createInventory,
   reviveInventory,
@@ -2665,6 +2666,13 @@ function render(g, dt) {
     renderPlay(g, false);
     if (g.panelOpen) renderPanel(g);
     if (g.state === 'dead') renderDead(g);
+  }
+
+  // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
+  // createPostFX returns null wherever webgl isn't available; the 2d frame stands.
+  if (g.postfx !== false) {
+    if (g._fx === undefined) g._fx = createPostFX(ctx.canvas);
+    if (g._fx) g._fx.draw(g.time);
   }
 
   if (window.DEBUG && g.world) {

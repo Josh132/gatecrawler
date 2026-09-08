@@ -1022,6 +1022,8 @@ function guardKind(fac, R, slot) {
 }
 
 function spawnHunter(g) {
+  // don't pile a hunter onto the boss fight — you're already committed there
+  if (g.curRoom === g.world.dhdRoom || g.dhdActive) return;
   g.hunterSpawned = true;
   const fac = g.params.faction || g.params.primary;
   const kind = fac === 'wraith' ? 'wraith' : fac === 'replicator' ? 'replicator_brute' : 'jaffa';

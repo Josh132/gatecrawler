@@ -4,6 +4,14 @@ export const TILE = 34;
 export const ROOM_W = 15; // tiles
 export const ROOM_H = 11; // tiles
 
+// visual palettes — one per world, chosen from the address hash in worldParams
+export const BIOMES = {
+  ruins: { void: '#0b0f16', floorA: '#141c28', floorB: '#111823', wall: '#0c1017', edge: 'rgba(130,195,255,0.55)', glow: '#3f7fb5', grid: 'rgba(90,140,190,0.05)' },
+  ice: { void: '#080e14', floorA: '#152430', floorB: '#111e28', wall: '#0a1218', edge: 'rgba(150,225,240,0.6)', glow: '#5fb8cc', grid: 'rgba(120,190,210,0.06)' },
+  foundry: { void: '#100b08', floorA: '#1c1611', floorB: '#16110d', wall: '#0f0a07', edge: 'rgba(255,180,110,0.5)', glow: '#b5713f', grid: 'rgba(190,130,80,0.05)' },
+  hive: { void: '#0d0812', floorA: '#1a1222', floorB: '#150e1c', wall: '#0e0812', edge: 'rgba(210,150,255,0.5)', glow: '#8f4fb5', grid: 'rgba(160,110,190,0.05)' },
+};
+
 export function buildWorld(params) {
   const R = rngHelpers(makeRng('layout:' + params.seedStr));
   const key = (x, y) => x + ',' + y;
@@ -101,19 +109,42 @@ export function buildWorld(params) {
     }
   }
 
-  // scatter a little pillar cover inside non-gate rooms (kept clear of the
-  // centre prop and the doorway lanes so nothing can wall the player in)
+  // give each room an interior layout — cover, sightlines and feel vary while
+  // the room-graph itself is untouched. Doorway lanes (centre row/col ±1) and
+  // the centre prop tile always stay clear.
   for (const r of rooms) {
     if (r.kind === 'gate') continue;
     const cxT = r.ox + (ROOM_W >> 1);
     const cyT = r.oy + (ROOM_H >> 1);
-    const n = R.int(1, 3);
-    for (let i = 0; i < n; i++) {
-      const px = r.ox + R.int(3, ROOM_W - 4);
-      const py = r.oy + R.int(3, ROOM_H - 4);
-      if (Math.abs(px - cxT) <= 1 && Math.abs(py - cyT) <= 1) continue;
-      if (px === cxT || py === cyT) continue; // keep doorway lanes open
-      grid[at(px, py)] = 1;
+    const clear = (px, py) =>
+      (Math.abs(px - cxT) <= 1 && Math.abs(py - cyT) <= 1) || px === cxT || py === cyT;
+    const put = (px, py) => {
+      if (px > r.ox && px < r.ox + ROOM_W - 1 && py > r.oy && py < r.oy + ROOM_H - 1 && !clear(px, py)) {
+        grid[at(px, py)] = 1;
+      }
+    };
+    const shape = r.kind === 'dhd' ? 'open' : R.pick(['open', 'open', 'arena', 'pillars', 'bisected']);
+    r.shape = shape;
+    if (shape === 'open') {
+      const n = R.int(1, 3);
+      for (let i = 0; i < n; i++) put(r.ox + R.int(3, ROOM_W - 4), r.oy + R.int(3, ROOM_H - 4));
+    } else if (shape === 'arena') {
+      // a ring of pillars around the centre + corner blocks
+      for (const [dx, dy] of [[-3, -2], [0, -3], [3, -2], [-4, 0], [4, 0], [-3, 2], [0, 3], [3, 2]]) {
+        put(cxT + dx, cyT + dy);
+      }
+      for (const [dx, dy] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) put(cxT + dx, cyT + dy);
+    } else if (shape === 'pillars') {
+      for (let px = r.ox + 3; px <= r.ox + ROOM_W - 4; px += 2) {
+        put(px, cyT - 2);
+        put(px, cyT + 2);
+      }
+    } else if (shape === 'bisected') {
+      // a short wall off-centre with a wide gap kept open on the doorway row
+      const wx = cxT + (R.chance(0.5) ? 3 : -3);
+      for (let py = r.oy + 2; py <= r.oy + ROOM_H - 3; py++) {
+        if (Math.abs(py - cyT) > 1) put(wx, py);
+      }
     }
   }
 
@@ -137,11 +168,12 @@ export function tileAt(world, px, py) {
 
 // pre-render the static floor + walls to an offscreen canvas
 export function bakeWorld(world) {
+  const pal = BIOMES[(world.params && world.params.biome) || 'ruins'] || BIOMES.ruins;
   const cv = document.createElement('canvas');
   cv.width = world.W * TILE;
   cv.height = world.H * TILE;
   const c = cv.getContext('2d');
-  c.fillStyle = '#0b0f16';
+  c.fillStyle = pal.void;
   c.fillRect(0, 0, cv.width, cv.height);
 
   const W = world.W;
@@ -152,7 +184,7 @@ export function bakeWorld(world) {
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
       if (wall(tx, ty)) continue;
-      c.fillStyle = (tx + ty) & 1 ? '#141c28' : '#111823';
+      c.fillStyle = (tx + ty) & 1 ? pal.floorA : pal.floorB;
       c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
     }
   }
@@ -166,7 +198,7 @@ export function bakeWorld(world) {
     }
   }
   c.clip();
-  c.strokeStyle = 'rgba(90,140,190,0.05)';
+  c.strokeStyle = pal.grid;
   c.lineWidth = 1;
   for (let tx = 0; tx <= W; tx++) {
     c.beginPath();
@@ -193,17 +225,17 @@ export function bakeWorld(world) {
         if (!wall(tx + ox, ty + oy)) touches = true;
       }
       if (!touches) continue;
-      c.fillStyle = '#0c1017';
+      c.fillStyle = pal.wall;
       c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
     }
   }
 
   // glowing outline only along wall edges that face open ground
-  c.strokeStyle = 'rgba(130,195,255,0.55)';
+  c.strokeStyle = pal.edge;
   c.lineWidth = 2;
   c.lineCap = 'round';
   c.shadowBlur = 8;
-  c.shadowColor = '#3f7fb5';
+  c.shadowColor = pal.glow;
   c.beginPath();
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {

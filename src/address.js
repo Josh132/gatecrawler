@@ -50,6 +50,14 @@ export function worldParams(addr, hop) {
   const mods = [];
   if (c % 100 < 55) mods.push(modPool[d % modPool.length]);
   const roomCount = 4 + (e % 3) + Math.min(2, Math.floor(threat / 2)); // 4..8
+  // biome loosely follows the faction, with a coin-flip between two looks
+  const biomePools = {
+    jaffa: ['ruins', 'foundry'],
+    wraith: ['hive', 'ice'],
+    replicator: ['foundry', 'ice'],
+  };
+  const bp = biomePools[primary] || ['ruins', 'foundry'];
+  const biome = bp[h() % bp.length];
   return {
     address: normalize(addr),
     hop,
@@ -59,7 +67,7 @@ export function worldParams(addr, hop) {
     secondary: null,
     mods,
     roomCount,
-    biome: 'desert-ruins',
+    biome,
     seedStr: normalize(addr),
   };
 }

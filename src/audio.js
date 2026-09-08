@@ -24,41 +24,223 @@ function noiseBuffer(dur) {
   return b;
 }
 
-export const sfx = {
-  p90() {
-    if (!ctx) return;
-    const t = ctx.currentTime;
-    const src = ctx.createBufferSource();
-    src.buffer = noiseBuffer(0.08);
+// --- tiny voice builders in the env()/noiseBuffer() idiom -------------------
+// A filtered noise grain: buffer -> biquad (optional freq sweep) -> env'd gain.
+function noiseVoice(t, dur, type, f0, f1, Q, attack, decay, peak, pad) {
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer(dur);
+  const bq = ctx.createBiquadFilter();
+  bq.type = type;
+  bq.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) bq.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+  if (Q != null) bq.Q.value = Q;
+  const g = ctx.createGain();
+  env(g, t, attack, decay, peak);
+  src.connect(bq).connect(g).connect(ctx.destination);
+  src.start(t);
+  src.stop(t + attack + decay + (pad || 0.02));
+  return { src, bq, g };
+}
+
+// A single oscillator grain: osc (optional freq glide) -> env'd gain.
+function toneVoice(t, type, f0, f1, glide, attack, decay, peak, pad) {
+  const o = ctx.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + glide);
+  const g = ctx.createGain();
+  env(g, t, attack, decay, peak);
+  o.connect(g).connect(ctx.destination);
+  o.start(t);
+  o.stop(t + attack + decay + (pad || 0.02));
+  return { o, g };
+}
+
+// --- per-weapon shot voices ------------------------------------------------
+function fireP90(t) {
+  // fast, dry, mid crack — the original P90 pop
+  noiseVoice(t, 0.08, 'bandpass', 1900, 1900, 0.9, 0.002, 0.06, 0.22, 0.02);
+}
+function fireStaff(t) {
+  // heavy energy discharge: descending square + noise thump + a little sub
+  toneVoice(t, 'square', 430, 80, 0.25, 0.003, 0.28, 0.2, 0.07);
+  noiseVoice(t, 0.12, 'lowpass', 900, 480, null, 0.001, 0.1, 0.12, 0.03);
+  toneVoice(t, 'sine', 74, 42, 0.18, 0.005, 0.16, 0.13, 0.05);
+}
+function fireZat(t) {
+  // quick electric zap: high fizz sweeping down + a short squared pitch drop
+  noiseVoice(t, 0.1, 'bandpass', 5200, 1300, 9, 0.001, 0.08, 0.17, 0.03);
+  toneVoice(t, 'square', 1500, 320, 0.08, 0.001, 0.07, 0.09, 0.03);
+}
+function fireShotgun(t) {
+  // heaviest kinetic: broad noise burst + low sine thump + a short crack
+  noiseVoice(t, 0.28, 'lowpass', 2200, 320, null, 0.001, 0.24, 0.22, 0.05);
+  toneVoice(t, 'sine', 95, 40, 0.16, 0.002, 0.2, 0.24, 0.06);
+  noiseVoice(t, 0.06, 'bandpass', 1400, 1400, 1.0, 0.001, 0.05, 0.12, 0.03);
+}
+function fireBurst(t) {
+  // tight snappy rifle crack — brighter/cleaner than p90, very short
+  noiseVoice(t, 0.05, 'bandpass', 2700, 2700, 1.3, 0.001, 0.04, 0.2, 0.02);
+  toneVoice(t, 'square', 240, 90, 0.02, 0.001, 0.025, 0.1, 0.02);
+}
+function fireLauncher(t) {
+  // hollow woody thunk of a shell leaving the tube — not the blast
+  toneVoice(t, 'triangle', 180, 84, 0.06, 0.001, 0.08, 0.24, 0.03);
+  noiseVoice(t, 0.06, 'bandpass', 420, 300, 7, 0.001, 0.05, 0.13, 0.03);
+}
+function fireBeamHit(t) {
+  // short attack transient; the sustain is sfx.beam(true)
+  noiseVoice(t, 0.04, 'bandpass', 3200, 3200, 2, 0.001, 0.04, 0.13, 0.02);
+  toneVoice(t, 'sawtooth', 900, 380, 0.05, 0.001, 0.05, 0.1, 0.02);
+}
+
+// --- looping continuous beam hum -----------------------------------------
+let beamNodes = null;
+function beamStart() {
+  if (beamNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 1900;
-    bp.Q.value = 0.9;
+    bp.frequency.value = 1500;
+    bp.Q.value = 4;
     const g = ctx.createGain();
-    env(g, t, 0.002, 0.06, 0.22);
-    src.connect(bp).connect(g).connect(ctx.destination);
-    src.start(t);
-    src.stop(t + 0.1);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.06, t + 0.05);
+    bp.connect(g).connect(ctx.destination);
+    const oscs = [];
+    for (const f of [440, 443.5]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(bp);
+      o.start(t);
+      oscs.push(o);
+    }
+    // subtle tremolo on the output gain
+    const trem = ctx.createOscillator();
+    trem.type = 'sine';
+    trem.frequency.value = 7.5;
+    const tdepth = ctx.createGain();
+    tdepth.gain.value = 0.018;
+    trem.connect(tdepth).connect(g.gain);
+    trem.start(t);
+    oscs.push(trem);
+    beamNodes = { g, oscs };
+  } catch (e) {
+    beamNodes = null;
+  }
+}
+function beamStop() {
+  if (!beamNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
+    beamNodes.g.gain.cancelScheduledValues(t);
+    beamNodes.g.gain.setValueAtTime(beamNodes.g.gain.value || 0.06, t);
+    beamNodes.g.gain.linearRampToValueAtTime(0.0001, t + 0.08);
+    for (const o of beamNodes.oscs) {
+      try {
+        o.stop(t + 0.12);
+      } catch (e) {}
+    }
+  } catch (e) {}
+  beamNodes = null;
+}
+
+export const sfx = {
+  // shot sound, distinct per weapon id; unknown id falls back to the p90 voice
+  fire(weaponId) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    switch (weaponId) {
+      case 'staff':
+        fireStaff(t);
+        break;
+      case 'zat':
+        fireZat(t);
+        break;
+      case 'shotgun':
+        fireShotgun(t);
+        break;
+      case 'burst':
+        fireBurst(t);
+        break;
+      case 'launcher':
+        fireLauncher(t);
+        break;
+      case 'beam':
+        fireBeamHit(t);
+        break;
+      case 'p90':
+      default:
+        fireP90(t);
+    }
+  },
+  // start (on truthy) / stop the looping continuous beam hum; idempotent
+  beam(on) {
+    if (!ctx) return;
+    if (on) beamStart();
+    else beamStop();
+  },
+  // empty chamber: a short mechanical click, quiet
+  dryFire() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.02, 'bandpass', 2600, 2600, 2, 0.001, 0.02, 0.1, 0.015);
+    toneVoice(t, 'square', 3200, 3000, 0.01, 0.0005, 0.012, 0.05, 0.01);
+  },
+  // mag-out clack: short noise + a low click
+  reloadStart() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.05, 'lowpass', 1300, 700, null, 0.001, 0.045, 0.16, 0.02);
+    toneVoice(t, 'square', 380, 190, 0.02, 0.001, 0.02, 0.1, 0.01);
+  },
+  // mag-seat snap: two clicks (2nd brighter/louder) + a tiny metallic ring
+  reloadDone() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.03, 'bandpass', 1500, 1500, 1.5, 0.001, 0.03, 0.14, 0.02);
+    const t2 = t + 0.08;
+    noiseVoice(t2, 0.03, 'bandpass', 2700, 2700, 1.6, 0.001, 0.03, 0.24, 0.02);
+    toneVoice(t2, 'triangle', 3140, 3140, 0, 0.002, 0.14, 0.06, 0.03);
+    toneVoice(t2, 'triangle', 4600, 4600, 0, 0.002, 0.11, 0.04, 0.03);
+  },
+  // bullet-meets-enemy thock; heavy -> deeper/louder with more low end
+  impact(heavy) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (heavy) {
+      toneVoice(t, 'sine', 170, 54, 0.09, 0.002, 0.11, 0.3, 0.04);
+      noiseVoice(t, 0.05, 'lowpass', 900, 400, null, 0.001, 0.05, 0.18, 0.02);
+    } else {
+      toneVoice(t, 'sine', 240, 90, 0.05, 0.001, 0.06, 0.2, 0.03);
+      noiseVoice(t, 0.03, 'lowpass', 1800, 1200, null, 0.001, 0.03, 0.12, 0.02);
+    }
+  },
+  // punchy low boom for grenade / launcher blasts — louder than death()
+  explosion() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.55, 'lowpass', 1800, 120, null, 0.005, 0.5, 0.3, 0.06);
+    toneVoice(t, 'sine', 120, 36, 0.35, 0.005, 0.42, 0.3, 0.08);
+    toneVoice(t, 'triangle', 60, 30, 0.5, 0.01, 0.5, 0.14, 0.08);
+  },
+  // bright short ping/chime layered on a big hit or a kill reward
+  crit() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'triangle', 1760, 1760, 0, 0.001, 0.16, 0.16, 0.04);
+    toneVoice(t + 0.02, 'sine', 2637, 2637, 0, 0.001, 0.14, 0.1, 0.04);
+    toneVoice(t + 0.04, 'sine', 3520, 3520, 0, 0.001, 0.12, 0.05, 0.04);
+  },
+  p90() {
+    if (!ctx) return;
+    fireP90(ctx.currentTime);
   },
   staff() {
     if (!ctx) return;
-    const t = ctx.currentTime;
-    const o = ctx.createOscillator();
-    o.type = 'square';
-    o.frequency.setValueAtTime(430, t);
-    o.frequency.exponentialRampToValueAtTime(80, t + 0.25);
-    const g = ctx.createGain();
-    env(g, t, 0.003, 0.28, 0.2);
-    o.connect(g).connect(ctx.destination);
-    o.start(t);
-    o.stop(t + 0.35);
-    const src = ctx.createBufferSource();
-    src.buffer = noiseBuffer(0.12);
-    const g2 = ctx.createGain();
-    env(g2, t, 0.001, 0.1, 0.12);
-    src.connect(g2).connect(ctx.destination);
-    src.start(t);
-    src.stop(t + 0.15);
+    fireStaff(ctx.currentTime);
   },
   hit() {
     if (!ctx) return;

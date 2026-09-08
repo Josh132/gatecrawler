@@ -8,6 +8,7 @@ import { buildWorld, bakeWorld, TILE, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS } from './items.js';
+import { buildHub, drawStation } from './hub.js';
 import {
   createInventory,
   reviveInventory,
@@ -29,7 +30,59 @@ const SAVE_KEY = 'gatecrawler.save.v1';
 const rr = (a, b) => a + Math.random() * (b - a);
 
 function defaultSave() {
-  return { naquadah: 0, maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
+  return { naquadah: 0, intel: 0, tech: [], maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
+}
+
+// merged tech-tree effects — replaced by tech.js's techEffects() once that lands
+function techEffectsFallback() {
+  return {
+    maxHpBonus: 0,
+    dodgeCharges: 1,
+    dodgeCdMul: 1,
+    startArmor: null,
+    startShield: 0,
+    freeRevive: false,
+    weaponSlots: 2,
+    reloadMul: 1,
+    grenadeCap: 4,
+    unlockedWeapons: [],
+    dialCostMul: 1,
+    mapLookahead: 0,
+    startHop: 0,
+    heatMul: 1,
+    naquadahMul: 1,
+    intelMul: 1,
+    deathKeepFrac: 0.5,
+  };
+}
+let techEffects = techEffectsFallback;
+let TECH = [];
+let canResearch = () => false;
+let nodeById = () => null;
+let researchCost = (id) => ({ naquadah: 0 });
+let drawItemIcon = null;
+let rarityOf = () => 'common';
+let RARITY_COLOR = { common: '#8aa0b8', uncommon: '#79d17a', rare: '#c98bff' };
+try {
+  const mod = await import('./tech.js');
+  if (typeof mod.techEffects === 'function') techEffects = mod.techEffects;
+  if (Array.isArray(mod.TECH)) TECH = mod.TECH;
+  if (typeof mod.canResearch === 'function') canResearch = mod.canResearch;
+  if (typeof mod.nodeById === 'function') nodeById = mod.nodeById;
+  if (typeof mod.researchCost === 'function') researchCost = mod.researchCost;
+} catch (e) {
+  /* tech.js not present yet — use the fallback */
+}
+try {
+  const ic = await import('./icons.js');
+  if (typeof ic.drawItemIcon === 'function') drawItemIcon = ic.drawItemIcon;
+  if (typeof ic.rarityOf === 'function') rarityOf = ic.rarityOf;
+  if (ic.RARITY_COLOR) RARITY_COLOR = ic.RARITY_COLOR;
+} catch (e) {
+  /* icons.js not present yet */
+}
+function fx(g) {
+  return techEffects(g.save.tech || []);
 }
 function loadSave() {
   try {
@@ -84,6 +137,11 @@ export function createGame(canvas) {
     heat: 0,
     hunterSpawned: false,
     hitstop: 0,
+    hub: false,
+    station: null, // open station panel in the hub: 'research' | 'infirmary' | 'requisitions'
+    launching: false, // gate map is picking the FIRST destination of a new run
+    runIntel: 0,
+    wheel: 0,
     inv: null,
     panelOpen: false,
     drag: null, // { from:{kind,i,key}, id, count }
@@ -147,6 +205,12 @@ export function createGame(canvas) {
     if (e.button !== 0 || !g.drag) return;
     panelDrop(g);
   });
+  canvas.addEventListener('wheel', (e) => {
+    if (g.state === 'play' && !g.panelOpen) {
+      g.wheel += Math.sign(e.deltaY);
+      e.preventDefault();
+    }
+  });
 
   return {
     g,
@@ -157,14 +221,80 @@ export function createGame(canvas) {
 
 // ---------------------------------------------------------------- run lifecycle
 
-function newRun(g) {
-  g.player = new Player(0, 0);
-  g.player.maxHp = 100 + g.save.maxHpBonus;
-  g.player.hp = g.player.maxHp;
-  g.hop = 0;
-  g.runNaq = 0;
+// ---- the walkable home base ----------------------------------------------
+
+function enterHub(g) {
+  if (g.skipHub) {
+    // test harness fast-path: bypass the walkable hub, deploy straight from HOME
+    launchRun(g, HOME);
+    return;
+  }
+  const w = buildHub();
+  g.world = w;
+  g.worldCanvas = bakeWorld(w);
+  g.flow = makeFlowField(w.grid, w.W, w.H);
+  g.params = { address: 'SGC', threat: 0, faction: 'sgc', primary: 'sgc', mods: [], hop: 0, seedStr: 'sgc' };
+  g.enemies = [];
+  g.bullets = [];
+  g.grenades = [];
+  g.blocks = [];
+  g.pickups = [];
+  g.particles = [];
+  g.hub = true;
+  g.station = null;
+  g.launching = false;
+  g.panelOpen = false;
+  g.drag = null;
+  g.dhdActive = false;
   g.heat = 0;
-  startWorld(g, HOME, 0);
+  g.emp = false;
+  g.hitstop = 0;
+  g._revived = false;
+
+  const p = g.player;
+  p.x = w.gateCenter.x;
+  p.y = w.gateCenter.y + 74;
+  p.kx = p.ky = p.vx = p.vy = 0;
+  p.stun = 0;
+  p.dodge = 0;
+  p.iframe = 0;
+  p.alive = true;
+  p.maxHp = 100 + g.save.maxHpBonus + fx(g).maxHpBonus;
+  p.hp = p.maxHp;
+
+  g.cam.x = p.x;
+  g.cam.y = p.y;
+  g.curRoom = w.rooms[0];
+  g.state = 'hub';
+  persist(g.save);
+  g.message('Stargate Command — SG-1');
+}
+
+function launchRun(g, addr) {
+  const e = fx(g);
+  g.player = new Player(0, 0);
+  const pl = g.player;
+  pl.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
+  pl.hp = pl.maxHp;
+  pl.dodgeMax = e.dodgeCharges || 1;
+  pl.dodgeCharge = pl.dodgeMax;
+  if (e.startShield > 0) {
+    pl.shieldMax = e.startShield;
+    pl.shield = e.startShield;
+  }
+  // starting armour perk fills any empty matching slot
+  if (e.startArmor && ITEMS[e.startArmor]) {
+    const reg = ITEMS[e.startArmor].region;
+    if (reg && !g.inv.equip[reg]) g.inv.equip[reg] = { id: e.startArmor, count: 1 };
+  }
+  g.hub = false;
+  g.launching = false;
+  g.runNaq = 0;
+  g.runIntel = 0;
+  g.heat = 0;
+  g._firstWorld = true;
+  const hop = e.startHop || 0;
+  startWorld(g, addr || g.save.lastAddress || HOME, hop);
 }
 
 function startWorld(g, addr, hop) {
@@ -181,7 +311,10 @@ function startWorld(g, addr, hop) {
   g.panelOpen = false;
   g.drag = null;
   g.hunterSpawned = false;
-  if (hop > 0) g.heat += 0.35; // the hunt intensifies the deeper you push
+  g.hub = false;
+  if (hop > 0 && !g._firstWorld) g.heat += 0.35 * fx(g).heatMul; // the hunt intensifies the deeper you push
+  g._firstWorld = false;
+  g.save.lastAddress = worldParams(addr, hop).address;
   g.hop = hop;
   g.dhdActive = false;
   g.emp = false;
@@ -227,26 +360,47 @@ function startWorld(g, addr, hop) {
 
 function dialHome(g) {
   g.save.naquadah += g.runNaq;
+  g.save.intel = (g.save.intel || 0) + g.runIntel;
   g.save.runs += 1;
   if (g.params) g.save.deepestThreat = Math.max(g.save.deepestThreat, g.params.threat);
-  persist(g.save);
   g.runNaq = 0;
-  g.state = 'menu';
-  g.message('Returned to SGC. Naquadah banked.');
+  g.runIntel = 0;
+  enterHub(g);
+  g.message('Returned to SGC. Naquadah & intel banked.');
 }
 
 function onDeath(g) {
   const p = g.player;
+  const e = fx(g);
+  if (e.freeRevive && !g._revived) {
+    g._revived = true;
+    p.hp = Math.max(1, Math.round(p.maxHp * 0.5));
+    p.iframe = 1.6;
+    g.shake = 22;
+    g.message('MEDICAL OVERRIDE — revive spent');
+    return;
+  }
   p.alive = false;
-  const kept = Math.floor(g.runNaq / 2);
-  g.save.naquadah += kept;
+  const keptN = Math.floor(g.runNaq * (e.deathKeepFrac != null ? e.deathKeepFrac : 0.5));
+  g.save.naquadah += keptN;
+  g.save.intel = (g.save.intel || 0) + g.runIntel; // intel is knowledge — recovered in full
   g.save.runs += 1;
-  persist(g.save);
-  g.deadInfo = { naq: kept, depth: g.hop, addr: g.params ? g.params.address : '' };
+  // the backpack is lost; equipped gear, hotbar and the SGC stash survive
+  const lost = g.inv.grid.filter(Boolean).length;
+  g.inv.grid = g.inv.grid.map(() => null);
+  saveInv(g);
+  g.deadInfo = { naq: keptN, intel: g.runIntel, depth: g.hop, addr: g.params ? g.params.address : '', lost };
   g.state = 'dead';
 }
 
 function buildGateMap(g) {
+  if (g.launching) {
+    const start = g.save.lastAddress || HOME;
+    const list = Array.from(new Set([start, ...neighbors(start, 4)]));
+    const hop = fx(g).startHop || 0;
+    g.mapNodes = list.map((addr, i) => ({ addr, prev: worldParams(addr, hop), i }));
+    return;
+  }
   const list = neighbors(g.params.address, 5);
   g.mapNodes = list.map((addr, i) => ({ addr, prev: worldParams(addr, g.hop + 1), i }));
 }
@@ -285,14 +439,143 @@ function update(g, dt) {
     } else {
       updatePlay(g, dt);
     }
+  } else if (g.state === 'hub') {
+    updateHub(g, dt);
+  } else if (g.state === 'gatemap') {
+    if (g.launching && pressed('Escape')) {
+      g.launching = false;
+      enterHub(g);
+    }
   } else if (g.state === 'dead') {
-    if (pressed('Enter')) g.state = 'menu';
+    if (pressed('Enter')) enterHub(g);
   } else if (g.state === 'menu') {
-    if (pressed('Enter')) newRun(g);
+    if (pressed('Enter')) enterHub(g);
   }
 
   g.mouseWasDown = mouse.down;
+  g.wheel = 0;
   endFrameInput();
+}
+
+function quickHeal(g) {
+  const p = g.player;
+  if (p.hp >= p.maxHp) {
+    g.message('Already at full HP');
+    return;
+  }
+  const isHeal = (id) => ITEMS[id] && ITEMS[id].type === 'consumable' && ITEMS[id].use === 'heal';
+  const need = p.maxHp - p.hp;
+  let pick = null; // { where:'grid'|'hot', i }
+  let pickAmt = Infinity;
+  let fallback = null;
+  let fbAmt = 0;
+  const scan = (arr, where) => {
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i];
+      if (!c || !isHeal(c.id)) continue;
+      const a = ITEMS[c.id].amount;
+      if (a >= need && a < pickAmt) {
+        pickAmt = a;
+        pick = { where, i };
+      }
+      if (a > fbAmt) {
+        fbAmt = a;
+        fallback = { where, i };
+      }
+    }
+  };
+  scan(g.inv.grid, 'grid');
+  scan(g.inv.hotbar, 'hot');
+  const sel = pick || fallback;
+  if (!sel) {
+    g.message('No medical supplies');
+    return;
+  }
+  const arr = sel.where === 'grid' ? g.inv.grid : g.inv.hotbar;
+  const id = arr[sel.i].id;
+  arr[sel.i].count -= 1;
+  if (arr[sel.i].count <= 0) arr[sel.i] = null;
+  const amt = ITEMS[id].amount;
+  p.hp = Math.min(p.maxHp, p.hp + amt);
+  g.message('+' + amt + ' HP  (' + ITEMS[id].name + ')');
+  sfx.pickup();
+  for (let k = 0; k < 8; k++) {
+    g.particles.push(new Particle(p.x, p.y, rr(-70, 70), rr(-70, 70), 0.4, '#7ef77e', 2));
+  }
+  saveInv(g);
+}
+
+function medCount(g) {
+  let n = 0;
+  const add = (arr) => {
+    for (const c of arr) if (c && ITEMS[c.id] && ITEMS[c.id].use === 'heal') n += c.count;
+  };
+  add(g.inv.grid);
+  add(g.inv.hotbar);
+  return n;
+}
+
+function updateHub(g, dt) {
+  const p = g.player;
+  const w = g.world;
+  g.time += 0; // (time already advanced in update)
+
+  if (g.panelOpen) {
+    if (pressed('Escape') || pressed('Tab')) togglePanel(g);
+    return;
+  }
+  if (g.station) {
+    if (pressed('Escape') || pressed('Tab')) g.station = null;
+    return;
+  }
+  if (pressed('Tab') || pressed('KeyI')) {
+    togglePanel(g);
+    return;
+  }
+  if (pressed('KeyQ')) quickHeal(g);
+
+  g.mouse.wx = mouse.x - g.view.w / 2 + g.cam.x;
+  g.mouse.wy = mouse.y - g.view.h / 2 + g.cam.y;
+  let ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+  let iy = (keys.has('KeyS') ? 1 : 0) - (keys.has('KeyW') ? 1 : 0);
+  if (ix || iy) {
+    const l = Math.hypot(ix, iy);
+    ix /= l;
+    iy /= l;
+    p.aim = Math.atan2(iy, ix);
+  } else {
+    p.aim = Math.atan2(g.mouse.wy - p.y, g.mouse.wx - p.x);
+  }
+  p.x += ix * p.speed * dt;
+  p.y += iy * p.speed * dt;
+  ({ x: p.x, y: p.y } = circleVsGrid(w, p, p.x, p.y));
+
+  let near = null;
+  let nd = 60 * 60;
+  for (const s of w.stations) {
+    const d = (s.x - p.x) ** 2 + (s.y - p.y) ** 2;
+    if (d < nd) {
+      nd = d;
+      near = s;
+    }
+  }
+  g._nearStation = near;
+  g._atGate = (w.gateCenter.x - p.x) ** 2 + (w.gateCenter.y - p.y) ** 2 < 62 * 62;
+
+  if (pressed('KeyE')) {
+    if (near) {
+      if (near.kind === 'armory') g.panelOpen = true;
+      else g.station = near.kind;
+    } else if (g._atGate) {
+      g.launching = true;
+      buildGateMap(g);
+      g.state = 'gatemap';
+    }
+  }
+
+  g.cam.x += (p.x - g.cam.x) * Math.min(1, 6 * dt);
+  g.cam.y += (p.y - g.cam.y) * Math.min(1, 6 * dt);
+  clampCam(g);
 }
 
 function updatePlay(g, dt) {
@@ -348,9 +631,11 @@ function updatePlay(g, dt) {
 
   ({ x: p.x, y: p.y } = circleVsGrid(w, p, p.x, p.y));
 
-  // hotbar consumables / weapon swap / grenade
+  // hotbar consumables / quick-heal / weapon swap / grenade
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
-  if (pressed('KeyQ')) {
+  if (pressed('KeyQ')) quickHeal(g);
+  if (pressed('KeyX') || g.wheel) {
+    g.wheel = 0;
     cancelReload(p); // swapping weapons aborts a reload in progress
     p.burstN = 0;
     const wid = toggleWeapon(g.inv);
@@ -741,6 +1026,11 @@ function populateWorld(g) {
     if (R.chance(0.4)) {
       const q = placeXY();
       g.pickups.push(new Pickup('item', q.x, q.y, 0, rollLoot(R, p.threat)));
+    }
+    // intel cache — data recovered from the faction's systems
+    if (R.chance(0.45)) {
+      const q = placeXY();
+      g.pickups.push(new Pickup('intel', q.x, q.y, 3 + R.int(0, 3)));
     }
   }
 }
@@ -1161,6 +1451,7 @@ function killEnemy(g, e) {
     drop(Math.random() < 0.5 ? 'a_plate' : 'a_helm', 1, 18, -6);
     drop('medkit', 2, 0, 16);
     drop('frag', 2, -16, 16);
+    g.pickups.push(new Pickup('intel', e.x + 14, e.y + 14, 8 + Math.floor(Math.random() * 5)));
     for (let i = 0; i < 6; i++) {
       g.pickups.push(new Pickup('naquadah', e.x + rr(-40, 40), e.y + rr(-40, 40), 16 * mult));
     }
@@ -1197,7 +1488,16 @@ function rollArmor() {
 function collectPickup(g, pk) {
   const p = g.player;
   if (pk.kind === 'naquadah') {
-    g.runNaq += pk.amount;
+    g.runNaq += Math.round(pk.amount * fx(g).naquadahMul);
+  } else if (pk.kind === 'intel') {
+    g.runIntel += Math.round(pk.amount * fx(g).intelMul);
+    pk.alive = false;
+    sfx.pickup();
+    for (let i = 0; i < 6; i++) {
+      g.particles.push(new Particle(pk.x, pk.y, rr(-60, 60), rr(-60, 60), 0.4, '#b6f0ff', 2));
+    }
+    g.message('+' + Math.round(pk.amount * fx(g).intelMul) + ' intel');
+    return;
   } else if (pk.kind === 'staff-ammo') {
     p.ammo.staff = (p.ammo.staff || 0) + pk.amount;
   } else if (pk.kind === 'item' && pk.item) {
@@ -1902,7 +2202,8 @@ function render(g, dt) {
   ctx.clearRect(0, 0, view.w, view.h);
   g.buttons = [];
   try {
-    g.ctx.canvas.style.cursor = g.panelOpen || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead' ? 'default' : 'none';
+    const arrow = g.panelOpen || g.station || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead';
+    g.ctx.canvas.style.cursor = arrow ? 'default' : 'none';
   } catch (e) {
     /* headless */
   }
@@ -1912,6 +2213,10 @@ function render(g, dt) {
   } else if (g.state === 'gatemap') {
     renderPlay(g, true);
     renderGateMap(g);
+  } else if (g.state === 'hub') {
+    renderHub(g);
+    if (g.panelOpen) renderPanel(g);
+    if (g.station) renderStationPanel(g);
   } else {
     renderPlay(g, false);
     if (g.panelOpen) renderPanel(g);
@@ -2913,38 +3218,267 @@ function renderMenu(g) {
     view.h * 0.26 + 60
   );
 
-  button(g, 'DIAL  GATE   (Enter)', cx - 140, view.h * 0.44, 280, 48, () => newRun(g));
-  const canReq = g.save.naquadah >= 50;
-  button(
-    g,
-    'REQUISITION  +25 MAX HP   (50 N)',
-    cx - 200,
-    view.h * 0.44 + 66,
-    400,
-    40,
-    () => {
-      if (g.save.naquadah >= 50) {
-        g.save.naquadah -= 50;
-        g.save.maxHpBonus += 25;
-        persist(g.save);
-        g.message('Max HP is now ' + (100 + g.save.maxHpBonus));
-      }
-    },
-    canReq
-  );
+  button(g, 'ENTER  STARGATE  COMMAND   (Enter)', cx - 190, view.h * 0.44, 380, 48, () => enterHub(g));
 
   ctx.fillStyle = '#678';
   ctx.font = '12px monospace';
   ctx.fillText(
-    'WASD move    ·    mouse aim    ·    LMB fire    ·    SPACE dodge    ·    1 / 2 weapons    ·    E interact',
+    'WASD move   ·   mouse aim   ·   LMB fire   ·   SPACE dodge   ·   Q heal   ·   X / wheel swap weapon   ·   G grenade   ·   R reload   ·   TAB gear',
     cx,
-    view.h * 0.44 + 140
+    view.h * 0.44 + 150
   );
   ctx.fillText(
-    'clear a path to the DHD, dial deeper for better loot, dial home to bank.  death keeps half your naquadah.',
+    'at the SGC: visit the Armory, Research Lab and Infirmary, then walk into the gate to deploy.',
     cx,
-    view.h * 0.44 + 160
+    view.h * 0.44 + 170
   );
+}
+
+// ---- the SGC hub -------------------------------------------------------------
+
+function renderHub(g) {
+  const { ctx, view } = g;
+  if (!g.world) return;
+  ctx.save();
+  ctx.translate(view.w / 2 - g.cam.x, view.h / 2 - g.cam.y);
+  ctx.drawImage(g.worldCanvas, 0, 0);
+
+  const gc = g.world.gateCenter;
+  // ramp
+  ctx.strokeStyle = 'rgba(255,180,90,0.28)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(gc.x - 58, gc.y + 6, 116, 74);
+  drawGate(ctx, gc, g.time);
+
+  for (const s of g.world.stations) drawStation(ctx, s, g.time, g._nearStation === s);
+
+  ctx.globalCompositeOperation = 'lighter';
+  for (const pt of g.particles) {
+    ctx.globalAlpha = clamp(pt.life / pt.maxLife, 0, 1);
+    ctx.fillStyle = pt.color;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, pt.size, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+
+  drawPlayer(ctx, g.player, g.time);
+
+  if (g._atGate) {
+    ctx.fillStyle = '#8ef';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('E  ·  DIAL OUT', gc.x, gc.y + 96);
+  }
+  ctx.restore();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#9cf';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText('STARGATE COMMAND', 20, 28);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#8ef';
+  ctx.fillText(
+    `naquadah ${g.save.naquadah}     intel ${g.save.intel || 0}     sorties ${g.save.runs}     deepest threat ${g.save.deepestThreat}`,
+    20,
+    48
+  );
+  ctx.fillStyle = '#567';
+  ctx.fillText('walk to a station and press E   ·   step into the gate to deploy   ·   TAB gear   ·   Q heal', 20, 66);
+
+  renderMessages(g);
+  if (!g.station) drawCrosshair(g);
+}
+
+function panelFrame(g, title, sub) {
+  const { ctx, view } = g;
+  ctx.fillStyle = 'rgba(4,6,12,0.82)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  const w = Math.min(760, view.w - 80);
+  const h = Math.min(520, view.h - 80);
+  const x = (view.w - w) / 2;
+  const y = (view.h - h) / 2;
+  ctx.fillStyle = 'rgba(12,17,26,0.97)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(120,170,220,0.4)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#9cf';
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(title, x + 24, y + 34);
+  if (sub) {
+    ctx.fillStyle = '#678';
+    ctx.font = '11px monospace';
+    ctx.fillText(sub, x + 24, y + 52);
+  }
+  ctx.fillStyle = '#8ef';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 24, y + 34);
+  return { x, y, w, h };
+}
+
+function renderStationPanel(g) {
+  if (g.station === 'research') renderResearchPanel(g);
+  else if (g.station === 'infirmary') renderInfirmaryPanel(g);
+  else if (g.station === 'requisitions') renderRequisitionsPanel(g);
+  else g.station = null;
+}
+
+function renderResearchPanel(g) {
+  const { ctx } = g;
+  const fr = panelFrame(g, 'RESEARCH LAB', 'spend naquadah + intel — permanent, carries across every run.  ESC to close');
+  if (!TECH.length) {
+    ctx.fillStyle = '#9ab';
+    ctx.font = '13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('research database offline', fr.x + fr.w / 2, fr.y + fr.h / 2);
+    return;
+  }
+  const branches = ['ops', 'armory', 'gate'];
+  const bname = { ops: 'FIELD OPS', armory: 'ARMORY', gate: 'GATE SCIENCE' };
+  const colW = (fr.w - 48) / 3;
+  const owned = new Set(g.save.tech || []);
+  branches.forEach((br, bi) => {
+    const bx = fr.x + 24 + bi * colW;
+    ctx.fillStyle = '#9cf';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(bname[br], bx + colW / 2, fr.y + 78);
+    const nodes = TECH.filter((n) => n.branch === br).sort((a, b) => a.tier - b.tier);
+    nodes.forEach((n, ni) => {
+      const ny = fr.y + 96 + ni * 48;
+      const nw = colW - 16;
+      const nx = bx + 8;
+      const have = owned.has(n.id);
+      const ok = !have && canResearch(g.save, n.id);
+      ctx.fillStyle = have ? 'rgba(80,200,120,0.18)' : ok ? 'rgba(40,90,140,0.35)' : 'rgba(40,44,54,0.4)';
+      ctx.fillRect(nx, ny, nw, 42);
+      ctx.strokeStyle = have ? '#5ec87a' : ok ? '#6cf' : '#455';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(nx, ny, nw, 42);
+      ctx.fillStyle = have ? '#bfe' : ok ? '#dff' : '#889';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(n.name, nx + 8, ny + 15);
+      ctx.fillStyle = '#8ab';
+      ctx.font = '9px monospace';
+      ctx.fillText(n.desc.slice(0, 46), nx + 8, ny + 27);
+      ctx.fillStyle = have ? '#7c9' : '#9ab';
+      ctx.fillText(
+        have ? 'RESEARCHED' : `${n.cost.naquadah} N${n.cost.intel ? '  ' + n.cost.intel + ' I' : ''}`,
+        nx + 8,
+        ny + 38
+      );
+      if (ok) {
+        g.buttons.push({
+          x: nx,
+          y: ny,
+          w: nw,
+          h: 42,
+          fn: () => {
+            if (!canResearch(g.save, n.id)) return;
+            g.save.naquadah -= n.cost.naquadah;
+            g.save.intel = (g.save.intel || 0) - (n.cost.intel || 0);
+            g.save.tech = [...(g.save.tech || []), n.id];
+            // apply immediately where it matters for the current session
+            const e = fx(g);
+            g.player.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
+            g.player.hp = Math.min(g.player.maxHp, g.player.hp);
+            persist(g.save);
+            g.message('Researched: ' + n.name);
+          },
+        });
+      }
+    });
+  });
+}
+
+const SHOP = [
+  ['bandage', 6, 5],
+  ['medkit', 24, 2],
+  ['stim', 20, 1],
+  ['shieldcell', 24, 1],
+  ['frag', 14, 2],
+];
+
+function renderInfirmaryPanel(g) {
+  const { ctx } = g;
+  const fr = panelFrame(g, 'INFIRMARY & QUARTERMASTER', 'restock supplies before you deploy.  ESC to close');
+  ctx.fillStyle = '#9ab';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Q uses your best-fit medical item in the field — no slot needed.', fr.x + 24, fr.y + 74);
+  ctx.fillText(`carrying ${medCount(g)} points of healing`, fr.x + 24, fr.y + 90);
+
+  SHOP.forEach(([id, price, qty], i) => {
+    const def = ITEMS[id];
+    const ry = fr.y + 116 + i * 52;
+    const rx = fr.x + 24;
+    ctx.fillStyle = 'rgba(20,28,40,0.7)';
+    ctx.fillRect(rx, ry, fr.w - 48, 44);
+    ctx.strokeStyle = 'rgba(120,160,210,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx, ry, fr.w - 48, 44);
+    if (drawItemIcon) drawItemIcon(ctx, id, rx + 24, ry + 22, 28);
+    ctx.fillStyle = def.color;
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${def.name}  ×${qty}`, rx + 48, ry + 18);
+    ctx.fillStyle = '#8ab';
+    ctx.font = '9px monospace';
+    ctx.fillText(def.blurb || '', rx + 48, ry + 32);
+    const afford = g.save.naquadah >= price;
+    button(g, `BUY  ${price} N`, rx + fr.w - 48 - 128, ry + 6, 120, 32, () => {
+      if (g.save.naquadah < price) return;
+      g.save.naquadah -= price;
+      invAdd(g.inv, id, qty);
+      saveInv(g);
+      g.message('Bought ' + def.name + ' ×' + qty);
+    }, afford);
+  });
+}
+
+function renderRequisitionsPanel(g) {
+  const { ctx } = g;
+  const fr = panelFrame(g, 'REQUISITIONS', 'take one of each weapon you have unlocked in Research.  ESC to close');
+  const unlocked = fx(g).unlockedWeapons || [];
+  if (!unlocked.length) {
+    ctx.fillStyle = '#9ab';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('no weapons unlocked yet — research the Armory branch', fr.x + fr.w / 2, fr.y + fr.h / 2);
+    return;
+  }
+  unlocked.forEach((id, i) => {
+    const def = ITEMS[id];
+    if (!def) return;
+    const ry = fr.y + 78 + i * 52;
+    const rx = fr.x + 24;
+    ctx.fillStyle = 'rgba(20,28,40,0.7)';
+    ctx.fillRect(rx, ry, fr.w - 48, 44);
+    ctx.strokeStyle = RARITY_COLOR[rarityOf(id)] || 'rgba(120,160,210,0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(rx, ry, fr.w - 48, 44);
+    if (drawItemIcon) drawItemIcon(ctx, id, rx + 24, ry + 22, 30);
+    ctx.fillStyle = def.color;
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(def.name, rx + 50, ry + 18);
+    ctx.fillStyle = '#8ab';
+    ctx.font = '9px monospace';
+    ctx.fillText(def.blurb || '', rx + 50, ry + 32);
+    const has = invHasSpace(g.inv, id) || true;
+    button(g, 'REQUISITION', rx + fr.w - 48 - 148, ry + 6, 140, 32, () => {
+      invAdd(g.inv, id, 1);
+      saveInv(g);
+      g.message('Requisitioned ' + def.name);
+    }, has);
+  });
 }
 
 function renderGateMap(g) {
@@ -2954,12 +3488,12 @@ function renderGateMap(g) {
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8cf';
   ctx.font = 'bold 22px monospace';
-  ctx.fillText('GATE NETWORK — SELECT DESTINATION', cx, 56);
+  ctx.fillText(g.launching ? 'DIAL OUT — CHOOSE FIRST DESTINATION' : 'GATE NETWORK — SELECT DESTINATION', cx, 56);
 
   glowCircle(ctx, cx, cy, 10, '#6cf', 14);
   ctx.fillStyle = '#9cf';
   ctx.font = '11px monospace';
-  ctx.fillText(g.params.address + '  (here)', cx, cy + 26);
+  ctx.fillText((g.launching ? 'SGC' : g.params.address) + '  (here)', cx, cy + 26);
 
   const n = g.mapNodes.length || 1;
   const R = Math.min(view.w, view.h) * 0.3;
@@ -2986,10 +3520,23 @@ function renderGateMap(g) {
       x,
       y + 32
     );
-    g.buttons.push({ x: x - 62, y: y - 20, w: 124, h: 44, fn: () => startWorld(g, node.addr, g.hop + 1) });
+    g.buttons.push({
+      x: x - 62,
+      y: y - 20,
+      w: 124,
+      h: 44,
+      fn: () => (g.launching ? launchRun(g, node.addr) : startWorld(g, node.addr, g.hop + 1)),
+    });
   });
 
-  button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah`, cx - 170, view.h - 68, 340, 40, () => dialHome(g));
+  if (g.launching) {
+    button(g, 'CANCEL  (Esc)', cx - 90, view.h - 68, 180, 40, () => {
+      g.launching = false;
+      enterHub(g);
+    });
+  } else {
+    button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah`, cx - 170, view.h - 68, 340, 40, () => dialHome(g));
+  }
 }
 
 function renderDead(g) {
@@ -3006,10 +3553,15 @@ function renderDead(g) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#dbe';
   ctx.font = '15px monospace';
-  const info = g.deadInfo || { naq: 0, depth: 0, addr: '' };
+  const info = g.deadInfo || { naq: 0, intel: 0, depth: 0, addr: '', lost: 0 };
   ctx.fillText(`KIA at ${info.addr}   —   sector depth ${info.depth}`, cx, view.h * 0.38 + 40);
-  ctx.fillText(`MALP recovered ${info.naq} naquadah`, cx, view.h * 0.38 + 64);
-  button(g, 'RETURN TO SGC   (Enter)', cx - 150, view.h * 0.38 + 100, 300, 44, () => {
-    g.state = 'menu';
-  });
+  ctx.fillText(
+    `MALP recovered ${info.naq} naquadah  ·  ${info.intel} intel${info.lost ? `  ·  backpack lost (${info.lost} items)` : ''}`,
+    cx,
+    view.h * 0.38 + 64
+  );
+  ctx.fillStyle = '#9ab';
+  ctx.font = '12px monospace';
+  ctx.fillText('equipped gear, hotbar and the SGC stash were retained', cx, view.h * 0.38 + 84);
+  button(g, 'RETURN TO SGC   (Enter)', cx - 150, view.h * 0.38 + 108, 300, 44, () => enterHub(g));
 }

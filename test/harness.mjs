@@ -298,6 +298,7 @@ const gApi = createGame(gameCanvas);
 const g = gApi.g;
 initInput(gameCanvas);
 g.visEnabled = false; // cheap circular vis for the long simulated loops
+g.skipHub = true; // bypass the walkable SGC hub — deploy straight from HOME
 
 function inPolyFlat(x, y, poly) {
   let inside = false;
@@ -473,10 +474,12 @@ for (let i = 0; i < 60 * 240 && worldsVisited < MAX_WORLDS; i++) {
     input.mouse.down = false;
     keyDown('Enter');
     if (!tick(gApi, g)) break;
-    assert(g.state === 'menu', 'Enter from dead returns to menu');
-    // relaunch
-    keyDown('Enter');
-    tick(gApi, g);
+    // with skipHub the death screen redeploys straight into a fresh run
+    assert(g.state === 'play' || g.state === 'menu', 'Enter from dead redeploys');
+    if (g.state === 'menu') {
+      keyDown('Enter');
+      tick(gApi, g);
+    }
     if (g.state === 'play') {
       curWorldRef = g.world;
       botFlow = botFlowFor(g.world);
@@ -945,27 +948,86 @@ section('weapons: shotgun/burst/launcher/beam fire, consume mag, reload from res
   g.mouseWasDown = false;
 }
 
-// ---------------------------------------------------------------- 4. requisition / persistence
-section('meta: requisition + persistence');
+// ---------------------------------------------------------------- 4. hub + persistence
+section('hub: walkable SGC, station panels, deploy via the gate, persistence');
 {
-  g.save.naquadah = 200;
+  g.skipHub = false;
   g.state = 'menu';
-  tick(gApi, g); // render menu, builds buttons
-  const before = g.save.maxHpBonus;
-  const reqBtn = g.buttons.find((b) => b.h === 40);
-  assert(!!reqBtn, 'requisition button present when affordable');
-  if (reqBtn) {
-    clickAt(reqBtn.x + reqBtn.w / 2, reqBtn.y + reqBtn.h / 2);
-    assert(g.save.maxHpBonus === before + 25, 'requisition raises max HP bonus');
-    assert(g.save.naquadah === 150, 'requisition deducts 50 naquadah');
+  keyDown('Enter');
+  tick(gApi, g);
+  assert(g.state === 'hub' && g.hub, `Enter from menu enters the hub (state=${g.state})`);
+  assert(g.world && g.world.isHub && Array.isArray(g.world.stations) && g.world.stations.length >= 3, 'hub world has stations');
+
+  // open a station panel by teleporting next to it and pressing E
+  const research = g.world.stations.find((s) => s.kind === 'research');
+  g.player.x = research.x;
+  g.player.y = research.y + 8;
+  for (let f = 0; f < 4; f++) tick(gApi, g);
+  keyDown('KeyE');
+  tick(gApi, g);
+  assert(g.station === 'research', `E at the research station opens its panel (station=${g.station})`);
+  tick(gApi, g); // render -> buttons
+
+  // research the cheapest affordable node and confirm it persists + takes effect
+  g.save.naquadah = 500;
+  g.save.intel = 40;
+  const before = JSON.stringify(g.save.tech || []);
+  tick(gApi, g);
+  const node = g.buttons.find((b) => b.h === 42);
+  assert(!!node, 'research panel offers at least one researchable node');
+  if (node) {
+    const naq0 = g.save.naquadah;
+    clickAt(node.x + node.w / 2, node.y + node.h / 2);
+    assert(JSON.stringify(g.save.tech) !== before, 'clicking a node adds it to save.tech');
+    assert(g.save.naquadah < naq0, 'research spends naquadah');
+    const raw = localStorage.getItem('gatecrawler.save.v1');
+    assert(raw && JSON.parse(raw).tech.length === g.save.tech.length, 'tech persisted to localStorage');
   }
-  const raw = localStorage.getItem('gatecrawler.save.v1');
-  assert(raw && JSON.parse(raw).maxHpBonus === g.save.maxHpBonus, 'save persisted to localStorage');
+  keyDown('Escape');
+  tick(gApi, g);
+  assert(g.station == null, 'Escape closes the station panel');
+
+  // deploy: walk into the gate, press E -> gate map, pick the first node -> play
+  g.player.x = g.world.gateCenter.x;
+  g.player.y = g.world.gateCenter.y;
+  for (let f = 0; f < 4; f++) tick(gApi, g);
+  keyDown('KeyE');
+  tick(gApi, g);
+  assert(g.state === 'gatemap' && g.launching, `stepping into the gate opens the launch map (state=${g.state})`);
+  tick(gApi, g);
+  const dest = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+  assert(!!dest, 'launch map offers a destination');
+  if (dest) clickAt(dest.x + dest.w / 2, dest.y + dest.h / 2);
+  tick(gApi, g);
+  assert(g.state === 'play' && !g.hub, `picking a destination deploys into a run (state=${g.state})`);
+  checkInvariants(g, 'hub-deploy');
+  g.skipHub = true;
+}
+
+// quick-heal (Q) uses the best-fit medical item without a hotbar slot
+section('quick-heal: Q consumes a heal item and restores HP');
+{
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  const p = g.player;
+  // clear meds, stock a bandage in the grid (not the hotbar) and a medkit
+  for (let i = 0; i < g.inv.grid.length; i++) g.inv.grid[i] = null;
+  g.inv.grid[0] = { id: 'bandage', count: 2 };
+  g.inv.grid[1] = { id: 'medkit', count: 1 };
+  p.hp = p.maxHp - 12; // a scratch — should pull the bandage, not the medkit
+  keyDown('KeyQ');
+  tick(gApi, g);
+  assert(p.hp > p.maxHp - 12, 'Q healed the player');
+  const bandLeft = (g.inv.grid[0] && g.inv.grid[0].count) || 0;
+  assert(bandLeft === 1, `Q spent the smaller (bandage) heal first (left ${bandLeft})`);
+  assert(g.inv.grid[1] && g.inv.grid[1].id === 'medkit', 'the medkit was untouched');
 }
 
 // ---------------------------------------------------------------- 5. stress: long idle + spam
 section('stress: 90s idle in a fresh world + input spam');
 {
+  g.skipHub = true;
   keyDown('Enter'); // menu->play (state currently menu after requisition test? ensure)
   if (g.state !== 'play') {
     g.state = 'menu';

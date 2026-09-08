@@ -7,7 +7,7 @@ import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, TILE, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
-import { ITEMS, EQUIP_SLOTS } from './items.js';
+import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import { buildHub, drawStation } from './hub.js';
 import {
   createInventory,
@@ -68,7 +68,10 @@ let nodeById = () => null;
 let researchCost = (id) => ({ naquadah: 0 });
 let drawItemIcon = null;
 let rarityOf = () => 'common';
-let RARITY_COLOR = { common: '#8aa0b8', uncommon: '#79d17a', rare: '#c98bff' };
+let rarityTierOf = () => 'common';
+let normRarity = (r) => r || 'common';
+let RARITY_COLOR = { common: '#9fb0c0', good: '#57d977', epic: '#b06cff', legendary: '#ffb638', uncommon: '#57d977', rare: '#b06cff' };
+let RARITY_LABEL = { common: 'COMMON', good: 'GOOD', epic: 'EPIC', legendary: 'LEGENDARY' };
 try {
   const mod = await import('./tech.js');
   if (typeof mod.techEffects === 'function') techEffects = mod.techEffects;
@@ -83,12 +86,25 @@ try {
   const ic = await import('./icons.js');
   if (typeof ic.drawItemIcon === 'function') drawItemIcon = ic.drawItemIcon;
   if (typeof ic.rarityOf === 'function') rarityOf = ic.rarityOf;
+  if (typeof ic.rarityTierOf === 'function') rarityTierOf = ic.rarityTierOf;
+  if (typeof ic.normRarity === 'function') normRarity = ic.normRarity;
   if (ic.RARITY_COLOR) RARITY_COLOR = ic.RARITY_COLOR;
+  if (ic.RARITY_LABEL) RARITY_LABEL = ic.RARITY_LABEL;
 } catch (e) {
   /* icons.js not present yet */
 }
 function fx(g) {
   return techEffects(g.save.tech || []);
+}
+
+// the effective rarity of an inventory stack — an explicit roll if it has one,
+// otherwise the item id's baseline tier
+function stackRarity(stack) {
+  if (!stack) return 'common';
+  return stack.rarity ? normRarity(stack.rarity) : rarityTierOf(stack.id);
+}
+function rarityMul(stack) {
+  return RARITY_MULT[stackRarity(stack)] || 1;
 }
 
 // world-modifier metadata + folded effect factors for the current world
@@ -464,7 +480,7 @@ function togglePanel(g) {
   g.panelOpen = !g.panelOpen;
   if (!g.panelOpen && g.drag) {
     // return a held item to the grid on close
-    invAdd(g.inv, g.drag.id, g.drag.count);
+    invAdd(g.inv, g.drag.id, g.drag.count, g.drag.rarity || null);
     g.drag = null;
   }
   if (!g.panelOpen) {
@@ -548,9 +564,9 @@ function quickHeal(g) {
   }
   const arr = sel.where === 'grid' ? g.inv.grid : g.inv.hotbar;
   const id = arr[sel.i].id;
+  const amt = Math.round(ITEMS[id].amount * rarityMul(arr[sel.i]));
   arr[sel.i].count -= 1;
   if (arr[sel.i].count <= 0) arr[sel.i] = null;
-  const amt = ITEMS[id].amount;
   p.hp = Math.min(p.maxHp, p.hp + amt);
   g.message('+' + amt + ' HP  (' + ITEMS[id].name + ')');
   sfx.pickup();
@@ -939,6 +955,7 @@ function updatePlay(g, dt) {
     e.kx -= e.kx * Math.min(1, 8 * dt);
     e.ky -= e.ky * Math.min(1, 8 * dt);
     ({ x: e.x, y: e.y } = circleVsGrid(w, e, e.x, e.y));
+    keepOutOfGateRoom(g, e);
   }
 
   // cap how many enemies from other rooms can pile onto the player at once —
@@ -1037,22 +1054,27 @@ function findRoom(g, x, y) {
   return null;
 }
 
-// weighted floor loot: {id, count}
+// weighted floor loot: {id, count, rarity}. Gear rolls a rarity tier that
+// scales its numbers (see itemStats); plain field dressings stay common.
 function rollLoot(R, threat) {
   const roll = R.rand();
-  if (roll < 0.34) return { id: R.chance(0.4) ? 'medkit' : 'bandage', count: R.chance(0.3) ? 2 : 1 };
-  if (roll < 0.5) return { id: 'stim', count: 1 };
-  if (roll < 0.62) return { id: 'shieldcell', count: 1 };
-  if (roll < 0.76) return { id: 'frag', count: R.int(1, 2) };
-  if (roll < 0.9) {
+  let out;
+  if (roll < 0.34) out = { id: R.chance(0.4) ? 'medkit' : 'bandage', count: R.chance(0.3) ? 2 : 1 };
+  else if (roll < 0.5) out = { id: 'stim', count: 1 };
+  else if (roll < 0.62) out = { id: 'shieldcell', count: 1 };
+  else if (roll < 0.76) out = { id: 'frag', count: R.int(1, 2) };
+  else if (roll < 0.9) {
     const armor = R.chance(0.35 + Math.min(0.3, threat * 0.04))
       ? R.pick(['a_helm', 'a_plate'])
       : R.pick(['a_visor', 'a_vest', 'a_greaves', 'a_boots']);
-    return { id: armor, count: 1 };
+    out = { id: armor, count: 1 };
+  } else {
+    // launcher is deliberately scarce; everything else shares the common weapon roll
+    const wid = R.chance(0.12) ? 'w_launcher' : R.pick(['w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam']);
+    out = { id: wid, count: 1 };
   }
-  // launcher is deliberately scarce; everything else shares the common weapon roll
-  const wid = R.chance(0.12) ? 'w_launcher' : R.pick(['w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam']);
-  return { id: wid, count: 1 };
+  if (out.id !== 'bandage') out.rarity = rollRarity(threat, () => R.rand());
+  return out;
 }
 
 // a weapon drop for the kill tables — launcher stays rare here too
@@ -1109,12 +1131,16 @@ function spawnHunter(g) {
 function populateWorld(g) {
   const p = g.params;
   const wm = worldMods(g);
+  const gr = g.world.gateRoom;
   for (const room of g.world.rooms) {
     room.populated = true;
     if (room.kind === 'gate') {
       room.cleared = true;
       continue;
     }
+    // rooms touching the gate: their guards don't come looking straight away,
+    // so stepping through the gate isn't an instant firefight
+    const nearGate = gr && Math.abs(room.gx - gr.gx) + Math.abs(room.gy - gr.gy) <= 1;
     const R = rngHelpers(makeRng('enc:' + p.seedStr + ':' + room.gx + ':' + room.gy));
     const rect = room.rectPx;
     const placeXY = () => {
@@ -1148,14 +1174,16 @@ function populateWorld(g) {
       continue;
     }
 
-    const count = Math.min(7, 3 + Math.floor(p.threat / 2) + R.int(0, 1) + heatTier + (fac === 'replicator' ? 1 : 0));
+    let count = Math.min(7, 3 + Math.floor(p.threat / 2) + R.int(0, 1) + heatTier + (fac === 'replicator' ? 1 : 0));
+    if (nearGate) count = Math.max(2, count - 2); // lighter garrison by the gate
     for (let i = 0; i < count; i++) {
       const kind = pickEnemyKind(fac, R, slot);
       const q = placeXY();
       const e = new Enemy(kind, q.x, q.y, p.threat);
       e._room = room;
-      if (kind === 'jaffa') e.aggressive = R.chance(0.4);
-      if (kind === 'jaffa_heavy' || kind === 'replicator_brute') e.aggressive = true;
+      if (kind === 'jaffa') e.aggressive = R.chance(nearGate ? 0.1 : 0.28);
+      if (kind === 'jaffa_heavy' || kind === 'replicator_brute') e.aggressive = !nearGate;
+      if (nearGate) e.calmT = 3.5 + R.range(0, 2); // hold post, ignore the player by sight for a beat
       g.enemies.push(e);
     }
 
@@ -1202,16 +1230,19 @@ function useHotbar(g, i) {
     g.message('Already at full HP');
     return;
   }
+  const rMul = rarityMul(s);
   takeFromHot(g.inv, i);
   if (def.use === 'heal') {
-    p.hp = Math.min(p.maxHp, p.hp + def.amount);
-    g.message('+' + def.amount + ' HP');
+    const amt = Math.round(def.amount * rMul);
+    p.hp = Math.min(p.maxHp, p.hp + amt);
+    g.message('+' + amt + ' HP');
   } else if (def.use === 'stim') {
-    p.stimT = Math.max(p.stimT, def.dur);
+    p.stimT = Math.max(p.stimT, def.dur * rMul);
     g.message('Combat stim');
   } else if (def.use === 'shield') {
-    p.shieldMax = Math.max(p.shieldMax, def.amount);
-    p.shield = Math.min(p.shieldMax, p.shield + def.amount);
+    const amt = Math.round(def.amount * rMul);
+    p.shieldMax = Math.max(p.shieldMax, amt);
+    p.shield = Math.min(p.shieldMax, p.shield + amt);
     p.shieldRegenT = 0;
     g.message('Shield up');
   }
@@ -1374,7 +1405,7 @@ function fireBeam(g, p, wp, dt) {
       y: hy,
       vx: dx,
       vy: dy,
-      dmg: (wp.dps || 40) * 0.09 * (fx(g).weaponDmgMul || 1),
+      dmg: (wp.dps || 40) * 0.09 * (fx(g).weaponDmgMul || 1) * activeWeaponRarityMul(g),
       energy: true,
       knockback: 0,
       stun: 0,
@@ -1392,9 +1423,16 @@ function bulletExplode(g, b) {
   explode(g, { x: b.x, y: b.y, dmg: b.blastDmg, radius: b.blastRadius, from: b.from });
 }
 
+function activeWeaponRarityMul(g) {
+  const inv = g.inv;
+  const st = inv.equip[inv.active] || inv.equip.weapon1 || inv.equip.weapon2 || inv.equip.weapon3;
+  return rarityMul(st);
+}
+
 function fireWeapon(g, p, wp, wid) {
   const muzzle = 18;
   const scatter = wp.pellets > 3;
+  const dmgMul = (fx(g).weaponDmgMul || 1) * activeWeaponRarityMul(g);
   for (let i = 0; i < wp.pellets; i++) {
     const a = p.aim + (Math.random() - 0.5) * wp.spread;
     g.bullets.push(
@@ -1403,7 +1441,7 @@ function fireWeapon(g, p, wp, wid) {
         p.y + Math.sin(a) * muzzle,
         Math.cos(a) * wp.speed,
         Math.sin(a) * wp.speed,
-        wp.damage * (fx(g).weaponDmgMul || 1),
+        wp.damage * dmgMul,
         'player',
         {
           color: wp.color,
@@ -1475,7 +1513,7 @@ function updateBullet(g, b, dt) {
       // enemy hitboxes are slightly generous — no phantom misses on edge hits
       for (const e of g.enemies) {
         if (!e.alive) continue;
-        const rad = e.r * 1.15 + b.r;
+        const rad = (e.kind === 'boss' ? e.r * 1.32 : e.r * 1.15) + b.r;
         if ((b.x - e.x) ** 2 + (b.y - e.y) ** 2 <= rad * rad) {
           hitEnemy(g, e, b);
           b.alive = false;
@@ -1525,11 +1563,11 @@ function hitEnemy(g, e, b) {
   let dmg = b.dmg;
   const dtype = b.energy ? 'energy' : 'kinetic';
 
-  // Jaffa (both) shrug off shots to the front
+  // Jaffa (both) shrug off shots to the front — a real cut, not a brick wall
   if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy') {
     const ang = Math.atan2(b.y - e.y, b.x - e.x);
     if (Math.abs(normAngle(ang - e.facing)) < (e.kind === 'jaffa_heavy' ? 1.0 : 0.9)) {
-      dmg *= e.kind === 'jaffa_heavy' ? 0.32 : 0.4;
+      dmg *= e.kind === 'jaffa_heavy' ? 0.5 : 0.55;
       spark(g, b.x, b.y, '#8ff');
     }
   }
@@ -1654,7 +1692,15 @@ function killEnemy(g, e) {
     if (elite || dead) sfx.crit();
   }
   const mult = worldMods(g).naqMul;
-  const drop = (id, count, ox, oy) => g.pickups.push(new Pickup('item', e.x + (ox || 0), e.y + (oy || 0), 0, { id, count }));
+  // gear drops roll a rarity tier off world threat; the boss dips into a
+  // deeper table so its haul actually feels like a reward
+  const dropThreat = (g.params.threat || 0) + (dead ? 3 : elite ? 1 : 0);
+  const drop = (id, count, ox, oy) => {
+    const st = { id, count };
+    const def = ITEMS[id];
+    if (def && (def.type === 'weapon' || def.type === 'armor')) st.rarity = rollRarity(dropThreat, Math.random);
+    g.pickups.push(new Pickup('item', e.x + (ox || 0), e.y + (oy || 0), 0, st));
+  };
 
   if (dead) {
     drop('w_staff', 1, -18, -6);
@@ -1733,11 +1779,13 @@ function collectPickup(g, pk) {
       }
       return; // leave it on the ground
     }
-    const left = invAdd(g.inv, pk.item.id, pk.item.count || 1);
+    const left = invAdd(g.inv, pk.item.id, pk.item.count || 1, pk.item.rarity || null);
     if (left > 0) pk.item.count = left;
     else {
       pk.alive = false;
-      g.message('Picked up ' + (def ? def.name : pk.item.id) + (pk.item.count > 1 ? ' ×' + pk.item.count : ''));
+      const rar = pk.item.rarity ? normRarity(pk.item.rarity) : 'common';
+      const nm = rar !== 'common' ? rarityAffixName(pk.item.id, rar) : def ? def.name : pk.item.id;
+      g.message('Picked up ' + nm + (pk.item.count > 1 ? ' ×' + pk.item.count : ''));
     }
     saveInv(g);
     for (let i = 0; i < 6; i++) {
@@ -1773,6 +1821,26 @@ function lineBlocked(g, x0, y0, x1, y1) {
 // into them — never from line of sight. Keeps each room's fight contained
 // without the whole level conga-lining into the DHD room.
 const LEASH_DIST = 380;
+
+// the gate room is a sanctuary — enemies that don't live there won't cross into
+// it, so the player can always fall back to the gate. They hold at the threshold.
+function keepOutOfGateRoom(g, e) {
+  const gr = g.world.gateRoom;
+  if (!gr || e._room === gr || e.rout > 0) return;
+  const r = gr.rectPx;
+  const m = 6;
+  if (e.x < r.x - m || e.x > r.x + r.w + m || e.y < r.y - m || e.y > r.y + r.h + m) return;
+  // shove back out along the nearest edge
+  const dl = e.x - (r.x - m);
+  const dr = r.x + r.w + m - e.x;
+  const du = e.y - (r.y - m);
+  const dd = r.y + r.h + m - e.y;
+  const min = Math.min(dl, dr, du, dd);
+  if (min === dl) e.x = r.x - m;
+  else if (min === dr) e.x = r.x + r.w + m;
+  else if (min === du) e.y = r.y - m;
+  else e.y = r.y + r.h + m;
+}
 
 function checkLeash(g, e, dt) {
   if (!e._room || e.hunter) return false;
@@ -1975,9 +2043,9 @@ function updateJaffa(g, e, dt) {
     const ml = Math.hypot(mx, my) || 1;
     e.x += (mx / ml) * e.speed * dt;
     e.y += (my / ml) * e.speed * dt;
-    if (e.cool <= 0 && losNow && dist < 500) {
+    if (e.cool <= 0 && losNow && dist < 400) {
       jaffaShoot(g, e, 0.11);
-      e.cool = 1.15 + Math.random() * 0.7;
+      e.cool = 1.3 + Math.random() * 0.7;
     }
     return;
   }
@@ -2386,11 +2454,21 @@ function updateBoss(g, e, dt) {
     else e.charging = 0;
     if (tileAt(g.world, e.x, ny) === 0) e.y = ny;
     else e.charging = 0;
-    if (e.charging <= 0) e.attackT = e.phase2 ? 1.0 : 1.5;
+    if (e.charging <= 0) {
+      e.attackT = e.phase2 ? 1.0 : 1.5;
+      e.chargeCd = e.phase2 ? 3 : 4.5; // enforce a stationary, shootable gap between charges
+    }
     return;
   }
 
   e.attackT -= dt;
+  if (e.chargeCd > 0) e.chargeCd -= dt;
+  // planting to fire a volley — the boss holds still and is an easy target for
+  // that window, the trade-off for its own burst
+  if (e.plantT > 0) {
+    e.plantT -= dt;
+    return;
+  }
   const [fx, fy] = flowDir(g, e);
   const closeAt = v === 'wraith' ? 90 : 240;
   let mvx = fx;
@@ -2426,10 +2504,11 @@ function updateBoss(g, e, dt) {
   }
 
   if (e.attackT <= 0) {
-    if (v !== 'wraith' && Math.random() < (e.phase2 ? 0.5 : 0.4) && dist < 400) {
+    if (v !== 'wraith' && (e.chargeCd || 0) <= 0 && Math.random() < (e.phase2 ? 0.5 : 0.4) && dist < 400) {
       e.windup = e.phase2 ? 0.45 : 0.6; // visible tell before the dash
       e.chargeDir = e.facing;
       e.attackT = 1;
+      e.chargeCd = e.phase2 ? 3 : 4.5;
       sfx.bossWindup();
     } else if (v === 'replicator') {
       for (let i = 0; i < 2; i++) {
@@ -2440,24 +2519,32 @@ function updateBoss(g, e, dt) {
         g.enemies.push(r);
       }
       e.attackT = e.phase2 ? 1.7 : 2.4;
+    } else if (v === 'wraith') {
+      bossVolley(g, e, v);
     } else {
-      const spread = v === 'wraith' ? 5 : 3;
-      for (let i = 0; i < spread; i++) {
-        const a = e.facing + (i - (spread - 1) / 2) * 0.16;
-        g.bullets.push(
-          new Bullet(e.x + Math.cos(a) * 28, e.y + Math.sin(a) * 28, Math.cos(a) * 380, Math.sin(a) * 380, 14, 'enemy', {
-            color: v === 'wraith' ? '#7df0b0' : '#ff5a3c', // hot = high threat
-            energy: v !== 'wraith',
-            r: 7,
-            knockback: 140,
-            life: 2.2,
-          })
-        );
-      }
-      enemyShotSound(g, e, 'boss');
-      e.attackT = (v === 'wraith' ? 1.6 : 1.3) * (e.phase2 ? 0.66 : 1);
+      // plant and fire — the boss stops moving for a beat, wide open to fire
+      e.plantT = e.phase2 ? 0.55 : 0.8;
+      bossVolley(g, e, v);
     }
   }
+}
+
+function bossVolley(g, e, v) {
+  const spread = v === 'wraith' ? 5 : 3;
+  for (let i = 0; i < spread; i++) {
+    const a = e.facing + (i - (spread - 1) / 2) * 0.16;
+    g.bullets.push(
+      new Bullet(e.x + Math.cos(a) * 28, e.y + Math.sin(a) * 28, Math.cos(a) * 380, Math.sin(a) * 380, 14, 'enemy', {
+        color: v === 'wraith' ? '#7df0b0' : '#ff5a3c', // hot = high threat
+        energy: v !== 'wraith',
+        r: 7,
+        knockback: 140,
+        life: 2.2,
+      })
+    );
+  }
+  enemyShotSound(g, e, 'boss');
+  e.attackT = (v === 'wraith' ? 1.6 : 1.3) * (e.phase2 ? 0.66 : 1);
 }
 
 // ---------------------------------------------------------------- particles
@@ -3324,7 +3411,7 @@ function drawPickup(ctx, pk, playerNear) {
 
   if (pk.kind === 'item' && pk.item && ITEMS[pk.item.id]) {
     const def = ITEMS[pk.item.id];
-    const rar = rarityOf(pk.item.id);
+    const rar = pk.item.rarity ? normRarity(pk.item.rarity) : rarityTierOf(pk.item.id);
     const ring = RARITY_COLOR[rar] || '#8aa0b8';
     // a light column so it reads through the fog at a distance
     ctx.save();
@@ -3357,7 +3444,8 @@ function drawPickup(ctx, pk, playerNear) {
       ctx.fillStyle = ring;
       ctx.font = 'bold 10px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(def.name + (pk.item.count > 1 ? ' ×' + pk.item.count : ''), pk.x, y - pk.r - 12);
+      const nm = rar !== 'common' ? rarityAffixName(pk.item.id, rar) : def.name;
+      ctx.fillText(nm + (pk.item.count > 1 ? ' ×' + pk.item.count : ''), pk.x, y - pk.r - 12);
     }
     return;
   }
@@ -3531,12 +3619,20 @@ function drawSlot(ctx, x, y, s, stack, opts) {
     ctx.fillText(opts.label, x + 3, y + 9);
   }
   if (stack && ITEMS[stack.id]) {
-    // rarity tint on the slot edge
-    const rc = RARITY_COLOR[rarityOf(stack.id)];
-    if (rc && rc !== RARITY_COLOR.common && !opts.hot) {
+    // rarity tint on the slot edge — brighter/thicker the higher the tier
+    const tier = stackRarity(stack);
+    const rc = RARITY_COLOR[tier];
+    if (rc && tier !== 'common' && !opts.hot) {
       ctx.strokeStyle = rc;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = tier === 'legendary' ? 2.5 : tier === 'epic' ? 2 : 1.5;
       ctx.strokeRect(x + 1, y + 1, s - 2, s - 2);
+      if (tier === 'legendary' || tier === 'epic') {
+        ctx.save();
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = rc;
+        ctx.strokeRect(x + 1, y + 1, s - 2, s - 2);
+        ctx.restore();
+      }
     }
     if (drawItemIcon) {
       drawItemIcon(ctx, stack.id, x + s / 2, y + s / 2, s - 12);
@@ -3584,7 +3680,7 @@ function panelLayout(g) {
   const gridW = GRID_COLS * S + (GRID_COLS - 1) * gap;
   const gridH = GRID_ROWS * S + (GRID_ROWS - 1) * gap;
   const panelW = 410 + gridW; // left region: doll + requisition strip
-  const panelH = Math.max(gridH + 80, 360);
+  const panelH = Math.max(gridH + 116, 384);
   const px = (view.w - panelW) / 2;
   const py = (view.h - panelH) / 2;
 
@@ -3629,7 +3725,11 @@ function panelLayout(g) {
     reqCells.push({ id, x: reqX, y: dollY + 20 + i * 46, w: reqW, h: 40 });
   });
 
-  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells };
+  // scrap bar under the backpack — drag anything here to break it down for naquadah
+  const scrap = { x: gx, y: gy + gridH + 10, w: gridW, h: 30 };
+  cells.push({ loc: { kind: 'scrap' }, x: scrap.x, y: scrap.y, w: scrap.w, h: scrap.h });
+
+  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells, scrap };
 }
 
 function invRef(g, loc) {
@@ -3642,6 +3742,20 @@ function invSet(g, loc, stack) {
   if (loc.kind === 'grid') g.inv.grid[loc.i] = stack;
   else if (loc.kind === 'hot') g.inv.hotbar[loc.i] = stack;
   else if (loc.kind === 'equip') g.inv.equip[loc.key] = stack;
+}
+
+// naquadah returned for breaking a stack down at the SCRAP bar
+const RARITY_SCRAP = { common: 1, good: 1.4, epic: 2, legendary: 3 };
+function scrapValue(stack) {
+  const def = ITEMS[stack.id];
+  if (!def) return 1;
+  let per = 4;
+  if (def.type === 'weapon') per = 22;
+  else if (def.type === 'armor') per = 16;
+  else if (def.type === 'grenade') per = 7;
+  else if (def.type === 'consumable') per = Math.max(3, Math.round((def.amount || def.dur * 4 || 12) * 0.22));
+  const rMul = RARITY_SCRAP[stack.rarity] || 1;
+  return Math.max(1, Math.round(per * rMul) * (stack.count || 1));
 }
 
 function panelPick(g) {
@@ -3668,7 +3782,7 @@ function panelPick(g) {
     ) {
       const st = invRef(g, c.loc);
       if (!st) return;
-      g.drag = { from: c.loc, id: st.id, count: st.count };
+      g.drag = { from: c.loc, id: st.id, count: st.count, rarity: st.rarity };
       invSet(g, c.loc, null);
       return;
     }
@@ -3692,8 +3806,22 @@ function panelDrop(g) {
       break;
     }
   }
+  // scrap: break the held stack down for naquadah — the item is gone for good
+  if (target && target.kind === 'scrap') {
+    const gain = scrapValue({ id: d.id, count: d.count, rarity: d.rarity });
+    if (g.hub || g.state === 'hub') g.save.naquadah += gain;
+    else g.runNaq = (g.runNaq || 0) + gain;
+    sfx.scrap ? sfx.scrap() : sfx.pickup();
+    g.message('Scrapped ' + (ITEMS[d.id] ? ITEMS[d.id].name : d.id) + (d.count > 1 ? ' ×' + d.count : '') + '  →  +' + gain + ' naquadah');
+    if (!g.inv.equip[g.inv.active]) {
+      g.inv.active = ['weapon1', 'weapon2', 'weapon3'].find((s) => g.inv.equip[s]) || 'weapon1';
+    }
+    saveInv(g);
+    if (g.save) persist(g.save);
+    return;
+  }
   // temporarily place the held stack back at origin, then use moveStack
-  invSet(g, d.from, { id: d.id, count: d.count });
+  invSet(g, d.from, d.rarity ? { id: d.id, count: d.count, rarity: d.rarity } : { id: d.id, count: d.count });
   if (target && !(target.kind === 'equip' && target.key === 'weapon3' && (fx(g).weaponSlots || 2) < 3)) {
     const cap = target.kind === 'equip' && target.key === 'grenade' ? fx(g).grenadeCap : 0;
     moveStack(g.inv, d.from, target, cap);
@@ -3749,6 +3877,7 @@ function renderPanel(g) {
   };
   const slots3 = (fx(g).weaponSlots || 2) >= 3;
   for (const c of lay.cells) {
+    if (c.loc.kind === 'scrap') continue; // drawn as a wide bar below
     // the third weapon slot is inert until the Third Holster tech is researched
     if (c.loc.kind === 'equip' && c.loc.key === 'weapon3' && !slots3) {
       drawSlot(ctx, c.x, c.y, c.w, null, { label: 'WPN3', border: 'rgba(70,80,95,0.5)', bg: 'rgba(20,24,32,0.5)' });
@@ -3797,23 +3926,47 @@ function renderPanel(g) {
     ctx.fillText(hover ? 'click — add to pack' : 'unlocked', rc.x + 34, rc.y + 30);
   }
 
+  // scrap bar — drag any item here to break it down for naquadah
+  {
+    const sc = lay.scrap;
+    const over = g.pmouse.x >= sc.x && g.pmouse.x <= sc.x + sc.w && g.pmouse.y >= sc.y && g.pmouse.y <= sc.y + sc.h;
+    const armed = !!g.drag && over;
+    ctx.fillStyle = armed ? 'rgba(120,60,40,0.55)' : over ? 'rgba(50,40,36,0.7)' : 'rgba(28,24,22,0.6)';
+    ctx.fillRect(sc.x, sc.y, sc.w, sc.h);
+    ctx.strokeStyle = armed ? '#ff8a4c' : 'rgba(200,120,80,0.4)';
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(sc.x + 0.5, sc.y + 0.5, sc.w - 1, sc.h - 1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = armed ? '#ffd9c2' : '#c89a86';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    const msg = g.drag
+      ? 'release to SCRAP  →  +' + scrapValue({ id: g.drag.id, count: g.drag.count, rarity: g.drag.rarity }) + ' naquadah'
+      : 'SCRAP  ·  drag junk here to break it down for naquadah';
+    ctx.fillText(msg, sc.x + sc.w / 2, sc.y + sc.h / 2 + 3);
+  }
+
   // tooltip for hovered item
   for (const c of lay.cells) {
+    if (c.loc.kind === 'scrap') continue;
     const hover = g.pmouse.x >= c.x && g.pmouse.x <= c.x + c.w && g.pmouse.y >= c.y && g.pmouse.y <= c.y + c.h;
     if (!hover) continue;
     const st = invRef(g, c.loc);
     if (!st || !ITEMS[st.id]) break;
     const def = ITEMS[st.id];
-    const tw = 210;
+    const tier = stackRarity(st);
+    const tw = 214;
     const tx = Math.min(c.x + c.w + 8, view.w - tw - 8);
     const ty = c.y;
+    const th = tier !== 'common' ? 68 : 54;
     ctx.fillStyle = 'rgba(6,10,16,0.96)';
-    ctx.fillRect(tx, ty, tw, 54);
-    ctx.strokeStyle = def.color;
-    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 53);
-    ctx.fillStyle = def.color;
+    ctx.fillRect(tx, ty, tw, th);
+    ctx.strokeStyle = tier !== 'common' ? RARITY_COLOR[tier] : def.color;
+    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
+    ctx.fillStyle = tier !== 'common' ? RARITY_COLOR[tier] : def.color;
     ctx.font = 'bold 12px monospace';
-    ctx.fillText(def.name, tx + 8, ty + 18);
+    ctx.fillText(tier !== 'common' ? rarityAffixName(st.id, tier) : def.name, tx + 8, ty + 18);
     ctx.fillStyle = '#bcd';
     ctx.font = '10px monospace';
     ctx.fillText(def.blurb || def.type, tx + 8, ty + 36);
@@ -3823,6 +3976,10 @@ function renderPanel(g) {
       tx + 8,
       ty + 48
     );
+    if (tier !== 'common') {
+      ctx.fillStyle = RARITY_COLOR[tier];
+      ctx.fillText((RARITY_LABEL[tier] || tier.toUpperCase()) + '  ·  +' + Math.round((RARITY_MULT[tier] - 1) * 100) + '% effect', tx + 8, ty + 62);
+    }
     break;
   }
 
@@ -3830,7 +3987,7 @@ function renderPanel(g) {
   if (g.drag && ITEMS[g.drag.id]) {
     const def = ITEMS[g.drag.id];
     ctx.globalAlpha = 0.9;
-    drawSlot(ctx, g.pmouse.x - lay.S / 2, g.pmouse.y - lay.S / 2, lay.S, { id: g.drag.id, count: g.drag.count }, {
+    drawSlot(ctx, g.pmouse.x - lay.S / 2, g.pmouse.y - lay.S / 2, lay.S, { id: g.drag.id, count: g.drag.count, rarity: g.drag.rarity }, {
       bg: 'rgba(30,40,55,0.9)',
       border: def.color,
     });
@@ -4442,7 +4599,9 @@ function renderGateMap(g) {
   const eff = fx(g);
   const wm = worldMods(g);
   const targetHop = g.launching ? eff.startHop || 0 : g.hop + 1;
-  const dialCost = g.launching ? 0 : Math.floor(18 * targetHop * (eff.dialCostMul || 1) * wm.dialMul);
+  // the first step out of the world you arrived in is always free — you can't be
+  // stranded. Cost (and the power-siphon tax) only bites when pushing deeper.
+  const dialCost = g.launching || g.hop === 0 ? 0 : Math.floor(18 * targetHop * (eff.dialCostMul || 1) * wm.dialMul);
   const canSee = g.launching || (eff.mapLookahead || 0) >= 1;
 
   if (!g.launching) {

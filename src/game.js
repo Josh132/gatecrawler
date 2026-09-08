@@ -2602,7 +2602,8 @@ function renderPlay(g, dim) {
     drawDHD(ctx, g.world.dhdRoom.centerPx, g.time, g.dhdActive);
   }
 
-  for (const pk of g.pickups) if (lit(pk.x, pk.y)) drawPickup(ctx, pk);
+  for (const pk of g.pickups)
+    if (lit(pk.x, pk.y)) drawPickup(ctx, pk, (pk.x - g.player.x) ** 2 + (pk.y - g.player.y) ** 2 < 80 * 80);
 
   ctx.globalCompositeOperation = 'lighter';
   for (const pt of g.particles) {
@@ -3054,16 +3055,63 @@ function drawBeam(ctx, bm, t) {
   ctx.restore();
 }
 
-function drawPickup(ctx, pk) {
+function drawPickup(ctx, pk, playerNear) {
   const y = pk.y + Math.sin(pk.bob) * 3;
-  const cmap = { naquadah: '#8ef', 'staff-ammo': '#ffb347', health: '#7ef77e', 'weapon-staff': '#ffd54a' };
-  const lmap = { naquadah: 'N', 'staff-ammo': 'A', health: '+', 'weapon-staff': 'W' };
+
+  if (pk.kind === 'item' && pk.item && ITEMS[pk.item.id]) {
+    const def = ITEMS[pk.item.id];
+    const rar = rarityOf(pk.item.id);
+    const ring = RARITY_COLOR[rar] || '#8aa0b8';
+    // a light column so it reads through the fog at a distance
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const grd = ctx.createLinearGradient(pk.x, y - 40, pk.x, y + 4);
+    grd.addColorStop(0, 'rgba(0,0,0,0)');
+    grd.addColorStop(1, hexA(ring, 0.22));
+    ctx.fillStyle = grd;
+    ctx.fillRect(pk.x - 5, y - 40, 10, 44);
+    ctx.restore();
+    // rarity ring + icon
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = rar === 'common' ? 1.5 : 2.5;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = ring;
+    ctx.beginPath();
+    ctx.arc(pk.x, y, pk.r + 3, 0, TAU);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    if (drawItemIcon) drawItemIcon(ctx, pk.item.id, pk.x, y, 16);
+    else {
+      ctx.fillStyle = def.color;
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(def.icon || '?', pk.x, y);
+      ctx.textBaseline = 'alphabetic';
+    }
+    if (playerNear) {
+      ctx.fillStyle = ring;
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(def.name + (pk.item.count > 1 ? ' ×' + pk.item.count : ''), pk.x, y - pk.r - 12);
+    }
+    return;
+  }
+
+  const cmap = { naquadah: '#8ef', intel: '#b6f0ff', 'staff-ammo': '#ffb347' };
+  const lmap = { naquadah: 'N', intel: 'i', 'staff-ammo': 'A' };
   const c = cmap[pk.kind] || '#fff';
   glowCircle(ctx, pk.x, y, pk.r, c, 12);
   ctx.fillStyle = '#02121a';
   ctx.font = 'bold 9px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(lmap[pk.kind] || '?', pk.x, y + 3);
+}
+
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.replace(/(.)/g, '$1$1') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
 function drawCrosshair(g) {
@@ -3195,17 +3243,29 @@ function drawSlot(ctx, x, y, s, stack, opts) {
     ctx.fillText(opts.label, x + 3, y + 9);
   }
   if (stack && ITEMS[stack.id]) {
-    const def = ITEMS[stack.id];
-    ctx.fillStyle = def.color;
-    ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(def.icon || '?', x + s / 2, y + s / 2 + 1);
-    ctx.textBaseline = 'alphabetic';
+    // rarity tint on the slot edge
+    const rc = RARITY_COLOR[rarityOf(stack.id)];
+    if (rc && rc !== RARITY_COLOR.common && !opts.hot) {
+      ctx.strokeStyle = rc;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 1, y + 1, s - 2, s - 2);
+    }
+    if (drawItemIcon) {
+      drawItemIcon(ctx, stack.id, x + s / 2, y + s / 2, s - 12);
+    } else {
+      const def = ITEMS[stack.id];
+      ctx.fillStyle = def.color;
+      ctx.font = 'bold 16px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(def.icon || '?', x + s / 2, y + s / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+    }
     if (stack.count > 1) {
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 10px monospace';
       ctx.textAlign = 'right';
+      ctx.textBaseline = 'alphabetic';
       ctx.fillText(String(stack.count), x + s - 3, y + s - 3);
     }
   }

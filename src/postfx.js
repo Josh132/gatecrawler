@@ -10,8 +10,8 @@ const BRIGHT = `precision mediump float; varying vec2 v; uniform sampler2D t;
 void main(){
   vec3 c = texture2D(t, v).rgb;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  float k = max(l - 0.55, 0.0) / max(l, 0.0001);
-  gl_FragColor = vec4(c * k * 1.35, 1.0);
+  float k = max(l - 0.68, 0.0) / max(l, 0.0001);
+  gl_FragColor = vec4(c * k * 1.1, 1.0);
 }`;
 
 const BLUR = `precision mediump float; varying vec2 v; uniform sampler2D t; uniform vec2 dir;
@@ -26,15 +26,15 @@ const COMP = `precision mediump float; varying vec2 v;
 uniform sampler2D t; uniform sampler2D b; uniform float time; uniform vec2 res;
 void main(){
   vec3 c = texture2D(t, v).rgb;
-  c += texture2D(b, v).rgb * 0.85;
+  c += texture2D(b, v).rgb * 0.38;                 // gentle bloom, keeps neon lines as lines
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = mix(vec3(l), c, 1.14);                       // a little more saturation
-  c = (c - 0.5) * 1.07 + 0.5 + 0.014;              // contrast + a lifted black
-  c *= mix(vec3(0.92, 0.97, 1.10), vec3(1.07, 1.01, 0.93), smoothstep(0.12, 0.8, l));
+  c = mix(vec3(l), c, 1.08);                       // a touch more saturation
+  c = (c - 0.5) * 1.03 + 0.5 + 0.008;             // slight contrast + lifted black
+  c *= mix(vec3(0.95, 0.98, 1.06), vec3(1.04, 1.01, 0.96), smoothstep(0.12, 0.8, l));
   vec2 q = (v - 0.5) * vec2(1.0, 1.08);
-  c *= mix(0.66, 1.0, smoothstep(0.82, 0.22, length(q)));
+  c *= mix(0.86, 1.0, smoothstep(0.82, 0.22, length(q)));
   float n = fract(sin(dot(v * res + time, vec2(12.9898, 78.233))) * 43758.5453);
-  c += (n - 0.5) * 0.035;
+  c += (n - 0.5) * 0.018;
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
 }`;
 

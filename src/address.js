@@ -46,9 +46,22 @@ export function worldParams(addr, hop) {
   // one faction per world — factions never mix. Replicators appear from hop 2.
   const pool = hop < 2 ? ['jaffa', 'wraith'] : ['jaffa', 'wraith', 'replicator'];
   const primary = pool[b % pool.length];
-  const modPool = ['eclipse', 'naquadah-rich', 'ion-storm'];
+  // world modifiers stack — deeper worlds roll more of them
+  const modPool = ['eclipse', 'naquadah-rich', 'ion-storm', 'intel-rich', 'power-siphon', 'black-fog'];
   const mods = [];
-  if (c % 100 < 55) mods.push(modPool[d % modPool.length]);
+  // 0..3 mods: base chance climbs with threat, each extra roll is rarer
+  const modRolls = [c, d, h()];
+  let modChance = 40 + threat * 8; // percent
+  for (let k = 0; k < 3 && modChance > 0; k++) {
+    const rr = modRolls[k];
+    if (rr % 100 < modChance) {
+      const pick = modPool[Math.floor(rr / 128) % modPool.length];
+      // eclipse and black-fog are both vision cuts — don't stack them
+      const clash = (pick === 'eclipse' && mods.includes('black-fog')) || (pick === 'black-fog' && mods.includes('eclipse'));
+      if (!mods.includes(pick) && !clash) mods.push(pick);
+    }
+    modChance -= 30;
+  }
   const roomCount = 4 + (e % 3) + Math.min(2, Math.floor(threat / 2)); // 4..8
   // biome loosely follows the faction, with a coin-flip between two looks
   const biomePools = {

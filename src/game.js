@@ -86,6 +86,32 @@ try {
 function fx(g) {
   return techEffects(g.save.tech || []);
 }
+
+// world-modifier metadata + folded effect factors for the current world
+const MOD_INFO = {
+  eclipse: { label: 'ECLIPSE', blurb: 'perpetual dark — line of sight is short' },
+  'black-fog': { label: 'BLACK FOG', blurb: 'choking haze — sight cut hard, but the dead left more behind' },
+  'naquadah-rich': { label: 'NAQUADAH-RICH', blurb: 'veins run heavy — double naquadah' },
+  'intel-rich': { label: 'INTEL CACHE', blurb: 'their network is exposed — double intel' },
+  'ion-storm': { label: 'ION STORM', blurb: 'rolling EMP fronts knock energy weapons offline' },
+  'power-siphon': { label: 'POWER SIPHON', blurb: 'the gate drinks deep — dialling out costs far more, hunt builds faster' },
+};
+
+function modLabels(mods) {
+  return (mods || []).map((m) => (MOD_INFO[m] ? MOD_INFO[m].label : m.toUpperCase()));
+}
+
+function worldMods(g) {
+  const m = (g.params && g.params.mods) || [];
+  return {
+    visionR: m.includes('black-fog') ? 235 : m.includes('eclipse') ? 330 : 560,
+    naqMul: m.includes('naquadah-rich') ? 2 : 1,
+    intelMul: m.includes('intel-rich') ? 2 : 1,
+    lootMul: m.includes('black-fog') ? 1.4 : 1,
+    dialMul: m.includes('power-siphon') ? 1.6 : 1,
+    heatMul: m.includes('power-siphon') ? 1.25 : 1,
+  };
+}
 function loadSave() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
@@ -380,7 +406,7 @@ function startWorld(g, addr, hop) {
 
   kawoosh(g, c.x, c.y);
   sfx.kawoosh();
-  g.message('Arrived: ' + g.params.address + (g.params.mods.length ? '  [' + g.params.mods.join(', ') + ']' : ''));
+  g.message('Arrived: ' + g.params.address + (g.params.mods.length ? '  [' + modLabels(g.params.mods).join(', ') + ']' : ''));
 }
 
 function dialHome(g) {
@@ -810,7 +836,7 @@ function updatePlay(g, dt) {
   }
 
   // heat: the longer a run goes, the harder the faction hunts you
-  g.heat += dt * 0.048 * (fx(g).heatMul || 1);
+  g.heat += dt * 0.048 * (fx(g).heatMul || 1) * worldMods(g).heatMul;
   if (!g.hunterSpawned && g.heat >= 2) spawnHunter(g);
 
   if (g.killStreakT > 0) {
@@ -1078,6 +1104,7 @@ function spawnHunter(g) {
 // Enemies start idle and only react when they notice the player.
 function populateWorld(g) {
   const p = g.params;
+  const wm = worldMods(g);
   for (const room of g.world.rooms) {
     room.populated = true;
     if (room.kind === 'gate') {
@@ -1139,8 +1166,17 @@ function populateWorld(g) {
       const q = placeXY();
       g.pickups.push(new Pickup('item', q.x, q.y, 0, rollLoot(R, p.threat)));
     }
+    // BLACK FOG leaves extra caches behind — the compensation for going blind
+    if (wm.lootMul > 1 && R.chance(0.45)) {
+      const q = placeXY();
+      g.pickups.push(new Pickup('item', q.x, q.y, 0, rollLoot(R, p.threat)));
+    }
     // intel cache — data recovered from the faction's systems
     if (R.chance(0.45)) {
+      const q = placeXY();
+      g.pickups.push(new Pickup('intel', q.x, q.y, 3 + R.int(0, 3)));
+    }
+    if (wm.intelMul > 1 && R.chance(0.4)) {
       const q = placeXY();
       g.pickups.push(new Pickup('intel', q.x, q.y, 3 + R.int(0, 3)));
     }
@@ -1589,7 +1625,7 @@ function killEnemy(g, e) {
     burst(g, e.x, e.y, 20, '#b6f0ff');
     g.hitstop = Math.max(g.hitstop, 2);
     for (let i = 0; i < 4; i++) g.blocks.push(new Block(e.x + rr(-8, 8), e.y + rr(-8, 8), g.params.threat, e._room));
-    g.pickups.push(new Pickup('naquadah', e.x, e.y, 5 * (g.params.mods.includes('naquadah-rich') ? 2 : 1)));
+    g.pickups.push(new Pickup('naquadah', e.x, e.y, 5 * worldMods(g).naqMul));
     g.message('Replicator scatters — finish the pieces');
     return;
   }
@@ -1613,7 +1649,7 @@ function killEnemy(g, e) {
     g.killStreakT = 2.6;
     if (elite || dead) sfx.crit();
   }
-  const mult = g.params.mods.includes('naquadah-rich') ? 2 : 1;
+  const mult = worldMods(g).naqMul;
   const drop = (id, count, ox, oy) => g.pickups.push(new Pickup('item', e.x + (ox || 0), e.y + (oy || 0), 0, { id, count }));
 
   if (dead) {
@@ -1671,15 +1707,16 @@ function rollArmor() {
 function collectPickup(g, pk) {
   const p = g.player;
   if (pk.kind === 'naquadah') {
-    g.runNaq += Math.round(pk.amount * fx(g).naquadahMul);
+    g.runNaq += Math.round(pk.amount * fx(g).naquadahMul * worldMods(g).naqMul);
   } else if (pk.kind === 'intel') {
-    g.runIntel += Math.round(pk.amount * fx(g).intelMul);
+    const got = Math.round(pk.amount * fx(g).intelMul * worldMods(g).intelMul);
+    g.runIntel += got;
     pk.alive = false;
     sfx.pickup();
     for (let i = 0; i < 6; i++) {
       g.particles.push(new Particle(pk.x, pk.y, rr(-60, 60), rr(-60, 60), 0.4, '#b6f0ff', 2));
     }
-    g.message('+' + Math.round(pk.amount * fx(g).intelMul) + ' intel');
+    g.message('+' + got + ' intel');
     return;
   } else if (pk.kind === 'staff-ammo') {
     p.ammo.staff = (p.ammo.staff || 0) + pk.amount;
@@ -2692,7 +2729,7 @@ function renderPlay(g, dim) {
   if (g.world.dhdRoom && g.world.dhdRoom.everSeen) drawArenaFloor(ctx, g);
   for (const hz of g.hazards) drawHazard(ctx, hz, g.time);
 
-  const R = g.params && g.params.mods.includes('eclipse') ? 330 : 560;
+  const R = worldMods(g).visionR;
   g.visPoly = dim ? null : computeVisPoly(g, R);
   const lit = (x, y) => dim || litAt(g, x, y);
 
@@ -3463,7 +3500,7 @@ function renderHUD(g) {
   if (g.params.mods.length) {
     ctx.fillStyle = '#fd6';
     ctx.font = '12px monospace';
-    ctx.fillText('[ ' + g.params.mods.join('   ') + ' ]', 20, 80);
+    ctx.fillText('[ ' + modLabels(g.params.mods).join('   ') + ' ]', 20, 80);
   }
   ctx.fillStyle = '#567';
   ctx.font = '10px monospace';
@@ -4395,8 +4432,9 @@ function renderGateMap(g) {
   ctx.fillText((g.launching ? 'SGC' : g.params.address) + '  (here)', cx, cy + 26);
 
   const eff = fx(g);
+  const wm = worldMods(g);
   const targetHop = g.launching ? eff.startHop || 0 : g.hop + 1;
-  const dialCost = g.launching ? 0 : Math.floor(18 * targetHop * (eff.dialCostMul || 1));
+  const dialCost = g.launching ? 0 : Math.floor(18 * targetHop * (eff.dialCostMul || 1) * wm.dialMul);
   const canSee = g.launching || (eff.mapLookahead || 0) >= 1;
 
   if (!g.launching) {
@@ -4441,7 +4479,7 @@ function renderGateMap(g) {
       ctx.fillText(`threat ${pr.threat}  ·  ${pr.faction}  ·  loot ${loot}`, x, y + 30);
       if (pr.mods.length) {
         ctx.fillStyle = '#fd6';
-        ctx.fillText('[ ' + pr.mods.join('  ') + ' ]', x, y + 44);
+        ctx.fillText('[ ' + modLabels(pr.mods).join('  ') + ' ]', x, y + 44);
       }
     } else {
       ctx.fillText('telemetry offline', x, y + 30);
@@ -4459,7 +4497,7 @@ function renderGateMap(g) {
             launchRun(g, node.addr);
           } else {
             g.runNaq = Math.max(0, g.runNaq - dialCost);
-            g.heat += 0.6 * (eff.heatMul || 1); // pushing deeper stokes the hunt
+            g.heat += 0.6 * (eff.heatMul || 1) * wm.heatMul; // pushing deeper stokes the hunt
             startWorld(g, node.addr, targetHop);
           }
         },

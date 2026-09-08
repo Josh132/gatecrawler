@@ -110,3 +110,11 @@ export const WEAPONS = {
     reload: 1.2,
   },
 };
+
+// base per-shot damage for a weapon id (a key into WEAPONS). 0 if unknown.
+// pure — lets items.js scale weapon damage by rarity without poking at the
+// balance table directly.
+export function weaponBaseDamage(weaponId) {
+  const w = WEAPONS[weaponId];
+  return w && typeof w.damage === 'number' ? w.damage : 0;
+}

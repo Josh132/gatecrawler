@@ -1176,6 +1176,9 @@ section('feedback: decals accumulate, hazards hurt, kills reward, shotgun clears
 
   // a kill tops the player up and adds a scorch
   const { Enemy } = await import('../src/entities.js');
+  // isolate the foe: clear the live world's wanderers so the synthetic shot
+  // can only land on our test target, not a passing enemy that happens to overlap
+  g.enemies.length = 0;
   const foe = new Enemy('jaffa', p.x + 60, p.y, 2);
   foe.state = 'active';
   foe.facing = Math.PI; // face away so the frontal-armour rule doesn't apply
@@ -1294,6 +1297,48 @@ section('roster: the Jaffa grenadier displacer exists and appears in worlds');
     }
   }
   assert(seen > 0, `roster: a Jaffa grenadier spawned in at least one world across the scan (${seen})`);
+}
+
+section('rarity: tiers scale item stats, loot is tagged, scrap pays out');
+{
+  const items = await import('../src/items.js');
+  const icons = await import('../src/icons.js');
+  const { regionDR, createInventory } = await import('../src/inventory.js');
+
+  // itemStats scales with the tier
+  const drC = items.itemStats('a_plate', 'common').dr;
+  const drL = items.itemStats('a_plate', 'legendary').dr;
+  assert(drL > drC && drL <= 0.85, `rarity: legendary armour DR beats common but is capped (${drC.toFixed(2)} -> ${drL.toFixed(2)})`);
+  assert(items.itemStats('w_staff', 'epic').damageMul > 1, 'rarity: epic weapon has a damage multiplier');
+
+  // regionDR honours an equipped stack's rarity
+  const inv = createInventory();
+  inv.equip.torso = { id: 'a_vest', count: 1, rarity: 'legendary' };
+  const baseVest = ITEMS.a_vest.dr;
+  assert(regionDR(inv).torso > baseVest, `rarity: equipped legendary vest raises torso DR above base (${baseVest} -> ${regionDR(inv).torso.toFixed(3)})`);
+
+  // rollRarity only hands out legendary once threat is high
+  let lowLegend = 0;
+  const seq = [0.01, 0.2, 0.45, 0.7, 0.9, 0.99];
+  let si = 0;
+  const rnd = () => seq[si++ % seq.length];
+  for (let k = 0; k < 300; k++) if (items.rollRarity(0, rnd) === 'legendary') lowLegend++;
+  assert(lowLegend === 0, `rarity: no legendary drops at threat 0 (${lowLegend})`);
+
+  // a real run: floor loot carries a rarity field on gear
+  g.skipHub = true;
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  const gearOnFloor = g.pickups.filter((pk) => pk.kind === 'item' && pk.item && ITEMS[pk.item.id] && (ITEMS[pk.item.id].type === 'weapon' || ITEMS[pk.item.id].type === 'armor'));
+  assert(gearOnFloor.every((pk) => typeof pk.item.rarity === 'string'), `rarity: every gear pickup is tagged with a tier (${gearOnFloor.length} checked)`);
+
+  // a rarer stack survives a save round-trip
+  const { reviveInventory } = await import('../src/inventory.js');
+  const revived = reviveInventory({ grid: [{ id: 'a_helm', count: 1, rarity: 'epic' }], equip: {}, hotbar: [] });
+  assert(revived.grid[0] && revived.grid[0].rarity === 'epic', 'rarity: an item tier persists through reviveInventory');
+
+  assert(icons.RARITY_COLOR.legendary && icons.RARITY_LABEL.legendary === 'LEGENDARY', 'rarity: legendary colour + label are defined');
 }
 
 // ---------------------------------------------------------------- report

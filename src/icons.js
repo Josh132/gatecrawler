@@ -2,12 +2,43 @@
 // strokes / simple filled shapes on dark, drawn in each item's own colour.
 //
 //   drawItemIcon(ctx, id, cx, cy, size)  — centred in a size x size box
-//   rarityOf(id)                         — 'common' | 'uncommon' | 'rare'
-//   RARITY_COLOR                         — ring tints per rarity
+//   rarityOf(id)                         — legacy default tier: common|uncommon|rare
+//   rarityTierOf(id)                     — same, in the four-tier scheme
+//   RARITIES / RARITY_COLOR / RARITY_LABEL — the four-tier rarity scheme
+//   normRarity(r)                        — old / unknown tier -> canonical tier
 
 import { ITEMS } from './items.js';
 
-export const RARITY_COLOR = { common: '#8aa0b8', uncommon: '#79d17a', rare: '#c98bff' };
+// canonical rarity tiers, low -> high. this file's older 3-tier scheme maps in
+// cleanly: uncommon -> good, rare -> epic, and 'legendary' is a brand-new top
+// tier that only the loot roller (items.js rollRarity) can hand out.
+export const RARITIES = ['common', 'good', 'epic', 'legendary'];
+
+// ring / slot-edge tints per tier
+export const RARITY_COLOR = {
+  common: '#9fb0c0',
+  good: '#57d977',
+  epic: '#b06cff',
+  legendary: '#ffb638',
+  uncommon: '#57d977', // alias -> good
+  rare: '#b06cff', // alias -> epic
+};
+
+export const RARITY_LABEL = {
+  common: 'COMMON',
+  good: 'GOOD',
+  epic: 'EPIC',
+  legendary: 'LEGENDARY',
+  uncommon: 'GOOD',
+  rare: 'EPIC',
+};
+
+// fold an old / unknown rarity string onto one of RARITIES
+const RARITY_ALIAS = { uncommon: 'good', rare: 'epic' };
+export function normRarity(r) {
+  if (RARITIES.includes(r)) return r;
+  return RARITY_ALIAS[r] || 'common';
+}
 
 const NEUTRAL = '#8aa0b8';
 
@@ -238,11 +269,21 @@ function drawUnknown(ctx, x, y, u) {
 }
 
 // --- rarity --------------------------------------------------------------
+// a drop's *default* tier from its id alone — the loot roller may promote it.
+// scarcer weapons read one tier up, the mid armour / weapons half a tier up.
 const RARE = new Set(['w_launcher', 'w_beam']);
 const UNCOMMON = new Set(['a_helm', 'a_plate', 'w_shotgun', 'w_burst']);
 
+// legacy 3-tier token — kept as-is so existing callers and the test harness
+// don't break. use rarityTierOf / normRarity for the four-tier scheme.
 export function rarityOf(id) {
   if (RARE.has(id)) return 'rare';
   if (UNCOMMON.has(id)) return 'uncommon';
   return 'common';
+}
+
+// the same default tier, in the canonical four-tier scheme
+// (common | good | epic | legendary). no id defaults to 'legendary'.
+export function rarityTierOf(id) {
+  return normRarity(rarityOf(id));
 }

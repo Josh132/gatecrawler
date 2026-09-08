@@ -313,6 +313,14 @@ export const sfx = {
     o.start(t);
     o.stop(t + 0.36);
   },
+  // mechanical crunch + a small coin-ish chime — an item broken down for naquadah
+  scrap() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.14, 'lowpass', 1600, 300, null, 0.001, 0.12, 0.2, 0.03);
+    toneVoice(t, 'square', 150, 60, 0.1, 0.002, 0.12, 0.14, 0.04);
+    toneVoice(t + 0.08, 'triangle', 880, 1240, 0.09, 0.001, 0.12, 0.09, 0.03);
+  },
   pickup() {
     if (!ctx) return;
     const t = ctx.currentTime;

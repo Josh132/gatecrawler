@@ -1,4 +1,4 @@
-import { ITEMS, EQUIP_SLOTS, slotAccepts } from './items.js';
+import { ITEMS, EQUIP_SLOTS, slotAccepts, itemStats } from './items.js';
 
 export const GRID_COLS = 6;
 export const GRID_ROWS = 5;
@@ -21,7 +21,12 @@ export function createInventory() {
 export function reviveInventory(raw) {
   const inv = createInventory();
   if (!raw || typeof raw !== 'object') return inv;
-  const okStack = (s) => (s && ITEMS[s.id] ? { id: s.id, count: Math.max(1, s.count | 0 || 1) } : null);
+  const okStack = (s) => {
+    if (!s || !ITEMS[s.id]) return null;
+    const st = { id: s.id, count: Math.max(1, s.count | 0 || 1) };
+    if (s.rarity) st.rarity = String(s.rarity);
+    return st;
+  };
   if (Array.isArray(raw.grid)) for (let i = 0; i < GRID_SIZE; i++) inv.grid[i] = okStack(raw.grid[i]);
   if (Array.isArray(raw.hotbar)) for (let i = 0; i < HOTBAR; i++) inv.hotbar[i] = okStack(raw.hotbar[i]);
   if (raw.equip) {
@@ -39,7 +44,7 @@ export function itemDef(id) {
 }
 
 // add `count` of item `id`, stacking where possible. returns leftover count.
-export function invAdd(inv, id, count = 1) {
+export function invAdd(inv, id, count = 1, rarity = null) {
   const def = ITEMS[id];
   if (!def) return count;
   const max = def.stack || 1;
@@ -47,7 +52,8 @@ export function invAdd(inv, id, count = 1) {
   if (max > 1) {
     for (const cell of inv.grid) {
       if (left <= 0) break;
-      if (cell && cell.id === id && cell.count < max) {
+      // only merge into a stack of the same rarity so buffs don't get diluted
+      if (cell && cell.id === id && cell.count < max && (cell.rarity || null) === (rarity || null)) {
         const room = max - cell.count;
         const take = Math.min(room, left);
         cell.count += take;
@@ -58,7 +64,7 @@ export function invAdd(inv, id, count = 1) {
   for (let i = 0; i < inv.grid.length && left > 0; i++) {
     if (!inv.grid[i]) {
       const take = Math.min(max, left);
-      inv.grid[i] = { id, count: take };
+      inv.grid[i] = rarity ? { id, count: take, rarity } : { id, count: take };
       left -= take;
     }
   }
@@ -166,12 +172,15 @@ export function toggleWeapon(inv, maxSlots, dir) {
   return activeWeaponId(inv);
 }
 
-// derived damage-resist by body region from equipped armour
+// derived damage-resist by body region from equipped armour (rarity-scaled)
 export function regionDR(inv) {
   const dr = { head: 0, torso: 0, legs: 0, feet: 0 };
   for (const r of ['head', 'torso', 'legs', 'feet']) {
     const s = inv.equip[r];
-    if (s && ITEMS[s.id] && ITEMS[s.id].region === r) dr[r] = ITEMS[s.id].dr;
+    if (s && ITEMS[s.id] && ITEMS[s.id].region === r) {
+      const scaled = itemStats(s.id, s.rarity);
+      dr[r] = scaled && scaled.dr != null ? scaled.dr : ITEMS[s.id].dr;
+    }
   }
   return dr;
 }

@@ -2767,25 +2767,50 @@ function drawHumanoid(ctx, x, y, ang, s, body, head, o) {
   ctx.restore();
 }
 
-function drawPlayer(ctx, p, t) {
-  let body = '#6fdcff';
-  let head = '#cdf3ff';
+function drawPlayer(ctx, p, t, hub) {
+  // always-on locator so you never lose yourself in a busy frame
+  ctx.save();
+  const rg = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.r + 16);
+  rg.addColorStop(0, 'rgba(110,220,255,0.20)');
+  rg.addColorStop(1, 'rgba(110,220,255,0)');
+  ctx.fillStyle = rg;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.r + 16, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(150,235,255,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, p.r + 6, 0, TAU);
+  ctx.stroke();
+  // facing wedge
+  ctx.fillStyle = 'rgba(180,240,255,0.8)';
+  ctx.beginPath();
+  ctx.moveTo(p.x + Math.cos(p.aim) * (p.r + 5), p.y + Math.sin(p.aim) * (p.r + 5));
+  ctx.lineTo(p.x + Math.cos(p.aim + 0.35) * (p.r + 13), p.y + Math.sin(p.aim + 0.35) * (p.r + 13));
+  ctx.lineTo(p.x + Math.cos(p.aim - 0.35) * (p.r + 13), p.y + Math.sin(p.aim - 0.35) * (p.r + 13));
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  let body = '#7fe6ff';
+  let head = '#e6faff';
   if (p.flash > 0) {
     body = '#ffffff';
     head = '#ffffff';
   } else if (p.iframe > 0 && Math.floor(t * 30) % 2) {
-    body = 'rgba(120,230,255,0.4)';
-    head = 'rgba(180,240,255,0.5)';
+    body = 'rgba(140,235,255,0.5)';
+    head = 'rgba(200,245,255,0.6)';
   }
-  drawHumanoid(ctx, p.x, p.y, p.aim, 1, body, head, { weaponColor: '#eef', weaponLen: 13, blur: 12 });
-  if (p.dodge > 0) glowCircle(ctx, p.x, p.y, p.r + 4, 'rgba(120,230,255,0.22)', 16);
+  drawHumanoid(ctx, p.x, p.y, p.aim, 1.12, body, head, { weaponColor: '#f4faff', weaponLen: 14, blur: 16 });
+  if (p.dodge > 0) glowCircle(ctx, p.x, p.y, p.r + 4, 'rgba(120,230,255,0.28)', 18);
   if (p.stun > 0) {
     ctx.strokeStyle = 'rgba(255,220,120,0.7)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r + 6, 0, TAU);
+    ctx.arc(p.x, p.y, p.r + 8, 0, TAU);
     ctx.stroke();
   }
+  if (!hub && p.stimT > 0) glowCircle(ctx, p.x, p.y, p.r + 2, 'rgba(255,213,74,0.22)', 14);
 }
 
 function drawBlock(ctx, bl) {
@@ -2800,31 +2825,64 @@ function drawBlock(ctx, bl) {
   ctx.restore();
 }
 
+const FACTION_TINT = {
+  jaffa: '#ffb347',
+  wraith: '#8bf0a0',
+  replicator: '#8fe4ff',
+  boss: '#ffd27a',
+};
+
 function drawEnemy(ctx, e, t) {
   const flash = e.flash > 0;
   const dormant = e.state === 'idle' || e.state === 'dormant';
   const idle = dormant;
-  if (dormant) ctx.globalAlpha = 0.78;
+  if (dormant) ctx.globalAlpha = 0.7;
   const hunter = e.hunter;
+
+  // engaged enemies get a thin faction ring so awake reads instantly vs asleep
+  if (!dormant && !flash) {
+    const fam = e.kind.startsWith('wraith') ? 'wraith' : e.kind.startsWith('replicator') ? 'replicator' : e.kind === 'boss' ? 'boss' : 'jaffa';
+    ctx.strokeStyle = hexA(hunter ? '#ff6a4a' : FACTION_TINT[fam], 0.4 + 0.15 * Math.sin(t * 6 + e.wobble));
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, e.r + 5, 0, TAU);
+    ctx.stroke();
+  }
 
   if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy' || e.kind === 'jaffa_grenadier') {
     const heavy = e.kind === 'jaffa_heavy';
     const nade = e.kind === 'jaffa_grenadier';
-    drawHumanoid(ctx, e.x, e.y, e.facing, heavy ? 1.5 : nade ? 1.1 : 1.05, flash ? '#fff' : hunter ? '#ff6a4a' : nade ? '#ff9f5c' : '#ffb347', flash ? '#fff' : '#ffd9a0', {
+    // pull the three Jaffa types apart by hue as well as shape
+    const jc = flash ? '#fff' : hunter ? '#ff6a4a' : heavy ? '#d97636' : nade ? '#ffd45c' : '#ffb347';
+    drawHumanoid(ctx, e.x, e.y, e.facing, heavy ? 1.5 : nade ? 1.1 : 1.05, jc, flash ? '#fff' : '#ffe6c8', {
       weaponColor: flash ? '#fff' : '#ffcf9a',
       weaponLen: heavy ? 17 : nade ? 9 : 15,
       head: heavy ? 4 : 3.4,
       blur: heavy ? 12 : 10,
     });
-    ctx.save();
-    ctx.strokeStyle = flash ? '#fff' : heavy ? '#ffd27a' : '#ffe0b0';
-    ctx.lineWidth = heavy ? 4 : 2.6;
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = '#fb3';
-    ctx.beginPath();
-    ctx.arc(e.x, e.y, e.r + 1, e.facing - (heavy ? 1.0 : 0.7), e.facing + (heavy ? 1.0 : 0.7));
-    ctx.stroke();
-    ctx.restore();
+    if (heavy) {
+      // a slab of frontal plating — the tank silhouette
+      ctx.save();
+      ctx.strokeStyle = flash ? '#fff' : '#ffdca0';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#fb3';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r + 3, e.facing - 1.1, e.facing + 1.1);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.strokeStyle = flash ? '#fff' : '#ffe0b0';
+      ctx.lineWidth = 2.6;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = '#fb3';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r + 1, e.facing - 0.7, e.facing + 0.7);
+      ctx.stroke();
+      ctx.restore();
+    }
     if (nade) {
       // a lit shell held at the hip — distinct silhouette
       const hx = e.x + Math.cos(e.facing - 1.4) * 10;

@@ -19,20 +19,50 @@ export function isValid(addr) {
 }
 
 // deterministic neighbour addresses reachable from a gate
+// always yields exactly `count` distinct valid addresses, none equal to the input
 export function neighbors(addr, count = 5) {
-  const h = hashStr('nbr:' + normalize(addr));
-  const base = normalize(addr).split('-');
+  const norm = normalize(addr);
+  const h = hashStr('nbr:' + norm);
+  const base = norm.split('-');
   const out = [];
+  // accept a candidate only if it's a fresh, valid, non-self address
+  const add = (np) => {
+    const joined = np.join('-');
+    if (joined !== norm && isValid(joined) && !out.includes(joined)) out.push(joined);
+  };
+  // phase 1: organic-looking picks driven purely by the h() stream.
+  // absolute safety bound scaled to count so it can never spin forever.
+  const cap = count * 50 + 500;
   let guard = 0;
-  while (out.length < count && guard++ < 40) {
+  while (out.length < count && guard++ < cap) {
     const np = base.slice();
     const muts = 1 + (h() % 2);
     for (let m = 0; m < muts; m++) {
       const pos = h() % 6;
       np[pos] = GLYPHS[h() % GLYPHS.length];
     }
-    const joined = np.join('-');
-    if (joined !== normalize(addr) && !out.includes(joined)) out.push(joined);
+    add(np);
+  }
+  // phase 2: deterministic sweep of every single-glyph substitution
+  for (let pos = 0; pos < 6 && out.length < count; pos++) {
+    for (let gi = 0; gi < GLYPHS.length && out.length < count; gi++) {
+      const np = base.slice();
+      np[pos] = GLYPHS[gi];
+      add(np);
+    }
+  }
+  // phase 3: deterministic sweep of two-glyph substitutions for large counts
+  for (let p = 0; p < 6 && out.length < count; p++) {
+    for (let q = p + 1; q < 6 && out.length < count; q++) {
+      for (let gi = 0; gi < GLYPHS.length && out.length < count; gi++) {
+        for (let gj = 0; gj < GLYPHS.length && out.length < count; gj++) {
+          const np = base.slice();
+          np[p] = GLYPHS[gi];
+          np[q] = GLYPHS[gj];
+          add(np);
+        }
+      }
+    }
   }
   return out;
 }

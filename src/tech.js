@@ -66,7 +66,7 @@ export const TECH = [
     desc: 'Unlock the Ion Beam for requisition.' },
   { id: 'arm_modslot', name: 'Field Armourer', branch: 'armory', tier: 3,
     cost: { naquadah: 210, intel: 5 }, requires: ['arm_slot3'],
-    desc: 'Open a weapon-mod slot.' },
+    desc: 'All weapons deal +15% damage.' },
 
   // ---------------------------------------------------------------- gate
   { id: 'gate_dial', name: 'Efficient Dialling', branch: 'gate', tier: 0,
@@ -120,6 +120,7 @@ export function defaultEffects() {
     weaponSlots: 2,
     reloadMul: 1,
     grenadeCap: 4,
+    weaponDmgMul: 1,
     weaponModSlots: 0,
     unlockedWeapons: [],
     dialCostMul: 1,
@@ -150,7 +151,7 @@ const EFFECT_APPLY = {
   arm_reload: (e) => { e.reloadMul *= 0.8; },
   arm_grenade: (e) => { e.grenadeCap += 1; },
   arm_slot3: (e) => { e.weaponSlots += 1; },
-  arm_modslot: (e) => { e.weaponModSlots += 1; },
+  arm_modslot: (e) => { e.weaponDmgMul *= 1.15; },
   // gate
   gate_dial: (e) => { e.dialCostMul *= 0.8; },
   gate_look: (e) => { e.mapLookahead += 1; },

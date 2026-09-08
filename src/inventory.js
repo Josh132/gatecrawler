@@ -8,7 +8,7 @@ export const HOTBAR = 4;
 export function createInventory() {
   const inv = {
     grid: new Array(GRID_SIZE).fill(null), // {id, count} | null
-    equip: { head: null, torso: null, legs: null, feet: null, weapon1: null, weapon2: null, grenade: null },
+    equip: { head: null, torso: null, legs: null, feet: null, weapon1: null, weapon2: null, weapon3: null, grenade: null },
     hotbar: new Array(HOTBAR).fill(null), // {id, count} | null
     active: 'weapon1', // which weapon slot is in hand
   };
@@ -30,7 +30,7 @@ export function reviveInventory(raw) {
       inv.equip[s] = st && slotAccepts(s, st.id) ? st : inv.equip[s];
     }
   }
-  if (raw.active === 'weapon1' || raw.active === 'weapon2') inv.active = raw.active;
+  if (['weapon1', 'weapon2', 'weapon3'].includes(raw.active)) inv.active = raw.active;
   return inv;
 }
 
@@ -97,15 +97,17 @@ function locAccepts(loc, id) {
   return false;
 }
 
-// move / swap / merge a stack between two locations. returns true if anything changed.
-export function moveStack(inv, from, to) {
+// move / swap / merge a stack between two locations. returns true if anything
+// changed. `capOverride` (optional) raises the max stack for the destination —
+// used by the game to apply the Bandolier tech to the grenade slot.
+export function moveStack(inv, from, to, capOverride) {
   const a = ref(inv, from);
   if (!a) return false;
   if (from.kind === to.kind && (from.i === to.i && from.key === to.key)) return false;
   if (!locAccepts(to, a.id)) return false;
   const b = ref(inv, to);
   const def = ITEMS[a.id];
-  const max = def.stack || 1;
+  const max = Math.max(def.stack || 1, capOverride || 0);
 
   if (b && b.id === a.id && max > 1) {
     const room = max - b.count;
@@ -147,13 +149,20 @@ export function takeGrenade(inv) {
 }
 
 export function activeWeaponId(inv) {
-  const s = inv.equip[inv.active] || inv.equip.weapon1 || inv.equip.weapon2;
+  const s = inv.equip[inv.active] || inv.equip.weapon1 || inv.equip.weapon2 || inv.equip.weapon3;
   return s && ITEMS[s.id] ? ITEMS[s.id].weapon : 'p90';
 }
 
-export function toggleWeapon(inv) {
-  const other = inv.active === 'weapon1' ? 'weapon2' : 'weapon1';
-  if (inv.equip[other]) inv.active = other;
+// cycle to the next occupied weapon slot; `maxSlots` (2 or 3) is the Third
+// Holster gate. `dir` -1 cycles backwards (mouse-wheel up).
+export function toggleWeapon(inv, maxSlots, dir) {
+  const slots = ['weapon1', 'weapon2', 'weapon3'].slice(0, Math.max(1, Math.min(3, maxSlots || 2)));
+  const occ = slots.filter((s) => inv.equip[s]);
+  if (occ.length < 2) return activeWeaponId(inv);
+  let i = occ.indexOf(inv.active);
+  if (i < 0) i = 0;
+  i = (i + (dir === -1 ? -1 : 1) + occ.length) % occ.length;
+  inv.active = occ[i];
   return activeWeaponId(inv);
 }
 

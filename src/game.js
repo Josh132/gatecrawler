@@ -45,6 +45,8 @@ function techEffectsFallback() {
     weaponSlots: 2,
     reloadMul: 1,
     grenadeCap: 4,
+    weaponDmgMul: 1,
+    weaponModSlots: 0,
     unlockedWeapons: [],
     dialCostMul: 1,
     mapLookahead: 0,
@@ -324,7 +326,7 @@ function startWorld(g, addr, hop) {
   g.drag = null;
   g.hunterSpawned = false;
   g.hub = false;
-  if (hop > 0 && !g._firstWorld) g.heat += 0.35 * fx(g).heatMul; // the hunt intensifies the deeper you push
+  // (deep-dial heat bump is applied by the gate-map dial handler)
   g._firstWorld = false;
   g.save.lastAddress = worldParams(addr, hop).address;
   g.hop = hop;
@@ -593,8 +595,20 @@ function updateHub(g, dt) {
 function updatePlay(g, dt) {
   const p = g.player;
   const w = g.world;
+  const eff = fx(g);
 
-  p.dodgeCd = Math.max(0, p.dodgeCd - dt);
+  // charge-based dodge: dodgeMax charges (tech), one refills every dodgeGap secs
+  if (p.dodgeMax == null) p.dodgeMax = eff.dodgeCharges || 1;
+  if (p.dodgeCharge == null) p.dodgeCharge = p.dodgeMax;
+  const dodgeGap = 1.15 * (eff.dodgeCdMul || 1);
+  p.dodgeCd = Math.max(0, p.dodgeCd - dt); // small min gap between rolls
+  if (p.dodgeCharge < p.dodgeMax) {
+    p.dodgeRegenT = (p.dodgeRegenT || 0) + dt;
+    if (p.dodgeRegenT >= dodgeGap) {
+      p.dodgeRegenT -= dodgeGap;
+      p.dodgeCharge = Math.min(p.dodgeMax, p.dodgeCharge + 1);
+    }
+  }
   p.iframe = Math.max(0, p.iframe - dt);
   p.flash = Math.max(0, p.flash - dt);
   if (p.dodge > 0) p.dodge -= dt;
@@ -623,12 +637,21 @@ function updatePlay(g, dt) {
     p.x += p.ddx * 470 * dt;
     p.y += p.ddy * 470 * dt;
   } else if (p.stun <= 0) {
-    if (pressed('Space') && p.dodgeCd <= 0 && (ix || iy)) {
+    if (pressed('Space') && p.dodgeCd <= 0 && p.dodgeCharge >= 1) {
+      // dodge toward movement input, or toward aim from a standstill
+      let ddx = ix;
+      let ddy = iy;
+      if (!ddx && !ddy) {
+        ddx = Math.cos(p.aim);
+        ddy = Math.sin(p.aim);
+      }
       p.dodge = 0.26;
       p.iframe = 0.3;
-      p.dodgeCd = 0.8;
-      p.ddx = ix;
-      p.ddy = iy;
+      p.dodgeCd = 0.3;
+      p.dodgeCharge -= 1;
+      if (p.dodgeCharge === p.dodgeMax - 1) p.dodgeRegenT = 0;
+      p.ddx = ddx;
+      p.ddy = ddy;
       sfx.dodge();
     } else {
       p.x += ix * spd * dt;
@@ -647,10 +670,15 @@ function updatePlay(g, dt) {
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
   if (pressed('KeyQ')) quickHeal(g);
   if (pressed('KeyX') || g.wheel) {
+    const dir = g.wheel < 0 ? -1 : 1;
     g.wheel = 0;
+    if (p.beam && p.beam.on) {
+      sfx.beam(false);
+      p.beam.on = false;
+    }
     cancelReload(p); // swapping weapons aborts a reload in progress
     p.burstN = 0;
-    const wid = toggleWeapon(g.inv);
+    const wid = toggleWeapon(g.inv, eff.weaponSlots, pressed('KeyX') ? 1 : dir);
     g.message('Weapon: ' + (ITEMS[weaponItemId(g.inv)] ? ITEMS[weaponItemId(g.inv)].name : wid));
   }
   if (pressed('KeyG')) throwGrenade(g);
@@ -1183,7 +1211,7 @@ function explode(g, gr) {
 function startReload(g, p, wid) {
   const wp = WEAPONS[wid];
   if (!wp || wp.mag == null) return;
-  p.reloadT = wp.reload || 1.1;
+  p.reloadT = (wp.reload || 1.1) * (fx(g).reloadMul || 1);
   p.reloadDur = p.reloadT;
   p.reloading = true;
   p.reloadWid = wid;
@@ -1269,7 +1297,7 @@ function fireBeam(g, p, wp, dt) {
       y: hy,
       vx: dx,
       vy: dy,
-      dmg: (wp.dps || 40) * 0.09,
+      dmg: (wp.dps || 40) * 0.09 * (fx(g).weaponDmgMul || 1),
       energy: true,
       knockback: 0,
       stun: 0,
@@ -1298,7 +1326,7 @@ function fireWeapon(g, p, wp, wid) {
         p.y + Math.sin(a) * muzzle,
         Math.cos(a) * wp.speed,
         Math.sin(a) * wp.speed,
-        wp.damage,
+        wp.damage * (fx(g).weaponDmgMul || 1),
         'player',
         {
           color: wp.color,
@@ -3223,6 +3251,7 @@ function panelLayout(g) {
     ['feet', dollX + S + gap, dollY + 3 * (S + gap)],
     ['weapon1', dollX, dollY + S + gap],
     ['weapon2', dollX + 2 * (S + gap), dollY + S + gap],
+    ['weapon3', dollX, dollY + 2 * (S + gap)],
     ['grenade', dollX + 2 * (S + gap), dollY + 3 * (S + gap)],
   ];
   for (const [key, x, y] of eq) cells.push({ loc: { kind: 'equip', key }, x, y, w: S, h: S });
@@ -3295,14 +3324,14 @@ function panelDrop(g) {
   }
   // temporarily place the held stack back at origin, then use moveStack
   invSet(g, d.from, { id: d.id, count: d.count });
-  if (target) {
-    if (!moveStack(g.inv, d.from, target)) {
-      // invalid target — item stays at origin (already restored)
-    }
+  if (target && !(target.kind === 'equip' && target.key === 'weapon3' && (fx(g).weaponSlots || 2) < 3)) {
+    const cap = target.kind === 'equip' && target.key === 'grenade' ? fx(g).grenadeCap : 0;
+    moveStack(g.inv, d.from, target, cap);
   }
   // ensure a valid active weapon slot
   if (!g.inv.equip[g.inv.active]) {
-    g.inv.active = g.inv.equip.weapon1 ? 'weapon1' : g.inv.equip.weapon2 ? 'weapon2' : 'weapon1';
+    const slots = ['weapon1', 'weapon2', 'weapon3'];
+    g.inv.active = slots.find((s) => g.inv.equip[s]) || 'weapon1';
   }
   saveInv(g);
 }
@@ -3345,9 +3374,16 @@ function renderPanel(g) {
     feet: 'FEET',
     weapon1: 'WPN1',
     weapon2: 'WPN2',
+    weapon3: 'WPN3',
     grenade: 'GRND',
   };
+  const slots3 = (fx(g).weaponSlots || 2) >= 3;
   for (const c of lay.cells) {
+    // the third weapon slot is inert until the Third Holster tech is researched
+    if (c.loc.kind === 'equip' && c.loc.key === 'weapon3' && !slots3) {
+      drawSlot(ctx, c.x, c.y, c.w, null, { label: 'WPN3', border: 'rgba(70,80,95,0.5)', bg: 'rgba(20,24,32,0.5)' });
+      continue;
+    }
     const st = invRef(g, c.loc);
     let label = null;
     let border = 'rgba(120,160,210,0.35)';
@@ -3777,38 +3813,77 @@ function renderGateMap(g) {
   ctx.font = '11px monospace';
   ctx.fillText((g.launching ? 'SGC' : g.params.address) + '  (here)', cx, cy + 26);
 
+  const eff = fx(g);
+  const targetHop = g.launching ? eff.startHop || 0 : g.hop + 1;
+  const dialCost = g.launching ? 0 : Math.floor(18 * targetHop * (eff.dialCostMul || 1));
+  const canSee = g.launching || (eff.mapLookahead || 0) >= 1;
+
+  if (!g.launching) {
+    ctx.fillStyle = dialCost > g.runNaq ? '#f77' : '#8ef';
+    ctx.font = '11px monospace';
+    ctx.fillText(
+      dialCost > 0 ? `powering the gate: ${dialCost} naquadah  (you have ${g.runNaq})` : 'dial is free',
+      cx,
+      cy + 42
+    );
+  }
+
   const n = g.mapNodes.length || 1;
   const R = Math.min(view.w, view.h) * 0.3;
   g.mapNodes.forEach((node, i) => {
     const a = -Math.PI / 2 + (i / n) * TAU;
     const x = cx + Math.cos(a) * R;
     const y = cy + Math.sin(a) * R;
-    ctx.strokeStyle = 'rgba(120,180,255,0.25)';
+    const pr = node.prev;
+    const afford = dialCost <= g.runNaq;
+    ctx.strokeStyle = afford ? 'rgba(120,180,255,0.25)' : 'rgba(120,120,130,0.15)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(x, y);
     ctx.stroke();
-    const pr = node.prev;
-    const col = pr.primary === 'wraith' ? '#9df7a0' : '#ffb347';
-    glowCircle(ctx, x, y, 14, col, 12);
-    ctx.fillStyle = '#cde';
+    const col = !canSee
+      ? '#6a7480'
+      : pr.faction === 'wraith'
+      ? '#9df7a0'
+      : pr.faction === 'replicator'
+      ? '#8fe4ff'
+      : '#ffb347';
+    glowCircle(ctx, x, y, 14, afford ? col : '#556', afford ? 12 : 4);
+    ctx.fillStyle = afford ? '#cde' : '#889';
     ctx.font = 'bold 11px monospace';
     ctx.fillText(node.addr, x, y - 24);
     ctx.fillStyle = '#9ab';
     ctx.font = '10px monospace';
-    ctx.fillText(
-      `threat ~${pr.threat}  ${pr.primary}${pr.mods.length ? '  [' + pr.mods.join(',') + ']' : ''}`,
-      x,
-      y + 32
-    );
-    g.buttons.push({
-      x: x - 62,
-      y: y - 20,
-      w: 124,
-      h: 44,
-      fn: () => (g.launching ? launchRun(g, node.addr) : startWorld(g, node.addr, g.hop + 1)),
-    });
+    if (canSee) {
+      const loot = pr.threat >= 6 ? 'rich' : pr.threat >= 3 ? 'good' : 'light';
+      ctx.fillText(`threat ${pr.threat}  ·  ${pr.faction}  ·  loot ${loot}`, x, y + 30);
+      if (pr.mods.length) {
+        ctx.fillStyle = '#fd6';
+        ctx.fillText('[ ' + pr.mods.join('  ') + ' ]', x, y + 44);
+      }
+    } else {
+      ctx.fillText('telemetry offline', x, y + 30);
+      ctx.fillStyle = '#678';
+      ctx.fillText('research Forward Telemetry', x, y + 44);
+    }
+    if (afford) {
+      g.buttons.push({
+        x: x - 62,
+        y: y - 20,
+        w: 124,
+        h: 44,
+        fn: () => {
+          if (g.launching) {
+            launchRun(g, node.addr);
+          } else {
+            g.runNaq = Math.max(0, g.runNaq - dialCost);
+            g.heat += 0.35 * (eff.heatMul || 1); // pushing deeper stokes the hunt
+            startWorld(g, node.addr, targetHop);
+          }
+        },
+      });
+    }
   });
 
   if (g.launching) {
@@ -3817,7 +3892,9 @@ function renderGateMap(g) {
       enterHub(g);
     });
   } else {
-    button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah`, cx - 170, view.h - 68, 340, 40, () => dialHome(g));
+    button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah  +  ${g.runIntel} intel`, cx - 210, view.h - 68, 420, 40, () =>
+      dialHome(g)
+    );
   }
 }
 

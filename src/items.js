@@ -123,12 +123,12 @@ export const ITEMS = {
   a_boots: { name: 'Assault Boots', type: 'armor', region: 'feet', dr: 0.22, color: '#9fb8d0', icon: '▄', blurb: 'Feet 22% DR.' },
 };
 
-export const EQUIP_SLOTS = ['head', 'torso', 'legs', 'feet', 'weapon1', 'weapon2', 'grenade'];
+export const EQUIP_SLOTS = ['head', 'torso', 'legs', 'feet', 'weapon1', 'weapon2', 'weapon3', 'grenade'];
 
 export function slotAccepts(slot, id) {
   const it = ITEMS[id];
   if (!it) return false;
-  if (slot === 'weapon1' || slot === 'weapon2') return it.type === 'weapon';
+  if (slot === 'weapon1' || slot === 'weapon2' || slot === 'weapon3') return it.type === 'weapon';
   if (slot === 'grenade') return it.type === 'grenade';
   return it.type === 'armor' && it.region === slot;
 }

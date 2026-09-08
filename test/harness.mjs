@@ -532,6 +532,7 @@ section('gameplay: descend hop 0 -> 14 through the real gate map, invariants eac
     dhd.spawned = true;
     g.enemies.length = 0;
     g.player.hp = g.player.maxHp;
+    g.runNaq = 99999; // afford the deep-dial power cost
     g.dhdActive = true;
     g.player.x = dhd.centerPx.x;
     g.player.y = dhd.centerPx.y;
@@ -1090,7 +1091,7 @@ section('tech: tree shape, effects fold, research gating');
   // -- techEffects([]) deep-equals the documented defaults
   const DEFAULTS = {
     maxHpBonus: 0, dodgeCharges: 1, dodgeCdMul: 1, startArmor: null, startShield: 0,
-    freeRevive: false, weaponSlots: 2, reloadMul: 1, grenadeCap: 4, weaponModSlots: 0,
+    freeRevive: false, weaponSlots: 2, reloadMul: 1, grenadeCap: 4, weaponDmgMul: 1, weaponModSlots: 0,
     unlockedWeapons: [], dialCostMul: 1, mapLookahead: 0, startHop: 0, heatMul: 1,
     naquadahMul: 1, intelMul: 1, deathKeepFrac: 0.5,
   };

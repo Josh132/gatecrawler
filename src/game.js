@@ -2833,9 +2833,26 @@ function renderPlay(g, dim) {
     drawDHD(ctx, g.world.dhdRoom.centerPx, g.time, g.dhdActive);
   }
 
+  // one y-sorted pass — everything that stands on the floor is painted
+  // back-to-front, so a tall figure covers whatever is behind it. Flat things
+  // sort on their own y; tall ones on y + a height bias.
+  const sorted = [];
   for (const pk of g.pickups)
-    if (lit(pk.x, pk.y)) drawPickup(ctx, pk, (pk.x - g.player.x) ** 2 + (pk.y - g.player.y) ** 2 < 80 * 80);
+    if (lit(pk.x, pk.y)) sorted.push({ y: pk.y, k: 'pickup', o: pk });
+  for (const gr of g.grenades) sorted.push({ y: gr.y, k: 'grenade', o: gr });
+  for (const bl of g.blocks) if (lit(bl.x, bl.y)) sorted.push({ y: bl.y, k: 'block', o: bl });
+  for (const e of g.enemies) if (lit(e.x, e.y)) sorted.push({ y: e.y + e.r * 0.6, k: 'enemy', o: e });
+  sorted.push({ y: g.player.y + g.player.r * 0.6, k: 'player', o: g.player });
+  sorted.sort((a, b) => a.y - b.y);
+  for (const d of sorted) {
+    if (d.k === 'pickup') drawPickup(ctx, d.o, (d.o.x - g.player.x) ** 2 + (d.o.y - g.player.y) ** 2 < 80 * 80);
+    else if (d.k === 'grenade') drawGrenade(ctx, d.o);
+    else if (d.k === 'block') drawBlock(ctx, d.o);
+    else if (d.k === 'enemy') drawEnemy(ctx, d.o, g.time);
+    else drawPlayer(ctx, d.o, g.time);
+  }
 
+  // energy on top of the sort: bullets, beams and sparks read as light
   ctx.globalCompositeOperation = 'lighter';
   for (const pt of g.particles) {
     ctx.globalAlpha = clamp(pt.life / pt.maxLife, 0, 1);
@@ -2848,11 +2865,6 @@ function renderPlay(g, dim) {
   for (const b of g.bullets) drawBullet(ctx, b);
   if (g.player.beam && g.player.beam.on) drawBeam(ctx, g.player.beam, g.time);
   ctx.globalCompositeOperation = 'source-over';
-
-  for (const gr of g.grenades) drawGrenade(ctx, gr);
-  for (const bl of g.blocks) if (lit(bl.x, bl.y)) drawBlock(ctx, bl);
-  for (const e of g.enemies) if (lit(e.x, e.y)) drawEnemy(ctx, e, g.time);
-  drawPlayer(ctx, g.player, g.time);
 
   if (g.dhdActive) {
     const c = g.world.dhdRoom.centerPx;

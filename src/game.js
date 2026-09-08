@@ -3500,7 +3500,7 @@ function drawBullet(ctx, b) {
   const z = b.z == null ? 8 : b.z;
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
-  drawShadow(ctx, b.x, b.y, b.r * 1.6, z, 0.8);
+  drawShadow(ctx, b.x, b.y, b.r * 1.1, z, 0.45);
   ctx.restore();
   ctx.save();
   ctx.translate(0, -z);

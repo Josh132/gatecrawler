@@ -154,6 +154,8 @@ const { worldParams, neighbors, HOME } = await import('../src/address.js');
 const { buildWorld } = await import('../src/worldgen.js');
 const inv = await import('../src/inventory.js');
 const { ITEMS } = await import('../src/items.js');
+const tech = await import('../src/tech.js');
+const icons = await import('../src/icons.js');
 
 // ---------------------------------------------------------------- assertions
 let failures = 0;
@@ -979,6 +981,115 @@ section('stress: 90s idle in a fresh world + input spam');
     if (i % 300 === 0) checkInvariants(g, 'stress');
   }
   checkInvariants(g, 'stress-final');
+}
+
+// ---------------------------------------------------------------- 6. tech tree
+section('tech: tree shape, effects fold, research gating');
+{
+  const { TECH, techEffects, canResearch, nodeById, researchCost } = tech;
+  const BRANCHES = ['ops', 'armory', 'gate'];
+
+  // -- per-node structural checks
+  for (const n of TECH) {
+    assert(BRANCHES.includes(n.branch), `tech ${n.id}: branch valid (${n.branch})`);
+    assert(Number.isInteger(n.tier) && n.tier >= 0 && n.tier <= 3, `tech ${n.id}: tier 0-3 (${n.tier})`);
+    assert(typeof n.cost.naquadah === 'number' && n.cost.naquadah > 0, `tech ${n.id}: cost.naquadah > 0 (${n.cost.naquadah})`);
+    if (n.cost.intel !== undefined) assert(n.cost.intel > 0, `tech ${n.id}: cost.intel > 0 when present (${n.cost.intel})`);
+    assert(Array.isArray(n.requires), `tech ${n.id}: requires is an array`);
+    for (const r of n.requires) {
+      assert(!!nodeById(r), `tech ${n.id}: requires '${r}' resolves`);
+      assert(r !== n.id, `tech ${n.id}: does not require itself`);
+    }
+    assert(researchCost(n.id) && researchCost(n.id).naquadah === n.cost.naquadah, `tech ${n.id}: researchCost mirrors cost`);
+  }
+  assert(nodeById('does_not_exist') === null, 'tech: nodeById of a bogus id is null');
+  assert(researchCost('does_not_exist') === null, 'tech: researchCost of a bogus id is null');
+  assert(TECH.length >= 16 && TECH.length <= 24, `tech: ~16-20 nodes (${TECH.length})`);
+  for (const b of BRANCHES) assert(TECH.some((n) => n.branch === b && n.tier === 0), `tech: branch ${b} has a tier-0 entry`);
+
+  // -- no cycles (DFS with a colour map)
+  {
+    const WHITE = 0, GREY = 1, BLACK = 2;
+    const colour = new Map(TECH.map((n) => [n.id, WHITE]));
+    let cycle = false;
+    const visit = (id) => {
+      colour.set(id, GREY);
+      for (const r of nodeById(id).requires) {
+        const c = colour.get(r);
+        if (c === GREY) cycle = true;
+        else if (c === WHITE) visit(r);
+      }
+      colour.set(id, BLACK);
+    };
+    for (const n of TECH) if (colour.get(n.id) === WHITE) visit(n.id);
+    assert(!cycle, 'tech: requires graph is acyclic');
+  }
+
+  // -- techEffects([]) deep-equals the documented defaults
+  const DEFAULTS = {
+    maxHpBonus: 0, dodgeCharges: 1, dodgeCdMul: 1, startArmor: null, startShield: 0,
+    freeRevive: false, weaponSlots: 2, reloadMul: 1, grenadeCap: 4, weaponModSlots: 0,
+    unlockedWeapons: [], dialCostMul: 1, mapLookahead: 0, startHop: 0, heatMul: 1,
+    naquadahMul: 1, intelMul: 1, deathKeepFrac: 0.5,
+  };
+  const deepEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  assert(deepEq(techEffects([]), DEFAULTS), 'tech: techEffects([]) equals the documented defaults');
+  assert(deepEq(techEffects(['not_a_node']), DEFAULTS), 'tech: unknown owned ids are ignored');
+
+  // -- a small chain moves exactly the fields it should
+  const chain = techEffects(['ops_hp1', 'ops_hp2', 'ops_dodgecd', 'arm_shotgun', 'arm_burst', 'gate_look']);
+  assert(chain.maxHpBonus === 50, `tech: two HP nodes -> +50 (${chain.maxHpBonus})`);
+  assert(chain.dodgeCdMul === 0.8, `tech: dodge-cd node -> 0.8 (${chain.dodgeCdMul})`);
+  assert(deepEq(chain.unlockedWeapons, ['w_shotgun', 'w_burst']), `tech: weapon unlocks accumulate (${chain.unlockedWeapons})`);
+  assert(chain.mapLookahead === 1, `tech: forward telemetry -> lookahead 1 (${chain.mapLookahead})`);
+  assert(chain.weaponSlots === 2 && chain.reloadMul === 1, 'tech: untouched fields stay default');
+  const keystone = techEffects(['ops_hp1', 'ops_dodgecd', 'ops_hp2', 'ops_hp3', 'ops_dodge2', 'ops_revive']);
+  assert(keystone.freeRevive === true && keystone.dodgeCharges === 2, 'tech: revive keystone + 2nd dodge charge apply');
+
+  // -- canResearch gating
+  const richNoIntel = { naquadah: 999999, intel: 0, tech: [] };
+  const rich = { naquadah: 999999, intel: 999, tech: [] };
+  const broke = { naquadah: 0, intel: 0, tech: [] };
+  assert(canResearch(rich, 'ops_hp1') === true, 'tech: tier-0 node researchable with funds and no prereqs');
+  assert(canResearch(rich, 'ops_hp2') === false, 'tech: node with an unmet prereq is not researchable');
+  assert(canResearch({ ...rich, tech: ['ops_hp1'] }, 'ops_hp2') === true, 'tech: node becomes researchable once its prereq is owned');
+  assert(canResearch({ ...rich, tech: ['ops_hp1'] }, 'ops_hp1') === false, 'tech: an already-owned node is not researchable again');
+  assert(canResearch(broke, 'ops_hp1') === false, 'tech: cannot research when broke');
+  assert(canResearch({ ...broke, naquadah: 40 }, 'ops_hp1') === true, 'tech: exactly enough naquadah is enough');
+  assert(canResearch(richNoIntel, 'ops_dodge2') === false, 'tech: intel-gated keystone blocked with no intel and no prereq');
+  assert(canResearch({ ...richNoIntel, tech: ['ops_dodgecd'] }, 'ops_dodge2') === false, 'tech: intel-gated keystone still blocked with prereq but no intel');
+  assert(canResearch({ naquadah: 999999, intel: 3, tech: ['ops_dodgecd'] }, 'ops_dodge2') === true, 'tech: intel-gated keystone unlocks with prereq + intel + naquadah');
+  assert(canResearch(rich, 'nope') === false, 'tech: canResearch of a bogus id is false');
+}
+
+// ---------------------------------------------------------------- 7. item icons
+section('icons: every item draws without throwing, rarity is well-formed');
+{
+  const ctx = gameCanvas.getContext('2d');
+  const ids = [...Object.keys(ITEMS), 'totally_bogus_id'];
+  let drew = 0;
+  for (const id of ids) {
+    let ok = true;
+    try {
+      icons.drawItemIcon(ctx, id, 0, 0, 32);
+      icons.drawItemIcon(ctx, id, 120, 80, 14); // odd size / offset centre
+    } catch (err) {
+      ok = false;
+      console.error('    icon threw for ' + id + ': ' + (err && err.stack ? err.stack : err));
+    }
+    assert(ok, `icons: drawItemIcon('${id}') runs against the mock ctx`);
+    if (ok) drew++;
+  }
+  assert(drew === ids.length, `icons: all ${ids.length} icon draws completed`);
+  for (const id of Object.keys(ITEMS)) {
+    assert(['common', 'uncommon', 'rare'].includes(icons.rarityOf(id)), `icons: rarityOf('${id}') is one of the three tiers`);
+  }
+  assert(icons.rarityOf('totally_bogus_id') === 'common', 'icons: unknown id falls back to common rarity');
+  assert(icons.rarityOf('w_launcher') === 'rare' && icons.rarityOf('w_beam') === 'rare', 'icons: launcher & beam are rare');
+  assert(icons.rarityOf('a_helm') === 'uncommon' && icons.rarityOf('a_plate') === 'uncommon', 'icons: heavy armour is uncommon');
+  assert(icons.rarityOf('bandage') === 'common' && icons.rarityOf('a_boots') === 'common', 'icons: consumables & light armour are common');
+  const rc = icons.RARITY_COLOR;
+  assert(rc && rc.common && rc.uncommon && rc.rare, 'icons: RARITY_COLOR has all three tints');
 }
 
 // ---------------------------------------------------------------- report

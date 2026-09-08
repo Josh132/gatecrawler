@@ -90,6 +90,10 @@
     } else if (g.state === 'gatemap') {
       const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
       if (node) node.fn();
+    } else if (g.state === 'hub') {
+      g.player.x = g.world.gateCenter.x;
+      g.player.y = g.world.gateCenter.y;
+      key('KeyE');
     } else {
       key('Enter');
     }

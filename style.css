@@ -1,0 +1,9 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #05070c; overflow: hidden; }
+#game { display: block; width: 100vw; height: 100vh; cursor: none; }
+#dbg {
+  position: fixed; top: 6px; left: 8px;
+  font: 11px/1.4 monospace; color: #4af;
+  white-space: pre; pointer-events: none;
+  text-shadow: 0 0 4px #04a;
+}

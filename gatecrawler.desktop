@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Gate Crawler
+Comment=Procedural top-down SG-1 roguelite
+Exec=/home/josh132/.local/share/gatecrawler/gatecrawler
+Icon=/home/josh132/.local/share/gatecrawler/assets/icon.svg
+Terminal=false
+Categories=Game;ActionGame;
+StartupWMClass=GateCrawler

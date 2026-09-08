@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Launch Gate Crawler as a standalone Chromium app window.
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORT="${GATECRAWLER_PORT:-8777}"
+URL="http://127.0.0.1:${PORT}/index.html"
+
+port_up() {
+  (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null && { exec 3>&- 3<&-; return 0; }
+  return 1
+}
+
+STARTED_SERVER=0
+if ! port_up; then
+  GATECRAWLER_PORT="$PORT" python3 "${DIR}/server.py" &
+  SERVER_PID=$!
+  STARTED_SERVER=1
+  trap '[ "$STARTED_SERVER" = 1 ] && kill "$SERVER_PID" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 60); do
+    port_up && break
+    sleep 0.1
+  done
+fi
+
+BROWSER=""
+for cand in chromium chromium-browser google-chrome-stable google-chrome brave brave-browser; do
+  if command -v "$cand" >/dev/null 2>&1; then BROWSER="$cand"; break; fi
+done
+
+if [ -n "$BROWSER" ]; then
+  "$BROWSER" \
+    --app="$URL" \
+    --class=GateCrawler \
+    --user-data-dir="${DIR}/.appdata" \
+    --no-first-run \
+    --disable-translate \
+    >/dev/null 2>&1
+elif command -v xdg-open >/dev/null 2>&1; then
+  xdg-open "$URL"
+  # keep the server alive while the user plays in their default browser
+  [ "$STARTED_SERVER" = 1 ] && wait "$SERVER_PID"
+else
+  echo "No browser found. Open $URL manually." >&2
+  [ "$STARTED_SERVER" = 1 ] && wait "$SERVER_PID"
+fi

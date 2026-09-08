@@ -1,0 +1,217 @@
+import { TILE } from './worldgen.js';
+
+// resolve a moving circle against wall tiles; returns the corrected position
+export function circleVsGrid(world, ent, nx, ny) {
+  let x = nx;
+  let y = ny;
+  const r = ent.r;
+  for (let iter = 0; iter < 3; iter++) {
+    const minTx = Math.floor((x - r) / TILE);
+    const maxTx = Math.floor((x + r) / TILE);
+    const minTy = Math.floor((y - r) / TILE);
+    const maxTy = Math.floor((y + r) / TILE);
+    for (let ty = minTy; ty <= maxTy; ty++) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        const solid =
+          tx < 0 || ty < 0 || tx >= world.W || ty >= world.H || world.grid[ty * world.W + tx] === 1;
+        if (!solid) continue;
+        const cx = tx * TILE;
+        const cy = ty * TILE;
+        const closestX = Math.max(cx, Math.min(x, cx + TILE));
+        const closestY = Math.max(cy, Math.min(y, cy + TILE));
+        const dx = x - closestX;
+        const dy = y - closestY;
+        const d = Math.hypot(dx, dy);
+        if (d === 0) {
+          y -= r;
+        } else if (d < r) {
+          const push = r - d;
+          x += (dx / d) * push;
+          y += (dy / d) * push;
+        }
+      }
+    }
+  }
+  return { x, y };
+}
+
+export class Player {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.r = 11;
+    this.vx = 0;
+    this.vy = 0;
+    this.kx = 0;
+    this.ky = 0;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.aim = 0;
+    this.speed = 232;
+    this.ammo = { staff: 0, zat: 0 };
+    this.cool = 0;
+    this.dodge = 0;
+    this.dodgeCd = 0;
+    this.ddx = 1;
+    this.ddy = 0;
+    this.iframe = 0;
+    this.stun = 0;
+    this.flash = 0;
+    this.shield = 0;
+    this.shieldMax = 0;
+    this.shieldRegenT = 0;
+    this.stimT = 0;
+    this.alive = true;
+  }
+}
+
+const ENEMY_KIND = {
+  jaffa: { r: 12, hp: (t) => 38 + t * 6, speed: 96 },
+  jaffa_heavy: { r: 16, hp: (t) => 66 + t * 8, speed: 62 },
+  wraith: { r: 12, hp: (t) => 26 + t * 4, speed: 240 },
+  wraith_drone: { r: 10, hp: (t) => 18 + t * 3, speed: 268 },
+  replicator: { r: 9, hp: (t) => 14 + t * 2, speed: 172 },
+  replicator_brute: { r: 16, hp: (t) => 54 + t * 6, speed: 116 },
+  boss: { r: 22, hp: (t) => 240 + t * 22, speed: 120 },
+};
+
+export class Enemy {
+  constructor(kind, x, y, threat, opts = {}) {
+    this.kind = kind;
+    this.x = x;
+    this.y = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.kx = 0;
+    this.ky = 0;
+    this.facing = 0;
+    this.cool = Math.random() * 1.2;
+    this.regenT = 0;
+    this.wobble = Math.random() * Math.PI * 2;
+    this.flash = 0;
+    this.stun = 0;
+    this._room = null;
+    // cover-AI state (jaffa)
+    this.mode = 'advance';
+    this.modeT = 0;
+    this.scanT = Math.random() * 0.5;
+    this.cover = null;
+    this.aggressive = false;
+    this.blindT = 0;
+    // idle until it notices the player — no spawn-on-entry pop-in
+    this.state = 'idle';
+    this.anchorX = x;
+    this.anchorY = y;
+    this.wanderX = x;
+    this.wanderY = y;
+    this.wanderT = Math.random() * 2;
+    this.alertT = 0;
+    this.senseT = Math.random() * 0.25;
+    this.returnT = 0;
+    this.calmT = 0;
+    this.forcedReturn = false;
+    // replicators learn to shrug off whatever hit them last
+    this.resist = { kinetic: 0, energy: 0 };
+    this.hunter = !!opts.hunter;
+    this.variant = opts.variant || 'jaffa';
+    this._reformed = !!opts.reformed;
+
+    const k = ENEMY_KIND[kind] || ENEMY_KIND.jaffa;
+    this.r = k.r;
+    this.hp = Math.round(k.hp(threat) * (opts.hpMul || 1));
+    this.speed = k.speed * (opts.speedMul || 1);
+
+    if (kind === 'boss') {
+      this.shield = this.variant === 'jaffa' ? 90 : this.variant === 'replicator' ? 70 : 0;
+      this.shieldT = 0;
+      this.charging = 0;
+      this.chargeDir = 0;
+      this.attackT = 2;
+      this.screamT = 5;
+      this.immuneType = 'kinetic';
+      this.immuneT = 0;
+      if (this.variant === 'wraith') this.speed *= 1.25;
+    }
+    this.maxHp = this.hp;
+    this.alive = true;
+  }
+}
+
+export class Bullet {
+  constructor(x, y, vx, vy, dmg, from, opt = {}) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.dmg = dmg;
+    this.from = from; // 'player' | 'enemy'
+    this.r = opt.r || 3;
+    this.life = opt.life || 2.2;
+    this.color = opt.color || '#fff';
+    this.knockback = opt.knockback || 0;
+    this.energy = !!opt.energy;
+    this.stun = opt.stun || 0;
+    this.trail = [];
+    this.alive = true;
+  }
+}
+
+export class Pickup {
+  constructor(kind, x, y, amount = 0, item = null) {
+    this.kind = kind; // naquadah | staff-ammo | item
+    this.x = x;
+    this.y = y;
+    this.r = 9;
+    this.amount = amount;
+    this.item = item; // { id, count } when kind === 'item'
+    this.bob = Math.random() * Math.PI * 2;
+    this.alive = true;
+  }
+}
+
+export class Grenade {
+  constructor(x, y, vx, vy, dmg, radius, from) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.dmg = dmg;
+    this.radius = radius;
+    this.from = from; // 'player' | 'enemy'
+    this.r = 5;
+    this.fuse = 0.95;
+    this.alive = true;
+  }
+}
+
+// debris left when a Replicator brute is destroyed — reassembles if enough survive
+export class Block {
+  constructor(x, y, threat, room) {
+    this.x = x;
+    this.y = y;
+    const a = Math.random() * Math.PI * 2;
+    const s = 60 + Math.random() * 120;
+    this.vx = Math.cos(a) * s;
+    this.vy = Math.sin(a) * s;
+    this.r = 6;
+    this.threat = threat;
+    this.room = room;
+    this.mergeT = 3.4 + Math.random() * 0.6;
+    this.spin = Math.random() * Math.PI;
+    this.alive = true;
+  }
+}
+
+export class Particle {
+  constructor(x, y, vx, vy, life, color, size) {
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.life = life;
+    this.maxLife = life;
+    this.color = color;
+    this.size = size;
+    this.alive = true;
+  }
+}

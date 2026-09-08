@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PENDING</title></head>
+<body>
+<canvas id="game" width="960" height="600"></canvas>
+<pre id="out">running…</pre>
+<script type="module">
+  const log = [];
+  const fail = (m) => { log.push('FAIL ' + m); };
+  window.addEventListener('error', (e) => { fail('window error: ' + (e.message || e.error)); render(); });
+  window.addEventListener('unhandledrejection', (e) => { fail('promise: ' + e.reason); render(); });
+
+  function render() {
+    const bad = log.some((l) => l.startsWith('FAIL'));
+    document.title = bad ? 'SELFTEST FAIL' : 'SELFTEST PASS';
+    document.getElementById('out').textContent = (bad ? 'FAIL\n' : 'PASS\n') + log.join('\n');
+  }
+
+  try {
+    const { createGame } = await import('../src/game.js');
+    const { initInput, keys, mouse } = await import('../src/input.js');
+    const { initAudio } = await import('../src/audio.js');
+
+    const canvas = document.getElementById('game');
+    const api = createGame(canvas);
+    initInput(canvas);
+    initAudio();
+    const g = api.g;
+    log.push('game created, state=' + g.state);
+
+    const STEP = 1 / 60;
+    const dispatch = (type, obj) => window.dispatchEvent(new (type.startsWith('key') ? KeyboardEvent : Event)(type, obj));
+
+    // menu -> play
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+    for (let i = 0; i < 4; i++) { api.update(STEP); api.render(STEP); }
+    if (g.state !== 'play') fail('did not enter play from menu (state=' + g.state + ')');
+    if (!g.world) fail('no world built');
+    if (!g.worldCanvas) fail('no baked world canvas');
+    if (!(g.enemies.length > 0)) fail('no enemies populated at world start (spawn pop-in?)');
+    if (!g.enemies.every((e) => e.state === 'idle')) fail('enemies did not start idle');
+    if (!g.inv || !g.inv.equip.weapon1) fail('inventory not initialised');
+    log.push('world start: ' + g.enemies.length + ' idle enemies, inv ready');
+
+    // open the loadout panel, drag the starting bandages from hotbar to grid and back
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Tab' }));
+    api.update(STEP); api.render(STEP);
+    if (!g.panelOpen) fail('TAB did not open the loadout panel');
+    api.render(STEP); // build panel layout
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Tab' }));
+    api.update(STEP); api.render(STEP);
+    if (g.panelOpen) fail('TAB did not close the loadout panel');
+    // equip an armour piece programmatically and confirm DR applies
+    g.inv.grid[0] = { id: 'a_plate', count: 1 };
+    // (equip via the pure API path is covered in the node harness; here just sanity-check render)
+    api.render(STEP);
+    log.push('panel opened & closed cleanly');
+
+    // play a while with input; keep the player alive so we exercise combat, not just dying
+    mouse.down = true;
+    for (let i = 0; i < 60 * 20; i++) {
+      keys.add('KeyD'); keys.add('KeyS');
+      g.player.hp = Math.min(g.player.maxHp, g.player.hp + 2);
+      mouse.x = 500 + (i % 100); mouse.y = 300;
+      if (i % 50 === 0) window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space' }));
+      api.update(STEP); api.render(STEP);
+      if (!Number.isFinite(g.player.x) || !Number.isFinite(g.player.hp)) { fail('player NaN at frame ' + i); break; }
+      if (g.bullets.length > 6000 || g.particles.length > 20000) { fail('unbounded arrays at ' + i); break; }
+      if (g.state !== 'play' && g.state !== 'dead') { fail('unexpected state during play: ' + g.state); break; }
+    }
+    log.push('after 20s: state=' + g.state + ' hp=' + Math.round(g.player.hp) +
+      ' active=' + g.enemies.filter((e) => e.state === 'active').length + '/' + g.enemies.length + ' fps=' + g.fps);
+    if (g.enemies.some((e) => e.state === 'active')) log.push('enemies engaged as the bot advanced');
+
+    // fresh run for the deterministic DHD / dial / death checks
+    if (g.state !== 'menu') { g.state = 'menu'; }
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+    api.update(STEP); api.render(STEP);
+    if (g.state !== 'play') fail('could not start a fresh run (state=' + g.state + ')');
+
+    g.enemies.length = 0;
+    g.dhdActive = true;
+    g.player.x = g.world.dhdRoom.centerPx.x;
+    g.player.y = g.world.dhdRoom.centerPx.y;
+    for (let k = 0; k < 20 && g.state === 'play'; k++) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
+      api.update(STEP); api.render(STEP);
+    }
+    if (g.state !== 'gatemap') fail('DHD did not open gate map (state=' + g.state + ')');
+    api.render(STEP);
+    const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+    if (!node) fail('no destination on gate map');
+    else { node.fn(); api.update(STEP); api.render(STEP); }
+    if (g.state !== 'play' || g.hop < 1) fail('dialing deeper failed (state=' + g.state + ' hop=' + g.hop + ')');
+    log.push('descended to hop ' + g.hop + ' threat ' + g.params.threat + ' mods=[' + g.params.mods.join(',') + ']');
+
+    // death path
+    g.player.hp = -1;
+    api.update(STEP); api.render(STEP);
+    if (g.state !== 'dead') fail('death not handled (state=' + g.state + ')');
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+    api.update(STEP); api.render(STEP);
+    if (g.state !== 'menu') fail('no return to menu after death');
+
+    log.push('all paths exercised');
+  } catch (e) {
+    fail('exception: ' + (e && e.stack ? e.stack : e));
+  }
+  render();
+</script>
+</body>
+</html>

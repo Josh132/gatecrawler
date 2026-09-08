@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Gate Crawler — play shot</title>
+<style>*{margin:0}html,body{background:#05070c;overflow:hidden}#game{display:block;width:100vw;height:100vh}
+#d{position:fixed;right:4px;bottom:4px;color:#6f6;font:11px monospace;margin:0}</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<pre id="d"></pre>
+<script type="module">
+  import { createGame } from '../src/game.js';
+  import { initInput, keys, mouse } from '../src/input.js';
+  import { TILE } from '../src/worldgen.js';
+  import { makeFlowField } from '../src/pathfind.js';
+
+  const qs = new URLSearchParams(location.search);
+  const FRAMES = Number(qs.get('f') || 600);
+  const PANEL = qs.has('panel');
+  const canvas = document.getElementById('game');
+  const api = createGame(canvas);
+  initInput(canvas);
+  const g = api.g;
+  const STEP = 1 / 60;
+  const key = (c) => window.dispatchEvent(new KeyboardEvent('keydown', { code: c }));
+
+  key('Enter');
+  api.update(STEP);
+  api.render(STEP);
+
+  let flow = null;
+  let worldRef = null;
+  function botFlow() {
+    const ff = makeFlowField(g.world.grid, g.world.W, g.world.H);
+    const d = g.world.dhdRoom.centerPx;
+    ff.compute(
+      Math.max(1, Math.min(g.world.W - 2, Math.floor(d.x / TILE))),
+      Math.max(1, Math.min(g.world.H - 2, Math.floor(d.y / TILE)))
+    );
+    return ff;
+  }
+
+  for (let t = 1; t <= FRAMES; t++) {
+    if (g.state === 'play') {
+      if (g.world !== worldRef) { worldRef = g.world; flow = botFlow(); }
+      const p = g.player;
+      const tx = Math.max(1, Math.min(g.world.W - 2, Math.floor(p.x / TILE)));
+      const ty = Math.max(1, Math.min(g.world.H - 2, Math.floor(p.y / TILE)));
+      const [fx, fy] = flow.dir(tx, ty);
+      for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) keys.delete(c);
+      if (fx > 0.35) keys.add('KeyD');
+      if (fx < -0.35) keys.add('KeyA');
+      if (fy > 0.35) keys.add('KeyS');
+      if (fy < -0.35) keys.add('KeyW');
+      let near = null, nd = Infinity;
+      for (const e of g.enemies) {
+        const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+        if (d < nd) { nd = d; near = e; }
+      }
+      const tg = near || { x: p.x + Math.cos(p.aim) * 120, y: p.y + Math.sin(p.aim) * 120 };
+      mouse.x = tg.x - g.cam.x + g.view.w / 2;
+      mouse.y = tg.y - g.cam.y + g.view.h / 2;
+      mouse.down = true;
+      if (near && Math.sqrt(nd) < 210 && p.dodgeCd <= 0) key('Space');
+      if (g.dhdActive) key('KeyE');
+    } else if (g.state === 'gatemap') {
+      const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+      if (node) node.fn();
+    } else {
+      key('Enter');
+    }
+    api.update(STEP);
+    api.render(STEP);
+  }
+
+  if (PANEL) {
+    // stock the inventory so the panel has something to show, then open it
+    for (const id of ['medkit', 'stim', 'shieldcell', 'frag', 'a_helm', 'a_plate', 'a_greaves', 'a_boots', 'w_staff', 'w_zat', 'bandage']) {
+      const iv = g.inv;
+      const free = iv.grid.findIndex((c) => !c);
+      if (free >= 0) iv.grid[free] = { id, count: id === 'bandage' ? 6 : id === 'frag' ? 3 : 1 };
+    }
+    g.inv.equip.head = { id: 'a_visor', count: 1 };
+    g.inv.equip.torso = { id: 'a_vest', count: 1 };
+    g.inv.equip.grenade = { id: 'frag', count: 2 };
+    g.inv.hotbar[1] = { id: 'medkit', count: 2 };
+    g.inv.hotbar[2] = { id: 'stim', count: 3 };
+    key('Tab');
+    api.update(STEP);
+    api.render(STEP);
+    g.pmouse = { x: g.view.w / 2 + 40, y: g.view.h / 2 };
+    api.render(STEP);
+  }
+
+  const p = g.player;
+  document.getElementById('d').textContent =
+    `frames ${FRAMES} | ${g.state} hop${g.hop} panel${g.panelOpen} ` +
+    `pos ${p.x | 0},${p.y | 0} hp${p.hp | 0} enemies ${g.enemies.length} idle ${g.enemies.filter((e) => e.state === 'idle').length}`;
+  document.title = 'shot ready: ' + g.state + ' hop' + g.hop;
+
+  // keep compositing fresh pixels so --screenshot captures the final frame
+  (function paint() {
+    api.render(STEP);
+    requestAnimationFrame(paint);
+  })();
+</script>
+</body>
+</html>

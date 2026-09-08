@@ -4119,6 +4119,17 @@ function renderGateMap(g) {
       enterHub(g);
     });
   } else {
+    // the decision, spelled out
+    ctx.textAlign = 'center';
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#9ab';
+    const nextThreat = canSee && g.mapNodes[0] ? g.mapNodes[0].prev.threat : g.params.threat + 1;
+    ctx.fillText(
+      `DESCEND — pay ${dialCost} naquadah, heat rises, threat ~${nextThreat}, better loot` +
+        `      ·      DIAL HOME — keep it all, run ends`,
+      cx,
+      view.h - 84
+    );
     button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah  +  ${g.runIntel} intel`, cx - 210, view.h - 68, 420, 40, () =>
       dialHome(g)
     );

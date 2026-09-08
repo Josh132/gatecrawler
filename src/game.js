@@ -3244,10 +3244,23 @@ function renderHub(g) {
   ctx.drawImage(g.worldCanvas, 0, 0);
 
   const gc = g.world.gateCenter;
-  // ramp
-  ctx.strokeStyle = 'rgba(255,180,90,0.28)';
+  // ramp with hazard striping
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(gc.x - 58, gc.y + 6, 116, 78);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(255,180,90,0.16)';
+  ctx.lineWidth = 8;
+  for (let i = -8; i < 16; i++) {
+    ctx.beginPath();
+    ctx.moveTo(gc.x - 70 + i * 14, gc.y + 90);
+    ctx.lineTo(gc.x - 70 + i * 14 + 40, gc.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,180,90,0.32)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(gc.x - 58, gc.y + 6, 116, 74);
+  ctx.strokeRect(gc.x - 58, gc.y + 6, 116, 78);
   drawGate(ctx, gc, g.time);
 
   for (const s of g.world.stations) drawStation(ctx, s, g.time, g._nearStation === s);
@@ -3367,7 +3380,8 @@ function renderResearchPanel(g) {
       ctx.fillText(n.name, nx + 8, ny + 15);
       ctx.fillStyle = '#8ab';
       ctx.font = '9px monospace';
-      ctx.fillText(n.desc.slice(0, 46), nx + 8, ny + 27);
+      const maxc = Math.max(20, Math.floor((nw - 16) / 5.4));
+      ctx.fillText(n.desc.length > maxc ? n.desc.slice(0, maxc - 1) + '…' : n.desc, nx + 8, ny + 27);
       ctx.fillStyle = have ? '#7c9' : '#9ab';
       ctx.fillText(
         have ? 'RESEARCHED' : `${n.cost.naquadah} N${n.cost.intel ? '  ' + n.cost.intel + ' I' : ''}`,

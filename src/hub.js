@@ -34,6 +34,9 @@ export function buildHub() {
     grid[at(px, py)] = 1;
   }
 
+  // a recessed alcove for the gate at the north wall
+  for (let x = (W >> 1) - 3; x <= (W >> 1) + 3; x++) grid[at(x, 1)] = 0;
+
   const gateCenter = { x: T(W >> 1), y: T(4) };
   const rectPx = { x: 2 * TILE, y: 2 * TILE, w: (W - 4) * TILE, h: (H - 4) * TILE };
   const room = {

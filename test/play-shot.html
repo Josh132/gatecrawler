@@ -16,6 +16,7 @@
   const qs = new URLSearchParams(location.search);
   const FRAMES = Number(qs.get('f') || 600);
   const PANEL = qs.has('panel');
+  const HUB = qs.get('hub'); // '', 'research', 'infirmary', 'requisitions'
   const canvas = document.getElementById('game');
   const api = createGame(canvas);
   initInput(canvas);
@@ -26,6 +27,30 @@
   key('Enter');
   api.update(STEP);
   api.render(STEP);
+
+  if (HUB !== null) {
+    // land in the walkable hub and (optionally) open a station panel
+    g.save.naquadah = 900;
+    g.save.intel = 60;
+    for (let f = 0; f < 30; f++) { api.update(STEP); api.render(STEP); }
+    if (HUB) {
+      const st = g.world.stations.find((s) => s.kind === HUB);
+      if (st) { g.player.x = st.x; g.player.y = st.y + 10; }
+      for (let f = 0; f < 6; f++) { api.update(STEP); api.render(STEP); }
+      key('KeyE');
+      api.update(STEP);
+      g.pmouse = { x: g.view.w / 2, y: g.view.h / 2 };
+      api.render(STEP);
+    } else {
+      // just walk the player a bit off the ramp for a nicer framing
+      g.player.y += 40;
+      for (let f = 0; f < 20; f++) { api.update(STEP); api.render(STEP); }
+    }
+    document.getElementById('d').textContent = `HUB ${HUB || 'floor'} | state ${g.state} station ${g.station}`;
+    document.title = 'hub shot: ' + (HUB || 'floor');
+    (function paint() { api.render(STEP); requestAnimationFrame(paint); })();
+    throw new Error('hub-shot-done'); // stop the module here; the paint loop keeps the canvas fresh
+  }
 
   let flow = null;
   let worldRef = null;

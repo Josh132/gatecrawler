@@ -29,6 +29,10 @@ import {
 const SAVE_KEY = 'gatecrawler.save.v1';
 const rr = (a, b) => a + Math.random() * (b - a);
 
+// world-render zoom — how close the camera sits to the character. Everything in
+// world space is drawn through this; screen-space HUD is drawn after the reset.
+const ZOOM = 1.4;
+
 function defaultSave() {
   return { naquadah: 0, intel: 0, tech: [], maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
 }
@@ -585,8 +589,8 @@ function updateHub(g, dt) {
   }
   if (pressed('KeyQ')) quickHeal(g);
 
-  g.mouse.wx = mouse.x - g.view.w / 2 + g.cam.x;
-  g.mouse.wy = mouse.y - g.view.h / 2 + g.cam.y;
+  g.mouse.wx = (mouse.x - g.view.w / 2) / ZOOM + g.cam.x;
+  g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
   let ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
   let iy = (keys.has('KeyS') ? 1 : 0) - (keys.has('KeyW') ? 1 : 0);
   if (ix || iy) {
@@ -657,8 +661,8 @@ function updatePlay(g, dt) {
   }
   const stim = p.stimT > 0;
 
-  g.mouse.wx = mouse.x - g.view.w / 2 + g.cam.x;
-  g.mouse.wy = mouse.y - g.view.h / 2 + g.cam.y;
+  g.mouse.wx = (mouse.x - g.view.w / 2) / ZOOM + g.cam.x;
+  g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
   p.aim = Math.atan2(g.mouse.wy - p.y, g.mouse.wx - p.x);
 
   let ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
@@ -2534,10 +2538,10 @@ function factionSplatColor(kind) {
 function clampCam(g) {
   const wpx = g.world.W * TILE;
   const hpx = g.world.H * TILE;
-  const halfW = g.view.w / 2;
-  const halfH = g.view.h / 2;
-  g.cam.x = wpx > g.view.w ? clamp(g.cam.x, halfW, wpx - halfW) : wpx / 2;
-  g.cam.y = hpx > g.view.h ? clamp(g.cam.y, halfH, hpx - halfH) : hpx / 2;
+  const halfW = g.view.w / 2 / ZOOM;
+  const halfH = g.view.h / 2 / ZOOM;
+  g.cam.x = wpx > halfW * 2 ? clamp(g.cam.x, halfW, wpx - halfW) : wpx / 2;
+  g.cam.y = hpx > halfH * 2 ? clamp(g.cam.y, halfH, hpx - halfH) : hpx / 2;
 }
 
 // ---------------------------------------------------------------- render
@@ -2722,7 +2726,9 @@ function renderPlay(g, dim) {
   const shx = -(g.shakeX || 0) * kick + jit;
   const shy = -(g.shakeY || 0) * kick + (Math.random() - 0.5) * g.shake * 0.45;
   ctx.save();
-  ctx.translate(view.w / 2 - g.cam.x + shx, view.h / 2 - g.cam.y + shy);
+  ctx.translate(view.w / 2 + shx, view.h / 2 + shy);
+  ctx.scale(ZOOM, ZOOM);
+  ctx.translate(-g.cam.x, -g.cam.y);
 
   ctx.drawImage(g.worldCanvas, 0, 0);
   drawDecals(ctx, g, dim);
@@ -4079,7 +4085,9 @@ function renderHub(g) {
   const { ctx, view } = g;
   if (!g.world) return;
   ctx.save();
-  ctx.translate(view.w / 2 - g.cam.x, view.h / 2 - g.cam.y);
+  ctx.translate(view.w / 2, view.h / 2);
+  ctx.scale(ZOOM, ZOOM);
+  ctx.translate(-g.cam.x, -g.cam.y);
   ctx.drawImage(g.worldCanvas, 0, 0);
 
   const gc = g.world.gateCenter;

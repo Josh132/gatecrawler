@@ -6,7 +6,7 @@ import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, TILE, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
-import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, circleVsGrid } from './entities.js';
+import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS } from './items.js';
 import { buildHub, drawStation } from './hub.js';
 import {
@@ -132,8 +132,14 @@ export function createGame(canvas) {
     bullets: [],
     grenades: [],
     blocks: [],
+    hazards: [],
+    decals: [],
     pickups: [],
     particles: [],
+    shakeX: 1,
+    shakeY: 0,
+    killStreak: 0,
+    killStreakT: 0,
     heat: 0,
     hunterSpawned: false,
     hitstop: 0,
@@ -238,6 +244,8 @@ function enterHub(g) {
   g.bullets = [];
   g.grenades = [];
   g.blocks = [];
+  g.hazards = [];
+  g.decals = [];
   g.pickups = [];
   g.particles = [];
   g.hub = true;
@@ -306,8 +314,12 @@ function startWorld(g, addr, hop) {
   g.bullets = [];
   g.grenades = [];
   g.blocks = [];
+  g.hazards = [];
+  g.decals = [];
   g.pickups = [];
   g.particles = [];
+  g.killStreak = 0;
+  g.killStreakT = 0;
   g.panelOpen = false;
   g.drag = null;
   g.hunterSpawned = false;
@@ -665,7 +677,7 @@ function updatePlay(g, dt) {
   if (wp.hitscan) {
     fireBeam(g, p, wp, dt);
   } else {
-    if (p.beam) p.beam.on = false;
+    if (p.beam && p.beam.on) { sfx.beam(false); p.beam.on = false; }
     const mdEdge = mouse.down && !g.mouseWasDown;
     const wantFire = wp.auto ? mouse.down : mdEdge;
     const blocked = g.emp && wp.energy;
@@ -683,7 +695,7 @@ function updatePlay(g, dt) {
             p.burstN = 0;
             break;
           }
-          fireWeapon(g, p, wp);
+          fireWeapon(g, p, wp, wid);
           if (hasMag) p.mag[wid]--;
           else if (wp.ammoMax !== Infinity) p.ammo[wid]--;
           p.burstN--;
@@ -695,11 +707,11 @@ function updatePlay(g, dt) {
 
     if (wantFire && canAct && p.burstN <= 0) {
       if (blocked || !ammoOK) {
-        if (mdEdge) sfx.hit();
+        if (mdEdge) sfx.dryFire();
         p.cool = 0.12;
         if (!blocked && hasMag && (p.mag[wid] || 0) <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
       } else {
-        fireWeapon(g, p, wp);
+        fireWeapon(g, p, wp, wid);
         if (hasMag) p.mag[wid]--;
         else if (wp.ammoMax !== Infinity) p.ammo[wid]--;
         p.cool = wp.fireRate * coolMul;
@@ -746,13 +758,44 @@ function updatePlay(g, dt) {
     gr.vy -= gr.vy * Math.min(1, 2.4 * dt);
     if (gr.fuse <= 0) {
       explode(g, gr);
+      if (gr.hazard) g.hazards.push(new Hazard(gr.x, gr.y, gr.hazard, 4.0, 13, 'enemy'));
       gr.alive = false;
     }
   }
 
   // heat: the longer a run goes, the harder the faction hunts you
-  g.heat += dt * 0.018;
+  g.heat += dt * 0.018 * (fx(g).heatMul || 1);
   if (!g.hunterSpawned && Math.floor(g.heat) >= 3) spawnHunter(g);
+
+  if (g.killStreakT > 0) {
+    g.killStreakT -= dt;
+    if (g.killStreakT <= 0) g.killStreak = 0;
+  }
+
+  // lingering plasma hazards from grenadier shells
+  for (const hz of g.hazards) {
+    hz.life -= dt;
+    hz.phase += dt * 6;
+    if (hz.life <= 0) {
+      hz.alive = false;
+      continue;
+    }
+    if (hz.from === 'enemy') {
+      hz.tick -= dt;
+      const pd = Math.hypot(p.x - hz.x, p.y - hz.y);
+      if (pd < hz.r && p.iframe <= 0 && p.dodge <= 0 && hz.tick <= 0) {
+        hz.tick = 0.2;
+        damagePlayer(g, hz.dps * 0.2, p.x - hz.x, p.y - hz.y);
+      }
+    }
+    if (Math.random() < 0.5) {
+      const a = rr(0, TAU);
+      const d = Math.sqrt(Math.random()) * hz.r;
+      g.particles.push(
+        new Particle(hz.x + Math.cos(a) * d, hz.y + Math.sin(a) * d, rr(-8, 8), rr(-30, -8), rr(0.3, 0.7), '#ff9a3c', rr(1.5, 3))
+      );
+    }
+  }
 
   // reassembly debris from Replicator brutes
   for (const bl of g.blocks) {
@@ -792,6 +835,7 @@ function updatePlay(g, dt) {
     e.flash = Math.max(0, e.flash - dt);
     if (e.kind === 'jaffa') updateJaffa(g, e, dt);
     else if (e.kind === 'jaffa_heavy') updateJaffaHeavy(g, e, dt);
+    else if (e.kind === 'jaffa_grenadier') updateGrenadier(g, e, dt);
     else if (e.kind === 'wraith') updateWraith(g, e, dt);
     else if (e.kind === 'wraith_drone') updateWraithDrone(g, e, dt);
     else if (e.kind === 'replicator') updateReplicator(g, e, dt);
@@ -840,6 +884,7 @@ function updatePlay(g, dt) {
   g.bullets = g.bullets.filter((b) => b.alive);
   g.grenades = g.grenades.filter((x) => x.alive);
   g.blocks = g.blocks.filter((x) => x.alive);
+  g.hazards = g.hazards.filter((x) => x.alive);
   g.pickups = g.pickups.filter((x) => x.alive);
   g.particles = g.particles.filter((x) => x.alive);
 
@@ -929,7 +974,9 @@ function rollWeaponItem() {
 function pickEnemyKind(fac, R, slot) {
   if (fac === 'wraith') return R.chance(0.5) ? 'wraith_drone' : 'wraith';
   if (fac === 'replicator') return slot.brutes < 1 && R.chance(0.2) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
-  return slot.heavies < 1 && R.chance(0.4) ? ((slot.heavies++), 'jaffa_heavy') : 'jaffa';
+  if (slot.heavies < 1 && R.chance(0.36)) return (slot.heavies++), 'jaffa_heavy';
+  if (slot.grenadiers < 1 && R.chance(0.3)) return (slot.grenadiers++), 'jaffa_grenadier';
+  return 'jaffa';
 }
 function guardKind(fac, R, slot) {
   if (fac === 'wraith') return R.chance(0.4) ? 'wraith_drone' : 'wraith';
@@ -987,7 +1034,7 @@ function populateWorld(g) {
 
     const fac = p.faction || p.primary;
     const heatTier = Math.min(3, Math.floor(g.heat));
-    const slot = { heavies: 0, brutes: 0 };
+    const slot = { heavies: 0, brutes: 0, grenadiers: 0 };
 
     if (room.kind === 'dhd') {
       const c = room.centerPx;
@@ -1098,7 +1145,13 @@ function explode(g, gr) {
   for (let i = 0; i < 10; i++) {
     g.particles.push(new Particle(gr.x, gr.y, rr(-260, 260), rr(-260, 260), rr(0.2, 0.5), '#ffd27a', rr(2, 4)));
   }
-  g.shake = Math.min(26, g.shake + 14);
+  scorch(g, gr.x, gr.y, gr.radius * 0.6);
+  for (let i = 0; i < 5; i++) {
+    const a = rr(0, TAU);
+    scorch(g, gr.x + Math.cos(a) * gr.radius * 0.5, gr.y + Math.sin(a) * gr.radius * 0.5, rr(6, 12));
+  }
+  addShake(g, 14, rr(-1, 1), rr(-1, 1));
+  sfx.explosion();
   for (const e of g.enemies) {
     if (!e.alive) continue;
     const d = Math.hypot(e.x - gr.x, e.y - gr.y);
@@ -1135,8 +1188,8 @@ function startReload(g, p, wid) {
   p.reloading = true;
   p.reloadWid = wid;
   p.burstN = 0;
-  if (p.beam) p.beam.on = false;
-  sfx.pickup();
+  if (p.beam && p.beam.on) { sfx.beam(false); p.beam.on = false; }
+  sfx.reloadStart();
 }
 
 function finishReload(p) {
@@ -1149,6 +1202,7 @@ function finishReload(p) {
   const take = Math.max(0, Math.min(wp.mag - cur, p.ammo[wid] || 0));
   p.mag[wid] = cur + take;
   p.ammo[wid] = (p.ammo[wid] || 0) - take;
+  if (take > 0) sfx.reloadDone();
 }
 
 function cancelReload(p) {
@@ -1166,10 +1220,12 @@ function fireBeam(g, p, wp, dt) {
   const held = mouse.down;
   const dry = (p.mag[wid] || 0) <= 0;
   if (!held || p.reloadT > 0 || p.stun > 0 || p.dodge > 0 || blocked || dry) {
+    if (p.beam.on) sfx.beam(false);
     p.beam.on = false;
     if (held && !blocked && dry && p.reloadT <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
     return;
   }
+  if (!p.beam.on) sfx.beam(true);
   const dx = Math.cos(p.aim);
   const dy = Math.sin(p.aim);
   const ox = p.x + dx * 16;
@@ -1231,8 +1287,9 @@ function bulletExplode(g, b) {
   explode(g, { x: b.x, y: b.y, dmg: b.blastDmg, radius: b.blastRadius, from: b.from });
 }
 
-function fireWeapon(g, p, wp) {
+function fireWeapon(g, p, wp, wid) {
   const muzzle = 18;
+  const scatter = wp.pellets > 3;
   for (let i = 0; i < wp.pellets; i++) {
     const a = p.aim + (Math.random() - 0.5) * wp.spread;
     g.bullets.push(
@@ -1249,33 +1306,36 @@ function fireWeapon(g, p, wp) {
           energy: wp.energy,
           stun: wp.stun || 0,
           r: wp.blastRadius ? 6 : wp.energy ? 5 : 3,
-          life: wp.blastRadius ? 2.6 : 2.2,
+          life: wp.blastRadius ? 2.6 : scatter ? 0.6 : 2.2,
           explode: !!wp.blastRadius,
           blastDmg: wp.blastDmg || 0,
           blastRadius: wp.blastRadius || 0,
+          clearShots: !!wp.clearShots,
         }
       )
     );
   }
-  for (let i = 0; i < 5; i++) {
-    const a = p.aim + rr(-0.4, 0.4);
+  const nFlash = scatter ? 10 : 5;
+  for (let i = 0; i < nFlash; i++) {
+    const a = p.aim + rr(-(scatter ? 0.55 : 0.4), scatter ? 0.55 : 0.4);
     g.particles.push(
       new Particle(
         p.x + Math.cos(p.aim) * muzzle,
         p.y + Math.sin(p.aim) * muzzle,
-        Math.cos(a) * rr(60, 220),
-        Math.sin(a) * rr(60, 220),
+        Math.cos(a) * rr(60, scatter ? 300 : 220),
+        Math.sin(a) * rr(60, scatter ? 300 : 220),
         rr(0.1, 0.25),
         wp.color,
         rr(1.5, 3)
       )
     );
   }
-  g.shake = Math.min(22, g.shake + (wp.energy ? 4 : 1.3));
-  p.kx -= Math.cos(p.aim) * (wp.energy ? 120 : 18);
-  p.ky -= Math.sin(p.aim) * (wp.energy ? 120 : 18);
-  if (wp.energy) sfx.staff();
-  else sfx.p90();
+  const recoil = wp.energy ? 120 : scatter ? 90 : 18;
+  addShake(g, wp.energy ? 4 : scatter ? 3 : 1.3, Math.cos(p.aim), Math.sin(p.aim));
+  p.kx -= Math.cos(p.aim) * recoil;
+  p.ky -= Math.sin(p.aim) * recoil;
+  if (!wp.energy) ejectCasing(g, p.x, p.y, p.aim);
+  sfx.fire(wid || (wp.energy ? 'staff' : 'p90'));
 }
 
 function normAngle(a) {
@@ -1300,13 +1360,17 @@ function updateBullet(g, b, dt) {
     if (tileAt(g.world, b.x, b.y) === 1) {
       b.alive = false;
       if (b.explode) bulletExplode(g, b);
-      else spark(g, b.x, b.y, b.color);
+      else {
+        spark(g, b.x, b.y, b.color);
+        if (b.from === 'enemy') scorch(g, b.x, b.y, rr(4, 7));
+      }
       return;
     }
     if (b.from === 'player') {
+      // enemy hitboxes are slightly generous — no phantom misses on edge hits
       for (const e of g.enemies) {
         if (!e.alive) continue;
-        const rad = e.r + b.r;
+        const rad = e.r * 1.15 + b.r;
         if ((b.x - e.x) ** 2 + (b.y - e.y) ** 2 <= rad * rad) {
           hitEnemy(g, e, b);
           b.alive = false;
@@ -1325,10 +1389,22 @@ function updateBullet(g, b, dt) {
           return;
         }
       }
+      // shotgun pellets swat incoming enemy fire out of the air
+      if (b.clearShots) {
+        for (const o of g.bullets) {
+          if (!o.alive || o.from !== 'enemy') continue;
+          const rad = b.r + o.r + 5;
+          if ((b.x - o.x) ** 2 + (b.y - o.y) ** 2 <= rad * rad) {
+            o.alive = false;
+            spark(g, o.x, o.y, '#ffd27a');
+          }
+        }
+      }
     } else {
       const p = g.player;
       if (p.iframe <= 0 && p.dodge <= 0) {
-        const rad = p.r + b.r;
+        // player hurtbox is a touch tighter than the sprite
+        const rad = p.r * 0.82 + b.r;
         if ((b.x - p.x) ** 2 + (b.y - p.y) ** 2 <= rad * rad) {
           damagePlayer(g, b.dmg, b.vx, b.vy);
           if (b.stun) p.stun = Math.max(p.stun, b.stun);
@@ -1390,6 +1466,16 @@ function hitEnemy(g, e, b) {
   e.ky += (b.vy / bl) * b.knockback;
   if (b.stun) e.stun = Math.max(e.stun, b.stun);
   spark(g, b.x, b.y, b.color);
+  scorch(g, b.x, b.y, rr(2.5, 4.5));
+  splat(g, b.x, b.y, factionSplatColor(e.kind), 2);
+
+  // tactile weight on a solid connect that doesn't kill
+  sfx.impact(dmg >= 24);
+  if (e.hp > 0 && dmg >= 16) {
+    g.hitstop = Math.max(g.hitstop, 1);
+    addShake(g, 3, b.vx, b.vy);
+    if (dmg >= 34) sfx.crit();
+  }
   if (e.hp <= 0) killEnemy(g, e);
 }
 
@@ -1409,7 +1495,7 @@ function damagePlayer(g, amount, vx, vy) {
   p.hp -= dmg;
   p.flash = 0.12;
   p.iframe = Math.max(p.iframe, 0.25);
-  g.shake = Math.min(24, g.shake + 5);
+  addShake(g, 5, vx, vy);
   const l = Math.hypot(vx, vy) || 1;
   p.kx += (vx / l) * 140;
   p.ky += (vy / l) * 140;
@@ -1439,9 +1525,22 @@ function killEnemy(g, e) {
   e.alive = false;
   sfx.death();
   const dead = e.kind === 'boss';
+  const elite = e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
   burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') ? '#b6f0ff' : '#ffb347');
-  g.shake = Math.min(24, g.shake + (dead ? 16 : 3));
-  g.hitstop = Math.max(g.hitstop, dead ? 6 : e.kind === 'jaffa_heavy' ? 3 : 2);
+  addShake(g, dead ? 16 : 3, e.x - g.player.x, e.y - g.player.y);
+  g.hitstop = Math.max(g.hitstop, dead ? 6 : elite ? 3 : 2);
+  scorch(g, e.x, e.y, dead ? 34 : e.r + 6);
+  splat(g, e.x, e.y, factionSplatColor(e.kind), dead ? 8 : 4);
+
+  // forward pressure is rewarded — a kill tops you up a little and refunds dodge
+  const pl = g.player;
+  if (pl.alive) {
+    pl.hp = Math.min(pl.maxHp, pl.hp + (dead ? 22 : elite ? 6 : 3));
+    pl.dodgeCd = Math.max(0, pl.dodgeCd - (dead ? 0.8 : 0.2));
+    g.killStreak += 1;
+    g.killStreakT = 2.6;
+    if (elite || dead) sfx.crit();
+  }
   const mult = g.params.mods.includes('naquadah-rich') ? 2 : 1;
   const drop = (id, count, ox, oy) => g.pickups.push(new Pickup('item', e.x + (ox || 0), e.y + (oy || 0), 0, { id, count }));
 
@@ -1456,7 +1555,7 @@ function killEnemy(g, e) {
       g.pickups.push(new Pickup('naquadah', e.x + rr(-40, 40), e.y + rr(-40, 40), 16 * mult));
     }
     g.message((BOSS_NAME[e.variant] || 'Boss') + ' down');
-  } else if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy') {
+  } else if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy' || e.kind === 'jaffa_grenadier') {
     const heavy = e.kind === 'jaffa_heavy';
     g.pickups.push(new Pickup('naquadah', e.x, e.y, (heavy ? 12 : 6) * mult));
     if (Math.random() < 0.4) g.pickups.push(new Pickup('staff-ammo', e.x + 12, e.y, 6));
@@ -2048,6 +2147,57 @@ function updateReplicator(g, e, dt, brute) {
   }
 }
 
+// displacer — lobs plasma shells that leave a lingering burn zone, forcing the
+// player off whatever spot they're holding
+function updateGrenadier(g, e, dt) {
+  const p = g.player;
+  if (e.stun > 0) {
+    e.stun -= dt;
+    return;
+  }
+  if (e.state === 'idle' && idleTick(g, e, dt, 320)) return;
+  if (e.state === 'dormant') {
+    dormantTick(g, e, dt);
+    return;
+  }
+  if (checkLeash(g, e, dt)) {
+    dormantTick(g, e, dt);
+    return;
+  }
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  e.facing = Math.atan2(dy, dx);
+  e.cool -= dt;
+  const [ffx, ffy] = flowDir(g, e);
+  const want = 280;
+  let mvx;
+  let mvy;
+  if (dist > want + 60) {
+    mvx = ffx;
+    mvy = ffy;
+  } else if (dist < want - 90) {
+    mvx = -dx / dist;
+    mvy = -dy / dist;
+  } else {
+    mvx = (-dy / dist) * 0.7 + ffx * 0.2;
+    mvy = (dx / dist) * 0.7 + ffy * 0.2;
+  }
+  const ml = Math.hypot(mvx, mvy) || 1;
+  e.x += (mvx / ml) * e.speed * dt;
+  e.y += (mvy / ml) * e.speed * dt;
+  if (e.cool <= 0 && dist > 90 && dist < 470 && !lineBlocked(g, e.x, e.y, p.x, p.y)) {
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const gr = new Grenade(e.x + nx * 20, e.y + ny * 20, nx * 330, ny * 330, 12, 78, 'enemy');
+    gr.fuse = 0.9;
+    gr.hazard = 46; // radius of the plasma pool it leaves
+    g.grenades.push(gr);
+    e.cool = 2.5 + Math.random() * 0.8;
+    sfx.fire('launcher');
+  }
+}
+
 function updateBoss(g, e, dt) {
   const p = g.player;
   if (e.state === 'idle' && idleTick(g, e, dt, 360)) return;
@@ -2136,9 +2286,9 @@ function updateBoss(g, e, dt) {
         const a = e.facing + (i - (spread - 1) / 2) * 0.16;
         g.bullets.push(
           new Bullet(e.x + Math.cos(a) * 28, e.y + Math.sin(a) * 28, Math.cos(a) * 380, Math.sin(a) * 380, 14, 'enemy', {
-            color: v === 'wraith' ? '#b6f8bf' : '#ffb347',
+            color: v === 'wraith' ? '#7df0b0' : '#ff5a3c', // hot = high threat
             energy: v !== 'wraith',
-            r: 6,
+            r: 7,
             knockback: 140,
             life: 2.2,
           })
@@ -2174,6 +2324,44 @@ function kawoosh(g, x, y) {
     );
   }
   g.shake = 16;
+}
+
+// directional screen shake — mag + a unit-ish (dx,dy) the kick comes from
+function addShake(g, mag, dx, dy) {
+  g.shake = Math.min(28, g.shake + mag);
+  const l = Math.hypot(dx || 0, dy || 0);
+  if (l > 1e-4) {
+    g.shakeX = dx / l;
+    g.shakeY = dy / l;
+  }
+}
+
+// battlefield marks — capped ring buffer, drawn under everything
+function addDecal(g, kind, x, y, r, color, ang) {
+  if (g.hub) return;
+  const d = new Decal(kind, x, y, r, color, ang);
+  d.born = g.time;
+  g.decals.push(d);
+  if (g.decals.length > 520) g.decals.splice(0, g.decals.length - 520);
+}
+function scorch(g, x, y, r) {
+  addDecal(g, 'scorch', x, y, r, 'rgba(8,6,5,0.5)');
+}
+function ejectCasing(g, x, y, aim) {
+  const a = aim + Math.PI + rr(-0.9, 0.9);
+  addDecal(g, 'casing', x + Math.cos(a) * rr(12, 30), y + Math.sin(a) * rr(12, 30), rr(2.2, 3.4), 'rgba(224,192,120,0.75)', rr(0, TAU));
+}
+function splat(g, x, y, color, n) {
+  for (let i = 0; i < (n || 3); i++) {
+    addDecal(g, 'splat', x + rr(-11, 11), y + rr(-11, 11), rr(3, 7.5), color, rr(0, TAU));
+  }
+}
+
+function factionSplatColor(kind) {
+  if (kind.startsWith('wraith')) return 'rgba(120,240,150,0.5)';
+  if (kind.startsWith('replicator')) return 'rgba(140,230,255,0.42)';
+  if (kind === 'boss') return 'rgba(255,160,110,0.5)';
+  return 'rgba(255,150,90,0.42)'; // jaffa
 }
 
 // ---------------------------------------------------------------- camera
@@ -2363,12 +2551,17 @@ function drawFog(ctx, g, R) {
 function renderPlay(g, dim) {
   const { ctx, view } = g;
   if (!g.world) return;
-  const shx = (Math.random() - 0.5) * g.shake;
-  const shy = (Math.random() - 0.5) * g.shake;
+  // directional shake: kick along the hit vector + a little omni jitter
+  const jit = (Math.random() - 0.5) * g.shake * 0.45;
+  const kick = g.shake * (0.4 + 0.5 * Math.random());
+  const shx = -(g.shakeX || 0) * kick + jit;
+  const shy = -(g.shakeY || 0) * kick + (Math.random() - 0.5) * g.shake * 0.45;
   ctx.save();
   ctx.translate(view.w / 2 - g.cam.x + shx, view.h / 2 - g.cam.y + shy);
 
   ctx.drawImage(g.worldCanvas, 0, 0);
+  drawDecals(ctx, g, dim);
+  for (const hz of g.hazards) drawHazard(ctx, hz, g.time);
 
   const R = g.params && g.params.mods.includes('eclipse') ? 330 : 560;
   g.visPoly = dim ? null : computeVisPoly(g, R);
@@ -2585,11 +2778,12 @@ function drawEnemy(ctx, e, t) {
   if (dormant) ctx.globalAlpha = 0.78;
   const hunter = e.hunter;
 
-  if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy') {
+  if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy' || e.kind === 'jaffa_grenadier') {
     const heavy = e.kind === 'jaffa_heavy';
-    drawHumanoid(ctx, e.x, e.y, e.facing, heavy ? 1.5 : 1.05, flash ? '#fff' : hunter ? '#ff6a4a' : '#ffb347', flash ? '#fff' : '#ffd9a0', {
+    const nade = e.kind === 'jaffa_grenadier';
+    drawHumanoid(ctx, e.x, e.y, e.facing, heavy ? 1.5 : nade ? 1.1 : 1.05, flash ? '#fff' : hunter ? '#ff6a4a' : nade ? '#ff9f5c' : '#ffb347', flash ? '#fff' : '#ffd9a0', {
       weaponColor: flash ? '#fff' : '#ffcf9a',
-      weaponLen: heavy ? 17 : 15,
+      weaponLen: heavy ? 17 : nade ? 9 : 15,
       head: heavy ? 4 : 3.4,
       blur: heavy ? 12 : 10,
     });
@@ -2602,6 +2796,12 @@ function drawEnemy(ctx, e, t) {
     ctx.arc(e.x, e.y, e.r + 1, e.facing - (heavy ? 1.0 : 0.7), e.facing + (heavy ? 1.0 : 0.7));
     ctx.stroke();
     ctx.restore();
+    if (nade) {
+      // a lit shell held at the hip — distinct silhouette
+      const hx = e.x + Math.cos(e.facing - 1.4) * 10;
+      const hy = e.y + Math.sin(e.facing - 1.4) * 10;
+      glowCircle(ctx, hx, hy, 4, flash ? '#fff' : '#ff8a3c', 10);
+    }
   } else if (e.kind === 'wraith' || e.kind === 'wraith_drone') {
     const drone = e.kind === 'wraith_drone';
     const jx = (Math.random() - 0.5) * (drone ? 3.5 : 2.5);
@@ -2713,11 +2913,14 @@ function drawEnemy(ctx, e, t) {
 }
 
 function drawBullet(ctx, b) {
+  // threat tiering: the harder a shot hits, the brighter/fatter it reads
+  const heavy = b.from === 'enemy' && b.dmg >= 12;
+  const big = b.dmg >= 24;
   ctx.save();
   ctx.strokeStyle = b.color;
-  ctx.lineWidth = b.r;
+  ctx.lineWidth = b.r * (heavy ? 1.4 : 1);
   ctx.lineCap = 'round';
-  ctx.shadowBlur = 10;
+  ctx.shadowBlur = heavy ? 18 : big ? 14 : 10;
   ctx.shadowColor = b.color;
   ctx.beginPath();
   const t0 = b.trail[0] || b;
@@ -2727,8 +2930,73 @@ function drawBullet(ctx, b) {
   ctx.stroke();
   ctx.fillStyle = '#fff';
   ctx.beginPath();
-  ctx.arc(b.x, b.y, b.r * 0.7, 0, TAU);
+  ctx.arc(b.x, b.y, b.r * (heavy ? 0.95 : 0.7), 0, TAU);
   ctx.fill();
+  if (heavy) {
+    // pulsing danger ring on incoming heavy fire
+    ctx.strokeStyle = b.color;
+    ctx.globalAlpha = 0.5 + 0.3 * Math.sin(b.life * 30);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r + 3, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function drawDecals(ctx, g, dim) {
+  ctx.save();
+  for (const d of g.decals) {
+    if (!dim && g.visPoly && !litAt(g, d.x, d.y)) continue;
+    const age = g.time - d.born;
+    const a = age < 0.3 ? age / 0.3 : 1;
+    if (d.kind === 'casing') {
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.rotate(d.ang);
+      ctx.fillStyle = d.color;
+      ctx.globalAlpha = a * 0.9;
+      ctx.fillRect(-d.r, -d.r * 0.45, d.r * 2, d.r * 0.9);
+      ctx.restore();
+    } else if (d.kind === 'scorch') {
+      ctx.fillStyle = d.color;
+      ctx.globalAlpha = a * 0.55;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, d.r, 0, TAU);
+      ctx.fill();
+    } else {
+      // splat — a small irregular blob
+      ctx.fillStyle = d.color;
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.ellipse(d.x, d.y, d.r, d.r * 0.7, d.ang, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawHazard(ctx, hz, t) {
+  const f = clamp(hz.life / hz.maxLife, 0, 1);
+  const wob = 1 + Math.sin(hz.phase) * 0.06;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const grd = ctx.createRadialGradient(hz.x, hz.y, hz.r * 0.2, hz.x, hz.y, hz.r * wob);
+  grd.addColorStop(0, `rgba(255,180,90,${0.32 * f})`);
+  grd.addColorStop(0.6, `rgba(255,110,50,${0.22 * f})`);
+  grd.addColorStop(1, 'rgba(255,90,40,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(hz.x, hz.y, hz.r * wob, 0, TAU);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = `rgba(255,150,80,${0.5 * f})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(hz.x, hz.y, hz.r * wob, 0, TAU);
+  ctx.stroke();
   ctx.restore();
 }
 

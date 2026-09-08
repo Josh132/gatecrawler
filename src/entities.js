@@ -78,6 +78,7 @@ export class Player {
 const ENEMY_KIND = {
   jaffa: { r: 12, hp: (t) => 38 + t * 6, speed: 96 },
   jaffa_heavy: { r: 16, hp: (t) => 66 + t * 8, speed: 62 },
+  jaffa_grenadier: { r: 13, hp: (t) => 42 + t * 6, speed: 84 },
   wraith: { r: 12, hp: (t) => 26 + t * 4, speed: 240 },
   wraith_drone: { r: 10, hp: (t) => 18 + t * 3, speed: 268 },
   replicator: { r: 9, hp: (t) => 14 + t * 2, speed: 172 },
@@ -225,6 +226,37 @@ export class Particle {
     this.maxLife = life;
     this.color = color;
     this.size = size;
+    this.alive = true;
+  }
+}
+
+// permanent-ish battlefield marks: casings, scorch, splatter. Not simulated —
+// just a capped ring buffer drawn under everything so a cleared room reads as
+// a warzone.
+export class Decal {
+  constructor(kind, x, y, r, color, ang) {
+    this.kind = kind; // 'casing' | 'scorch' | 'burn' | 'splat'
+    this.x = x;
+    this.y = y;
+    this.r = r;
+    this.color = color;
+    this.ang = ang == null ? Math.random() * Math.PI * 2 : ang;
+    this.born = 0; // set by the game clock; used only for a brief fade-in
+  }
+}
+
+// lingering area-denial: plasma fire from a grenadier's shell
+export class Hazard {
+  constructor(x, y, r, life, dps, from) {
+    this.x = x;
+    this.y = y;
+    this.r = r;
+    this.life = life;
+    this.maxLife = life;
+    this.dps = dps;
+    this.from = from; // 'enemy' | 'player'
+    this.tick = 0;
+    this.phase = Math.random() * Math.PI * 2;
     this.alive = true;
   }
 }

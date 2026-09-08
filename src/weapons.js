@@ -55,6 +55,7 @@ export const WEAPONS = {
     ammoMax: 32,
     mag: 6,
     reload: 1.6,
+    clearShots: true, // pellets swat incoming enemy projectiles out of the air
   },
   burst: {
     name: 'Burst Rifle',

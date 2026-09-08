@@ -1154,6 +1154,132 @@ section('icons: every item draws without throwing, rarity is well-formed');
   assert(rc && rc.common && rc.uncommon && rc.rare, 'icons: RARITY_COLOR has all three tints');
 }
 
+// ---------------------------------------------------------------- juice & roster
+section('feedback: decals accumulate, hazards hurt, kills reward, shotgun clears fire');
+{
+  g.skipHub = true;
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  const p = g.player;
+
+  // fire a bunch — casings + muzzle work should leave decals
+  const decals0 = g.decals.length;
+  input.mouse.down = true;
+  input.mouse.x = g.view.w / 2 + 200;
+  input.mouse.y = g.view.h / 2;
+  for (let f = 0; f < 60; f++) tick(gApi, g);
+  input.mouse.down = false;
+  assert(g.decals.length > decals0, `feedback: gunfire leaves battlefield decals (${decals0} -> ${g.decals.length})`);
+  assert(g.decals.length <= 520, 'feedback: decal buffer is capped');
+
+  // a kill tops the player up and adds a scorch
+  const { Enemy } = await import('../src/entities.js');
+  const foe = new Enemy('jaffa', p.x + 30, p.y, 2);
+  foe.state = 'active';
+  foe._room = g.curRoom;
+  g.enemies.push(foe);
+  p.hp = p.maxHp - 30;
+  const d1 = g.decals.length;
+  foe.hp = 1;
+  input.mouse.down = true;
+  input.mouse.x = foe.x - g.cam.x + g.view.w / 2;
+  input.mouse.y = foe.y - g.cam.y + g.view.h / 2;
+  for (let f = 0; f < 30 && foe.alive; f++) tick(gApi, g);
+  input.mouse.down = false;
+  assert(!foe.alive, 'feedback: test foe died');
+  assert(p.hp > p.maxHp - 30, `feedback: a kill restores some HP (aggression reward) (hp ${p.hp | 0})`);
+  assert(g.decals.length > d1, 'feedback: a kill scorches the ground');
+
+  // an enemy plasma hazard ticks damage while you stand in it
+  g.hazards.length = 0;
+  const { Hazard } = await import('../src/entities.js');
+  g.hazards.push(new Hazard(p.x, p.y, 60, 3, 40, 'enemy'));
+  p.hp = 100;
+  p.iframe = 0;
+  const hp0 = p.hp;
+  for (let f = 0; f < 60; f++) {
+    p.iframe = 0; // stand and burn
+    tick(gApi, g);
+  }
+  assert(p.hp < hp0, `feedback: standing in a plasma hazard drains HP (${hp0} -> ${p.hp | 0})`);
+
+  // shotgun pellets delete an incoming enemy bolt
+  const enemyBolt = {
+    x: p.x + 40,
+    y: p.y,
+    vx: -300,
+    vy: 0,
+    dmg: 9,
+    from: 'enemy',
+    r: 4,
+    life: 2,
+    stun: 0,
+    trail: [],
+    alive: true,
+    color: '#ffc27a',
+  };
+  g.bullets.push(enemyBolt);
+  g.bullets.push({
+    x: p.x + 20,
+    y: p.y,
+    vx: 400,
+    vy: 0,
+    dmg: 6,
+    from: 'player',
+    r: 3,
+    life: 1,
+    stun: 0,
+    trail: [],
+    alive: true,
+    color: '#ffd27a',
+    clearShots: true,
+  });
+  for (let f = 0; f < 8; f++) tick(gApi, g);
+  assert(!enemyBolt.alive, 'feedback: a clearShots pellet swats an enemy bolt out of the air');
+}
+
+section('roster: the Jaffa grenadier displacer exists and appears in worlds');
+{
+  const { Enemy } = await import('../src/entities.js');
+  const gr = new Enemy('jaffa_grenadier', 100, 100, 3);
+  assert(gr.kind === 'jaffa_grenadier' && gr.hp > 0 && gr.speed > 0, 'roster: grenadier constructs with stats');
+  // scan a spread of jaffa worlds for at least one grenadier
+  let seen = 0;
+  for (let i = 0; i < 60 && !seen; i++) {
+    const params = worldParams('AUR-CRT-VIR-BOO-CEN-SER'.split('-').map((s, k) => (k === i % 6 ? 'TAU' : s)).join('-'), 3);
+    if (params.faction !== 'jaffa') continue;
+    const w = buildWorld(params);
+    // emulate populateWorld's kind roll by constructing the game's picker via a fresh run
+  }
+  // simpler: drive a few real jaffa worlds and look at g.enemies
+  g.skipHub = true;
+  for (let attempt = 0; attempt < 40 && !seen; attempt++) {
+    g.state = 'menu';
+    keyDown('Enter');
+    tick(gApi, g);
+    if ((g.params.faction || g.params.primary) === 'jaffa') {
+      if (g.enemies.some((e) => e.kind === 'jaffa_grenadier')) seen++;
+    }
+    // dial onward to see more worlds
+    g.enemies.length = 0;
+    g.dhdActive = true;
+    g.player.x = g.world.dhdRoom.centerPx.x;
+    g.player.y = g.world.dhdRoom.centerPx.y;
+    for (let k = 0; k < 20 && g.state === 'play'; k++) {
+      keyDown('KeyE');
+      tick(gApi, g);
+    }
+    if (g.state === 'gatemap') {
+      tick(gApi, g);
+      const dest = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+      if (dest) dest.fn();
+      tick(gApi, g);
+    }
+  }
+  assert(seen > 0, `roster: a Jaffa grenadier spawned in at least one world across the scan (${seen})`);
+}
+
 // ---------------------------------------------------------------- report
 console.log('\n----------------------------------------');
 console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}`);

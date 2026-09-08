@@ -3728,42 +3728,84 @@ function button(g, label, x, y, w, h, fn, enabled = true) {
   if (enabled) g.buttons.push({ x, y, w, h, fn });
 }
 
+function starfield(g) {
+  const { ctx, view } = g;
+  if (!g._stars) {
+    const rnd = makeRng('stars');
+    g._stars = [];
+    for (let i = 0; i < 140; i++) {
+      g._stars.push({ x: rnd(), y: rnd(), z: 0.3 + rnd() * 0.7, tw: rnd() * TAU });
+    }
+  }
+  for (const s of g._stars) {
+    const a = 0.2 + 0.6 * s.z * (0.6 + 0.4 * Math.sin(g.time * 1.5 + s.tw));
+    ctx.fillStyle = `rgba(180,210,255,${a})`;
+    const sz = s.z * 1.8;
+    ctx.fillRect(s.x * view.w, s.y * view.h, sz, sz);
+  }
+}
+
 function renderMenu(g) {
   const { ctx, view } = g;
   ctx.fillStyle = '#05070c';
   ctx.fillRect(0, 0, view.w, view.h);
   const cx = view.w / 2;
+
+  starfield(g);
+
+  // the gate, drifting slowly behind the title
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  drawGate(ctx, { x: cx, y: view.h * 0.28 + Math.sin(g.time * 0.4) * 6 }, g.time * 0.6);
+  ctx.restore();
+  // a faint SGC ramp silhouette across the base
+  ctx.fillStyle = 'rgba(20,26,36,0.9)';
+  ctx.beginPath();
+  ctx.moveTo(0, view.h);
+  ctx.lineTo(0, view.h - 60);
+  ctx.lineTo(cx - 120, view.h - 60);
+  ctx.lineTo(cx - 60, view.h - 130);
+  ctx.lineTo(cx + 60, view.h - 130);
+  ctx.lineTo(cx + 120, view.h - 60);
+  ctx.lineTo(view.w, view.h - 60);
+  ctx.lineTo(view.w, view.h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,180,90,0.2)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8cf';
-  ctx.shadowBlur = 20;
+  ctx.shadowBlur = 24;
   ctx.shadowColor = '#39f';
-  ctx.font = 'bold 52px monospace';
-  ctx.fillText('GATE  CRAWLER', cx, view.h * 0.26);
+  ctx.font = 'bold 54px monospace';
+  ctx.fillText('GATE  CRAWLER', cx, view.h * 0.46);
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#7a9';
-  ctx.font = '14px monospace';
-  ctx.fillText('procedural top-down SG-1 roguelite — vertical slice', cx, view.h * 0.26 + 32);
-  ctx.fillStyle = '#9cf';
   ctx.font = '13px monospace';
+  ctx.fillText('a procedural top-down SG-1 roguelite', cx, view.h * 0.46 + 28);
+  ctx.fillStyle = '#9cf';
+  ctx.font = '12px monospace';
   ctx.fillText(
-    `banked naquadah ${g.save.naquadah}     deepest threat ${g.save.deepestThreat}     sorties ${g.save.runs}     worlds mapped ${g.save.known.length}`,
+    `banked ${g.save.naquadah} N · ${g.save.intel || 0} intel     deepest threat ${g.save.deepestThreat}     sorties ${g.save.runs}     worlds mapped ${g.save.known.length}`,
     cx,
-    view.h * 0.26 + 60
+    view.h * 0.46 + 50
   );
 
-  button(g, 'ENTER  STARGATE  COMMAND   (Enter)', cx - 190, view.h * 0.44, 380, 48, () => enterHub(g));
+  button(g, 'ENTER  STARGATE  COMMAND   (Enter)', cx - 190, view.h * 0.6, 380, 48, () => enterHub(g));
 
   ctx.fillStyle = '#678';
   ctx.font = '12px monospace';
   ctx.fillText(
     'WASD move   ·   mouse aim   ·   LMB fire   ·   SPACE dodge   ·   Q heal   ·   X / wheel swap weapon   ·   G grenade   ·   R reload   ·   TAB gear',
     cx,
-    view.h * 0.44 + 150
+    view.h * 0.6 + 90
   );
   ctx.fillText(
     'at the SGC: visit the Armory, Research Lab and Infirmary, then walk into the gate to deploy.',
     cx,
-    view.h * 0.44 + 170
+    view.h * 0.6 + 110
   );
 }
 
@@ -3777,7 +3819,25 @@ function renderHub(g) {
   ctx.drawImage(g.worldCanvas, 0, 0);
 
   const gc = g.world.gateCenter;
-  // ramp with hazard striping
+  const rp = g.world.rectPx || g.world.rooms[0].rectPx;
+
+  // room floor sheen so it doesn't read as void
+  ctx.fillStyle = 'rgba(24,30,42,0.5)';
+  ctx.fillRect(rp.x, rp.y, rp.w, rp.h);
+
+  // blast door on the south wall
+  ctx.fillStyle = 'rgba(30,26,22,0.9)';
+  ctx.fillRect(gc.x - 70, rp.y + rp.h - 6, 140, 10);
+  ctx.strokeStyle = 'rgba(255,180,90,0.25)';
+  ctx.lineWidth = 2;
+  for (let i = -3; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(gc.x + i * 20, rp.y + rp.h - 6);
+    ctx.lineTo(gc.x + i * 20, rp.y + rp.h + 4);
+    ctx.stroke();
+  }
+
+  // ramp with hazard striping + rails
   ctx.save();
   ctx.beginPath();
   ctx.rect(gc.x - 58, gc.y + 6, 116, 78);
@@ -3791,10 +3851,40 @@ function renderHub(g) {
     ctx.stroke();
   }
   ctx.restore();
-  ctx.strokeStyle = 'rgba(255,180,90,0.32)';
+  ctx.strokeStyle = 'rgba(255,180,90,0.35)';
   ctx.lineWidth = 2;
   ctx.strokeRect(gc.x - 58, gc.y + 6, 116, 78);
+  ctx.strokeStyle = 'rgba(150,190,230,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(gc.x - 58, gc.y + 84);
+  ctx.lineTo(gc.x - 58, gc.y + 20);
+  ctx.moveTo(gc.x + 58, gc.y + 84);
+  ctx.lineTo(gc.x + 58, gc.y + 20);
+  ctx.stroke();
   drawGate(ctx, gc, g.time);
+
+  // personnel wandering the floor for life
+  if (!g._crew) {
+    g._crew = [];
+    for (let i = 0; i < 4; i++) {
+      g._crew.push({
+        x: rp.x + 60 + Math.random() * (rp.w - 120),
+        y: rp.y + rp.h * 0.55 + Math.random() * (rp.h * 0.3),
+        a: Math.random() * TAU,
+        t: Math.random() * 3,
+      });
+    }
+  }
+  for (const cr of g._crew) {
+    cr.t -= 1 / 60;
+    if (cr.t <= 0) {
+      cr.t = 2 + Math.random() * 4;
+      cr.a = Math.random() * TAU;
+    }
+    cr.x = clamp(cr.x + Math.cos(cr.a) * 12 / 60, rp.x + 30, rp.x + rp.w - 30);
+    cr.y = clamp(cr.y + Math.sin(cr.a) * 12 / 60, rp.y + rp.h * 0.4, rp.y + rp.h - 30);
+    drawHumanoid(ctx, cr.x, cr.y, cr.a, 0.8, 'rgba(120,150,180,0.55)', 'rgba(150,180,210,0.6)', { weapon: false, blur: 4 });
+  }
 
   for (const s of g.world.stations) drawStation(ctx, s, g.time, g._nearStation === s);
 

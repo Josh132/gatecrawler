@@ -3979,60 +3979,126 @@ function renderResearchPanel(g) {
   const bname = { ops: 'FIELD OPS', armory: 'ARMORY', gate: 'GATE SCIENCE' };
   const colW = (fr.w - 48) / 3;
   const owned = new Set(g.save.tech || []);
+  const maxTier = 3;
+  const rowH = (fr.h - 130) / (maxTier + 1);
+  const nw = colW - 24;
+  const nh = Math.min(42, rowH - 10);
+
+  // rects by node id — tier -> row, branch -> column, ordered within a row
+  const rect = {};
   branches.forEach((br, bi) => {
     const bx = fr.x + 24 + bi * colW;
     ctx.fillStyle = '#9cf';
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(bname[br], bx + colW / 2, fr.y + 78);
-    const nodes = TECH.filter((n) => n.branch === br).sort((a, b) => a.tier - b.tier);
-    nodes.forEach((n, ni) => {
-      const ny = fr.y + 96 + ni * 48;
-      const nw = colW - 16;
-      const nx = bx + 8;
-      const have = owned.has(n.id);
-      const ok = !have && canResearch(g.save, n.id);
-      ctx.fillStyle = have ? 'rgba(80,200,120,0.18)' : ok ? 'rgba(40,90,140,0.35)' : 'rgba(40,44,54,0.4)';
-      ctx.fillRect(nx, ny, nw, 42);
-      ctx.strokeStyle = have ? '#5ec87a' : ok ? '#6cf' : '#455';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(nx, ny, nw, 42);
-      ctx.fillStyle = have ? '#bfe' : ok ? '#dff' : '#889';
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(n.name, nx + 8, ny + 15);
-      ctx.fillStyle = '#8ab';
-      ctx.font = '9px monospace';
-      const maxc = Math.max(20, Math.floor((nw - 16) / 5.4));
-      ctx.fillText(n.desc.length > maxc ? n.desc.slice(0, maxc - 1) + '…' : n.desc, nx + 8, ny + 27);
-      ctx.fillStyle = have ? '#7c9' : '#9ab';
-      ctx.fillText(
-        have ? 'RESEARCHED' : `${n.cost.naquadah} N${n.cost.intel ? '  ' + n.cost.intel + ' I' : ''}`,
-        nx + 8,
-        ny + 38
-      );
-      if (ok) {
-        g.buttons.push({
-          x: nx,
-          y: ny,
-          w: nw,
-          h: 42,
-          fn: () => {
-            if (!canResearch(g.save, n.id)) return;
-            g.save.naquadah -= n.cost.naquadah;
-            g.save.intel = (g.save.intel || 0) - (n.cost.intel || 0);
-            g.save.tech = [...(g.save.tech || []), n.id];
-            // apply immediately where it matters for the current session
-            const e = fx(g);
-            g.player.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
-            g.player.hp = Math.min(g.player.maxHp, g.player.hp);
-            persist(g.save);
-            g.message('Researched: ' + n.name);
-          },
-        });
-      }
-    });
+    ctx.fillText(bname[br], bx + colW / 2, fr.y + 74);
+    for (let tier = 0; tier <= maxTier; tier++) {
+      const inTier = TECH.filter((n) => n.branch === br && n.tier === tier);
+      inTier.forEach((n, k) => {
+        const slots = inTier.length;
+        const x = bx + 12 + (colW - 24 - nw) * (slots > 1 ? k / (slots - 1) : 0.5) + (slots > 1 ? (k - (slots - 1) / 2) * 6 : 0);
+        const y = fr.y + 92 + tier * rowH;
+        rect[n.id] = { x, y, w: nw, h: nh };
+      });
+    }
   });
+
+  // dependency lines first, under the cards
+  ctx.strokeStyle = 'rgba(120,170,220,0.28)';
+  ctx.lineWidth = 1;
+  for (const n of TECH) {
+    const to = rect[n.id];
+    if (!to) continue;
+    for (const req of n.requires) {
+      const from = rect[req];
+      if (!from) continue;
+      ctx.strokeStyle = owned.has(req) ? 'rgba(120,220,150,0.4)' : 'rgba(120,170,220,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(from.x + from.w / 2, from.y + from.h);
+      ctx.lineTo(to.x + to.w / 2, to.y);
+      ctx.stroke();
+    }
+  }
+
+  // cards
+  let hoverNode = null;
+  for (const n of TECH) {
+    const rc = rect[n.id];
+    if (!rc) continue;
+    const have = owned.has(n.id);
+    const ok = !have && canResearch(g.save, n.id);
+    const locked = !have && !ok;
+    const hover = g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h;
+    if (hover) hoverNode = n;
+    ctx.fillStyle = have ? 'rgba(70,190,110,0.2)' : ok ? 'rgba(45,100,150,0.4)' : 'rgba(38,42,52,0.5)';
+    ctx.fillRect(rc.x, rc.y, rc.w, rc.h);
+    ctx.strokeStyle = hover && ok ? '#cfe8ff' : have ? '#5ec87a' : ok ? '#6cf' : '#455';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(rc.x, rc.y, rc.w, rc.h);
+    ctx.fillStyle = have ? '#cfe' : ok ? '#eff' : '#889';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(n.name.length > 22 ? n.name.slice(0, 21) + '…' : n.name, rc.x + 7, rc.y + 15);
+    ctx.fillStyle = have ? '#7c9' : locked ? '#667' : '#9cd';
+    ctx.font = '9px monospace';
+    ctx.fillText(
+      have ? '✓ researched' : `${n.cost.naquadah} N${n.cost.intel ? '  ·  ' + n.cost.intel + ' I' : ''}`,
+      rc.x + 7,
+      rc.y + 30
+    );
+    if (ok) {
+      g.buttons.push({
+        x: rc.x,
+        y: rc.y,
+        w: rc.w,
+        h: rc.h,
+        fn: () => {
+          if (!canResearch(g.save, n.id)) return;
+          g.save.naquadah -= n.cost.naquadah;
+          g.save.intel = (g.save.intel || 0) - (n.cost.intel || 0);
+          g.save.tech = [...(g.save.tech || []), n.id];
+          const e = fx(g);
+          g.player.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
+          g.player.hp = Math.min(g.player.maxHp, g.player.hp);
+          persist(g.save);
+          g.message('Researched: ' + n.name);
+        },
+      });
+    }
+  }
+
+  // legend
+  ctx.textAlign = 'left';
+  ctx.font = '9px monospace';
+  const ly = fr.y + fr.h - 14;
+  ctx.fillStyle = '#5ec87a';
+  ctx.fillText('■ researched', fr.x + 24, ly);
+  ctx.fillStyle = '#6cf';
+  ctx.fillText('■ available', fr.x + 120, ly);
+  ctx.fillStyle = '#667';
+  ctx.fillText('■ locked (needs prereq / funds)', fr.x + 210, ly);
+
+  // hover tooltip — full description
+  if (hoverNode) {
+    const tw = 260;
+    const tx = clamp(g.pmouse.x + 12, fr.x, fr.x + fr.w - tw);
+    const ty = clamp(g.pmouse.y + 12, fr.y, fr.y + fr.h - 56);
+    ctx.fillStyle = 'rgba(6,10,16,0.97)';
+    ctx.fillRect(tx, ty, tw, 52);
+    ctx.strokeStyle = '#6cf';
+    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 51);
+    ctx.fillStyle = '#dff';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(hoverNode.name, tx + 8, ty + 17);
+    ctx.fillStyle = '#bcd';
+    ctx.font = '10px monospace';
+    ctx.fillText(hoverNode.desc, tx + 8, ty + 34);
+    if (hoverNode.requires.length) {
+      ctx.fillStyle = '#89a';
+      ctx.font = '9px monospace';
+      ctx.fillText('needs: ' + hoverNode.requires.map((r) => (nodeById(r) || {}).name || r).join(', '), tx + 8, ty + 46);
+    }
+  }
 }
 
 const SHOP = [

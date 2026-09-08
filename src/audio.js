@@ -1,12 +1,76 @@
 let ctx = null;
+let sfxBus = null; // master gain for all one-shot sfx (music has its own master)
+let sfxVol = 0.9;
+let muted = false;
+const VOL_KEY = 'gatecrawler.audio.v1';
+
+// every sfx voice routes here instead of straight to the speakers
+function busOut() {
+  return sfxBus || (ctx ? ctx.destination : null);
+}
+
+function applyVol() {
+  if (sfxBus && ctx) sfxBus.gain.setTargetAtTime(muted ? 0 : sfxVol, ctx.currentTime, 0.02);
+}
+
+function loadVolPrefs() {
+  try {
+    const raw = localStorage.getItem(VOL_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (typeof p.vol === 'number') sfxVol = Math.max(0, Math.min(1, p.vol));
+      if (typeof p.muted === 'boolean') muted = p.muted;
+      if (typeof p.mvol === 'number') mVol = Math.max(0, Math.min(1, p.mvol));
+    }
+  } catch (e) {
+    /* ignore */
+  }
+}
+function saveVolPrefs() {
+  try {
+    localStorage.setItem(VOL_KEY, JSON.stringify({ vol: sfxVol, muted, mvol: mVol }));
+  } catch (e) {
+    /* ignore */
+  }
+}
 
 export function initAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     ctx = new AC();
+    loadVolPrefs();
+    sfxBus = ctx.createGain();
+    sfxBus.gain.value = muted ? 0 : sfxVol;
+    sfxBus.connect(ctx.destination);
   }
   if (ctx.state === 'suspended') ctx.resume();
+}
+
+// master sfx controls (persisted). music.setVolume covers the ambient bed.
+export function setSfxVolume(v) {
+  sfxVol = Math.max(0, Math.min(1, v));
+  applyVol();
+  saveVolPrefs();
+  return sfxVol;
+}
+export function getSfxVolume() {
+  return sfxVol;
+}
+export function isMuted() {
+  return muted;
+}
+export function toggleMute() {
+  muted = !muted;
+  applyVol();
+  saveVolPrefs();
+  return muted;
+}
+export function setMuted(m) {
+  muted = !!m;
+  applyVol();
+  saveVolPrefs();
+  return muted;
 }
 
 function env(gain, t, attack, decay, peak) {
@@ -36,7 +100,7 @@ function noiseVoice(t, dur, type, f0, f1, Q, attack, decay, peak, pad) {
   if (Q != null) bq.Q.value = Q;
   const g = ctx.createGain();
   env(g, t, attack, decay, peak);
-  src.connect(bq).connect(g).connect(ctx.destination);
+  src.connect(bq).connect(g).connect(busOut());
   src.start(t);
   src.stop(t + attack + decay + (pad || 0.02));
   return { src, bq, g };
@@ -50,7 +114,7 @@ function toneVoice(t, type, f0, f1, glide, attack, decay, peak, pad) {
   if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + glide);
   const g = ctx.createGain();
   env(g, t, attack, decay, peak);
-  o.connect(g).connect(ctx.destination);
+  o.connect(g).connect(busOut());
   o.start(t);
   o.stop(t + attack + decay + (pad || 0.02));
   return { o, g };
@@ -107,7 +171,7 @@ function beamStart() {
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(0.06, t + 0.05);
-    bp.connect(g).connect(ctx.destination);
+    bp.connect(g).connect(busOut());
     const oscs = [];
     for (const f of [440, 443.5]) {
       const o = ctx.createOscillator();
@@ -296,7 +360,7 @@ export const sfx = {
     src.buffer = noiseBuffer(0.06);
     const g = ctx.createGain();
     env(g, t, 0.001, 0.05, 0.28);
-    src.connect(g).connect(ctx.destination);
+    src.connect(g).connect(busOut());
     src.start(t);
     src.stop(t + 0.08);
   },
@@ -309,9 +373,16 @@ export const sfx = {
     o.frequency.exponentialRampToValueAtTime(45, t + 0.3);
     const g = ctx.createGain();
     env(g, t, 0.003, 0.3, 0.22);
-    o.connect(g).connect(ctx.destination);
+    o.connect(g).connect(busOut());
     o.start(t);
     o.stop(t + 0.36);
+  },
+  // slow, ominous heartbeat pulse — played on a timer while HP is critical
+  lowHp() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sine', 90, 55, 0.16, 0.005, 0.16, 0.16, 0.05);
+    toneVoice(t + 0.22, 'sine', 78, 48, 0.14, 0.005, 0.14, 0.11, 0.05);
   },
   // mechanical crunch + a small coin-ish chime — an item broken down for naquadah
   scrap() {
@@ -330,7 +401,7 @@ export const sfx = {
       o.frequency.value = f;
       const g = ctx.createGain();
       env(g, t + i * 0.05, 0.002, 0.12, 0.14);
-      o.connect(g).connect(ctx.destination);
+      o.connect(g).connect(busOut());
       o.start(t + i * 0.05);
       o.stop(t + i * 0.05 + 0.16);
     });
@@ -346,7 +417,7 @@ export const sfx = {
     bp.frequency.exponentialRampToValueAtTime(1700, t + 0.18);
     const g = ctx.createGain();
     env(g, t, 0.005, 0.16, 0.13);
-    src.connect(bp).connect(g).connect(ctx.destination);
+    src.connect(bp).connect(g).connect(busOut());
     src.start(t);
     src.stop(t + 0.24);
   },
@@ -362,7 +433,7 @@ export const sfx = {
     lp.frequency.exponentialRampToValueAtTime(140, t + 1.15);
     const g = ctx.createGain();
     env(g, t, 0.15, 1.0, 0.3);
-    src.connect(lp).connect(g).connect(ctx.destination);
+    src.connect(lp).connect(g).connect(busOut());
     src.start(t);
     src.stop(t + 1.35);
   },
@@ -383,6 +454,7 @@ const M_VOICES = [1, 1.498, 2.011, 3.02];
 let mNodes = null;
 let mTimer = null;
 let mIntensity = 0;
+let mVol = 1; // ambient-bed volume scalar (persisted alongside sfx prefs)
 
 function mAt(param, v, t) {
   if (param && typeof param.setValueAtTime === 'function') param.setValueAtTime(v, t);
@@ -567,6 +639,15 @@ export const music = {
     const m = mNodes;
     mRamp(m.filter.frequency, 260 + mIntensity * 1100, t, 1.5);
     mRamp(m.pulseDepth.gain, 0.0001 + mIntensity * 0.05, t, 1.2);
-    mRamp(m.master.gain, 0.08 + mIntensity * 0.03, t, 2);
+    mRamp(m.master.gain, (0.08 + mIntensity * 0.03) * mVol, t, 2);
+  },
+  setVolume(v) {
+    mVol = Math.max(0, Math.min(1, v));
+    if (mNodes && ctx) mRamp(mNodes.master.gain, (0.08 + mIntensity * 0.03) * mVol, ctx.currentTime, 0.5);
+    saveVolPrefs();
+    return mVol;
+  },
+  getVolume() {
+    return mVol;
   },
 };

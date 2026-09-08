@@ -801,8 +801,8 @@ function updatePlay(g, dt) {
   }
 
   // heat: the longer a run goes, the harder the faction hunts you
-  g.heat += dt * 0.018 * (fx(g).heatMul || 1);
-  if (!g.hunterSpawned && Math.floor(g.heat) >= 3) spawnHunter(g);
+  g.heat += dt * 0.048 * (fx(g).heatMul || 1);
+  if (!g.hunterSpawned && g.heat >= 2) spawnHunter(g);
 
   if (g.killStreakT > 0) {
     g.killStreakT -= dt;
@@ -3290,18 +3290,29 @@ function renderHUD(g) {
   ctx.font = '12px monospace';
   ctx.fillText(g.params.address, 20, 24);
   ctx.fillStyle = '#f9a';
-  const heatTier = Math.floor(g.heat);
-  const heatBar = '▮'.repeat(Math.min(5, heatTier)) + '▯'.repeat(Math.max(0, 5 - heatTier));
   ctx.fillText(
     `SECTOR DEPTH ${g.hop}    THREAT ${g.params.threat}    ${(g.params.faction || g.params.primary).toUpperCase()}`,
     20,
     42
   );
-  ctx.fillStyle = heatTier >= 3 ? '#f77' : '#fb8';
-  ctx.fillText(`HEAT ${heatBar}${heatTier >= 3 ? '  HUNTED' : ''}`, 20, 60);
+  // heat as a real meter with a state word
+  const hf = clamp(g.heat / 4, 0, 1);
+  const hunted = g.hunterSpawned || g.heat >= 2;
+  const hName = g.heat >= 3 ? 'SWARM' : g.heat >= 2 ? 'HUNTED' : g.heat >= 0.8 ? 'NOTICED' : 'CALM';
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(20, 51, 120, 9);
+  ctx.fillStyle = hunted ? `rgba(255,90,70,${0.7 + 0.3 * Math.sin(g.time * 8)})` : '#e88';
+  ctx.fillRect(20, 51, 120 * hf, 9);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(20, 51, 120, 9);
+  ctx.fillStyle = hunted ? '#f77' : '#fb8';
+  ctx.font = '10px monospace';
+  ctx.fillText('HEAT · ' + hName, 148, 60);
   if (g.params.mods.length) {
     ctx.fillStyle = '#fd6';
-    ctx.fillText('[ ' + g.params.mods.join('   ') + ' ]', 20, 78);
+    ctx.font = '12px monospace';
+    ctx.fillText('[ ' + g.params.mods.join('   ') + ' ]', 20, 80);
   }
   ctx.fillStyle = '#567';
   ctx.font = '10px monospace';
@@ -4040,7 +4051,7 @@ function renderGateMap(g) {
             launchRun(g, node.addr);
           } else {
             g.runNaq = Math.max(0, g.runNaq - dialCost);
-            g.heat += 0.35 * (eff.heatMul || 1); // pushing deeper stokes the hunt
+            g.heat += 0.6 * (eff.heatMul || 1); // pushing deeper stokes the hunt
             startWorld(g, node.addr, targetHop);
           }
         },

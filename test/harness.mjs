@@ -1175,20 +1175,35 @@ section('feedback: decals accumulate, hazards hurt, kills reward, shotgun clears
 
   // a kill tops the player up and adds a scorch
   const { Enemy } = await import('../src/entities.js');
-  const foe = new Enemy('jaffa', p.x + 30, p.y, 2);
+  const foe = new Enemy('jaffa', p.x + 60, p.y, 2);
   foe.state = 'active';
+  foe.facing = Math.PI; // face away so the frontal-armour rule doesn't apply
   foe._room = g.curRoom;
   g.enemies.push(foe);
-  p.hp = p.maxHp - 30;
+  p.hp = 50;
+  p.iframe = 5;
   const d1 = g.decals.length;
-  foe.hp = 1;
-  input.mouse.down = true;
-  input.mouse.x = foe.x - g.cam.x + g.view.w / 2;
-  input.mouse.y = foe.y - g.cam.y + g.view.h / 2;
-  for (let f = 0; f < 30 && foe.alive; f++) tick(gApi, g);
-  input.mouse.down = false;
-  assert(!foe.alive, 'feedback: test foe died');
-  assert(p.hp > p.maxHp - 30, `feedback: a kill restores some HP (aggression reward) (hp ${p.hp | 0})`);
+  const hpBefore = p.hp;
+  g.bullets.push({
+    x: foe.x,
+    y: foe.y,
+    vx: 300,
+    vy: 0,
+    dmg: 60,
+    from: 'player',
+    r: 3,
+    life: 1,
+    stun: 0,
+    knockback: 0,
+    energy: false,
+    trail: [],
+    alive: true,
+    color: '#fff',
+  });
+  tick(gApi, g);
+  tick(gApi, g);
+  assert(!foe.alive, 'feedback: test foe died to the shot');
+  assert(p.hp > hpBefore, `feedback: a kill restores some HP (aggression reward) (${hpBefore} -> ${p.hp | 0})`);
   assert(g.decals.length > d1, 'feedback: a kill scorches the ground');
 
   // an enemy plasma hazard ticks damage while you stand in it

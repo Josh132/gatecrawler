@@ -9,11 +9,12 @@ export const HUB_H = 22;
 // station positions are in pixels, resolved from a tile anchor
 const T = (n) => n * TILE + TILE / 2;
 
+// three consoles: the Armory now covers loadout AND drawing unlocked weapons
+// (the old separate Requisitions console folded into it).
 export const STATIONS = [
-  { kind: 'armory', tx: 6, ty: 14, label: 'ARMORY', hint: 'loadout & gear' },
-  { kind: 'research', tx: 27, ty: 7, label: 'RESEARCH LAB', hint: 'tech tree' },
+  { kind: 'armory', tx: 6, ty: 14, label: 'ARMORY', hint: 'loadout · requisition · gear' },
+  { kind: 'research', tx: 27, ty: 10, label: 'RESEARCH LAB', hint: 'tech tree' },
   { kind: 'infirmary', tx: 7, ty: 7, label: 'INFIRMARY', hint: 'restock supplies' },
-  { kind: 'requisitions', tx: 27, ty: 15, label: 'REQUISITIONS', hint: 'permanent unlocks' },
 ];
 
 export function buildHub() {

@@ -146,7 +146,7 @@ export function createGame(canvas) {
     hunterSpawned: false,
     hitstop: 0,
     hub: false,
-    station: null, // open station panel in the hub: 'research' | 'infirmary' | 'requisitions'
+    station: null, // open station panel in the hub: 'research' | 'infirmary' (armory opens the loadout panel)
     launching: false, // gate map is picking the FIRST destination of a new run
     runIntel: 0,
     wheel: 0,
@@ -3540,7 +3540,7 @@ function panelLayout(g) {
   const gap = 6;
   const gridW = GRID_COLS * S + (GRID_COLS - 1) * gap;
   const gridH = GRID_ROWS * S + (GRID_ROWS - 1) * gap;
-  const panelW = 360 + gridW;
+  const panelW = 410 + gridW; // left region: doll + requisition strip
   const panelH = Math.max(gridH + 80, 360);
   const px = (view.w - panelW) / 2;
   const py = (view.h - panelH) / 2;
@@ -3576,7 +3576,17 @@ function panelLayout(g) {
     cells.push({ loc: { kind: 'grid', i }, x: cx, y: cy, w: S, h: S });
   }
 
-  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy };
+  // requisition strip in the middle gap — draw one of each weapon unlocked in
+  // Research (folded in from the old Requisitions console)
+  const reqX = dollX + 3 * (S + gap) + 12;
+  const reqW = gx - reqX - 14;
+  const reqCells = [];
+  const unlocked = (fx(g).unlockedWeapons || []).filter((id) => ITEMS[id]);
+  unlocked.forEach((id, i) => {
+    reqCells.push({ id, x: reqX, y: dollY + 20 + i * 46, w: reqW, h: 40 });
+  });
+
+  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells };
 }
 
 function invRef(g, loc) {
@@ -3594,6 +3604,18 @@ function invSet(g, loc, stack) {
 function panelPick(g) {
   if (g.drag) return;
   const lay = panelLayout(g);
+  // requisition strip: click a chip to draw one of that unlocked weapon
+  for (const rc of lay.reqCells) {
+    if (g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h) {
+      const left = invAdd(g.inv, rc.id, 1);
+      if (left) g.message('No room in your pack');
+      else {
+        saveInv(g);
+        g.message('Requisitioned ' + (ITEMS[rc.id] ? ITEMS[rc.id].name : rc.id));
+      }
+      return;
+    }
+  }
   for (const c of lay.cells) {
     if (
       g.pmouse.x >= c.x &&
@@ -3702,6 +3724,34 @@ function renderPanel(g) {
     }
     const hover = g.pmouse.x >= c.x && g.pmouse.x <= c.x + c.w && g.pmouse.y >= c.y && g.pmouse.y <= c.y + c.h;
     drawSlot(ctx, c.x, c.y, c.w, st, { label, border: hover ? '#cfe8ff' : border });
+  }
+
+  // requisition strip — click to draw one of each Research-unlocked weapon
+  ctx.fillStyle = '#8cf';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('REQUISITION', lay.reqX, lay.dollY + 10);
+  if (!lay.reqCells.length) {
+    ctx.fillStyle = '#567';
+    ctx.font = '9px monospace';
+    ctx.fillText('research the Armory', lay.reqX, lay.dollY + 28);
+    ctx.fillText('branch to unlock', lay.reqX, lay.dollY + 40);
+  }
+  for (const rc of lay.reqCells) {
+    const def = ITEMS[rc.id];
+    const hover = g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h;
+    ctx.fillStyle = hover ? 'rgba(40,90,140,0.5)' : 'rgba(20,28,40,0.7)';
+    ctx.fillRect(rc.x, rc.y, rc.w, rc.h);
+    ctx.strokeStyle = (RARITY_COLOR && RARITY_COLOR[rarityOf(rc.id)]) || 'rgba(120,160,210,0.4)';
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(rc.x + 0.5, rc.y + 0.5, rc.w - 1, rc.h - 1);
+    if (drawItemIcon) drawItemIcon(ctx, rc.id, rc.x + 18, rc.y + rc.h / 2, 24);
+    ctx.fillStyle = def.color;
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(def.name, rc.x + 34, rc.y + 16);
+    ctx.fillStyle = hover ? '#cfe' : '#789';
+    ctx.font = '8px monospace';
+    ctx.fillText(hover ? 'click — add to pack' : 'unlocked', rc.x + 34, rc.y + 30);
   }
 
   // tooltip for hovered item
@@ -4138,7 +4188,6 @@ function panelFrame(g, title, sub) {
 function renderStationPanel(g) {
   if (g.station === 'research') renderResearchPanel(g);
   else if (g.station === 'infirmary') renderInfirmaryPanel(g);
-  else if (g.station === 'requisitions') renderRequisitionsPanel(g);
   else g.station = null;
 }
 
@@ -4328,43 +4377,8 @@ function renderInfirmaryPanel(g) {
   });
 }
 
-function renderRequisitionsPanel(g) {
-  const { ctx } = g;
-  const fr = panelFrame(g, 'REQUISITIONS', 'take one of each weapon you have unlocked in Research.  ESC to close');
-  const unlocked = fx(g).unlockedWeapons || [];
-  if (!unlocked.length) {
-    ctx.fillStyle = '#9ab';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('no weapons unlocked yet — research the Armory branch', fr.x + fr.w / 2, fr.y + fr.h / 2);
-    return;
-  }
-  unlocked.forEach((id, i) => {
-    const def = ITEMS[id];
-    if (!def) return;
-    const ry = fr.y + 78 + i * 52;
-    const rx = fr.x + 24;
-    ctx.fillStyle = 'rgba(20,28,40,0.7)';
-    ctx.fillRect(rx, ry, fr.w - 48, 44);
-    ctx.strokeStyle = RARITY_COLOR[rarityOf(id)] || 'rgba(120,160,210,0.3)';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(rx, ry, fr.w - 48, 44);
-    if (drawItemIcon) drawItemIcon(ctx, id, rx + 24, ry + 22, 30);
-    ctx.fillStyle = def.color;
-    ctx.font = 'bold 12px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(def.name, rx + 50, ry + 18);
-    ctx.fillStyle = '#8ab';
-    ctx.font = '9px monospace';
-    ctx.fillText(def.blurb || '', rx + 50, ry + 32);
-    const has = invHasSpace(g.inv, id) || true;
-    button(g, 'REQUISITION', rx + fr.w - 48 - 148, ry + 6, 140, 32, () => {
-      invAdd(g.inv, id, 1);
-      saveInv(g);
-      g.message('Requisitioned ' + def.name);
-    }, has);
-  });
-}
+// (the standalone Requisitions console was folded into the Armory loadout
+// panel — see the requisition strip in renderPanel / panelPick.)
 
 function renderGateMap(g) {
   const { ctx, view } = g;

@@ -180,9 +180,17 @@ export function createGame(canvas) {
   g.inv = reviveInventory(g.save.inv);
   g.save.inv = g.inv; // keep the persisted blob pointed at the live inventory
 
+  g.log = []; // persistent scrollback (bottom-left)
   g.message = (txt) => {
-    g.messages.push({ txt, t: 3 });
-    while (g.messages.length > 4) g.messages.shift();
+    const last = g.messages[g.messages.length - 1];
+    if (last && last.txt === txt) {
+      last.t = 3.2; // de-dupe: just refresh
+      return;
+    }
+    g.messages.push({ txt, t: 3.2 });
+    while (g.messages.length > 1) g.messages.shift(); // only the newest is the toast
+    g.log.push(txt);
+    while (g.log.length > 6) g.log.shift();
   };
 
   const mpos = (e) => {
@@ -276,6 +284,7 @@ function enterHub(g) {
   g.cam.y = p.y;
   g.curRoom = w.rooms[0];
   g.state = 'hub';
+  g.log = [];
   persist(g.save);
   g.message('Stargate Command — SG-1');
 }
@@ -3595,13 +3604,32 @@ function drawMinimap(g) {
 
 function renderMessages(g) {
   const { ctx, view } = g;
-  ctx.textAlign = 'center';
-  ctx.font = '13px monospace';
-  g.messages.forEach((m, i) => {
-    ctx.globalAlpha = clamp(m.t, 0, 1);
-    ctx.fillStyle = '#cfe8ff';
-    ctx.fillText(m.txt, view.w / 2, 84 + i * 18);
-  });
+  ctx.textBaseline = 'alphabetic';
+
+  // one toast — the newest message, centred near the top
+  const m = g.messages[g.messages.length - 1];
+  if (m && m.t > 0) {
+    const a = clamp(m.t / 1.2, 0, 1);
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillStyle = '#dff0ff';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.fillText(m.txt, view.w / 2, 92 - (1 - a) * 8);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+
+  // small scrollback, bottom-left above the HP bar
+  const log = g.log || [];
+  ctx.textAlign = 'left';
+  ctx.font = '10px monospace';
+  for (let i = 0; i < log.length; i++) {
+    ctx.globalAlpha = 0.22 + 0.5 * (i / Math.max(1, log.length - 1));
+    ctx.fillStyle = '#9fb8cc';
+    ctx.fillText(log[i], 20, view.h - 96 - (log.length - 1 - i) * 13);
+  }
   ctx.globalAlpha = 1;
 }
 

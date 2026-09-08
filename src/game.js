@@ -4,7 +4,7 @@ import { sfx } from './audio.js';
 import { TAU, clamp, glowCircle } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
-import { buildWorld, bakeWorld, TILE, tileAt } from './worldgen.js';
+import { buildWorld, bakeWorld, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
@@ -2817,7 +2817,8 @@ function renderPlay(g, dim) {
   ctx.scale(ZOOM, ZOOM);
   ctx.translate(-g.cam.x, -g.cam.y);
 
-  ctx.drawImage(g.worldCanvas, 0, 0);
+  // the bake is taller than the world — wall tops overhang the first row
+  ctx.drawImage(g.worldCanvas, 0, -(g.worldCanvas.offsetY || 0));
   drawDecals(ctx, g, dim);
   if (g.world.dhdRoom && g.world.dhdRoom.everSeen) drawArenaFloor(ctx, g);
   for (const hz of g.hazards) drawHazard(ctx, hz, g.time);
@@ -2878,6 +2879,7 @@ function renderPlay(g, dim) {
   }
 
   if (!dim) drawFog(ctx, g, R);
+  drawWallTops(ctx, g, R, dim);
 
   ctx.restore();
 
@@ -2896,6 +2898,59 @@ function renderPlay(g, dim) {
     if (g.bossIntroT > 0) drawBossIntro(g);
     if (!g.panelOpen) drawCrosshair(g);
   }
+}
+
+// Re-light the walls the player can actually see. A wall's front face lives
+// *inside* the wall tile, just outside the visibility polygon, so the fog would
+// otherwise black out exactly the surfaces that sell the height. Bands are one
+// tile wide and never overlap; a band that would cover the player drops to 40%.
+function drawWallTops(ctx, g, R, dim) {
+  const src = g.worldCanvas && g.worldCanvas.walls;
+  if (!src) return;
+  const off = g.worldCanvas.offsetY || 0;
+  const w = g.world;
+  const p = g.player;
+  const halfW = g.view.w / 2 / ZOOM + TILE * 2;
+  const halfH = g.view.h / 2 / ZOOM + TILE * 2;
+  const x0 = Math.max(0, Math.floor((g.cam.x - halfW) / TILE));
+  const x1 = Math.min(w.W - 1, Math.ceil((g.cam.x + halfW) / TILE));
+  const y0 = Math.max(0, Math.floor((g.cam.y - halfH) / TILE));
+  const y1 = Math.min(w.H - 1, Math.ceil((g.cam.y + halfH) / TILE));
+  const solid = (tx, ty) => tx < 0 || ty < 0 || tx >= w.W || ty >= w.H || w.grid[ty * w.W + tx] === 1;
+  const NB = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  for (let ty = y0; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) {
+      if (!solid(tx, ty)) continue;
+      let sx = 0;
+      let sy = 0;
+      let open = false;
+      for (const [ox, oy] of NB) {
+        if (!solid(tx + ox, ty + oy)) {
+          sx = (tx + ox + 0.5) * TILE;
+          sy = (ty + oy + 0.5) * TILE;
+          open = true;
+          break;
+        }
+      }
+      if (!open) continue;
+      let a = 1;
+      if (!dim) {
+        const d = Math.hypot(sx - p.x, sy - p.y);
+        if (d > R || !litAt(g, sx, sy)) continue;
+        a = clamp(1 - 0.92 * clamp((d - R * 0.32) / (R * 0.7), 0, 1), 0, 1);
+      }
+      const face = !solid(tx, ty + 1);
+      const by = ty * TILE - WALL_H;
+      const bh = face ? TILE + WALL_H + 11 : TILE;
+      // coarse overlap with the player's silhouette — never hide them completely
+      if (Math.abs(p.x - (tx + 0.5) * TILE) < TILE / 2 + 16 && p.y - 26 < by + bh && p.y + 12 > by) {
+        a *= 0.4;
+      }
+      ctx.globalAlpha = a;
+      ctx.drawImage(src, tx * TILE, by + off, TILE, bh, tx * TILE, by, TILE, bh);
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawGrenade(ctx, gr) {
@@ -4257,7 +4312,10 @@ function renderHub(g) {
   ctx.translate(view.w / 2, view.h / 2);
   ctx.scale(ZOOM, ZOOM);
   ctx.translate(-g.cam.x, -g.cam.y);
-  ctx.drawImage(g.worldCanvas, 0, 0);
+  const woff = g.worldCanvas.offsetY || 0;
+  ctx.drawImage(g.worldCanvas, 0, -woff);
+  // no fog down here, so the lit wall layer goes straight on
+  if (g.worldCanvas.walls) ctx.drawImage(g.worldCanvas.walls, 0, -woff);
 
   const gc = g.world.gateCenter;
   const rp = g.world.rectPx || g.world.rooms[0].rectPx;

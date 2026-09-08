@@ -4,6 +4,11 @@ export const TILE = 34;
 export const ROOM_W = 15; // tiles
 export const ROOM_H = 11; // tiles
 
+// how tall walls stand in the fake-3d bake. Purely visual: collision still uses
+// the flat tile footprint. Wall tops are painted WALL_H px above their tile, so
+// the baked canvas is that much taller than the world and is drawn at -WALL_H.
+export const WALL_H = 16;
+
 // visual palettes — one per world, chosen from the address hash in worldParams
 export const BIOMES = {
   ruins: { void: '#0b0f16', floorA: '#141c28', floorB: '#111823', wall: '#0c1017', edge: 'rgba(130,195,255,0.55)', glow: '#3f7fb5', grid: 'rgba(90,140,190,0.05)' },
@@ -166,15 +171,31 @@ export function tileAt(world, px, py) {
   return world.grid[ty * world.W + tx];
 }
 
-// pre-render the static floor + walls to an offscreen canvas
+// blend two hex colours — lit caps and shaded side faces derive from the palette
+function mixHex(a, b, t) {
+  const rgb = (h) => {
+    const s = h.replace('#', '');
+    const n = parseInt(s.length === 3 ? s.replace(/(.)/g, '$1$1') : s, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const ca = rgb(a);
+  const cb = rgb(b);
+  return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * t)},${Math.round(ca[1] + (cb[1] - ca[1]) * t)},${Math.round(ca[2] + (cb[2] - ca[2]) * t)})`;
+}
+
+// pre-render the static floor + walls to an offscreen canvas. The canvas is
+// WALL_H taller than the world and translated down by that much, so extruded
+// wall tops on the first row aren't clipped; draw it at -cv.offsetY.
 export function bakeWorld(world) {
   const pal = BIOMES[(world.params && world.params.biome) || 'ruins'] || BIOMES.ruins;
   const cv = document.createElement('canvas');
   cv.width = world.W * TILE;
-  cv.height = world.H * TILE;
+  cv.height = world.H * TILE + WALL_H;
+  cv.offsetY = WALL_H;
   const c = cv.getContext('2d');
+  c.translate(0, WALL_H);
   c.fillStyle = pal.void;
-  c.fillRect(0, 0, cv.width, cv.height);
+  c.fillRect(0, -WALL_H, cv.width, cv.height);
 
   const W = world.W;
   const H = world.H;
@@ -214,23 +235,92 @@ export function bakeWorld(world) {
   }
   c.restore();
 
-  // wall mass: solid dark fill for every wall tile touching open ground
+  paintWalls(c, world, pal, {});
+
+  // a second, transparent copy of the wall mass carrying the lit trim. The
+  // renderer paints tile bands of it back over the fog so walls next to ground
+  // you can actually see stay lit — and fades them where they'd hide the player.
+  const wl = document.createElement('canvas');
+  wl.width = cv.width;
+  wl.height = cv.height;
+  const wc = wl.getContext('2d');
+  wc.translate(0, WALL_H);
+  paintWalls(wc, world, pal, { glow: true, shadow: true });
+  cv.walls = wl;
+  return cv;
+}
+
+// extruded wall mass: tile tops lifted WALL_H, a lit front face wherever open
+// floor lies to the south, and thin shaded faces on exposed east/west edges
+function paintWalls(c, world, pal, opt) {
+  const W = world.W;
+  const H = world.H;
+  const wall = (x, y) => x < 0 || y < 0 || x >= W || y >= H || world.grid[y * W + x] === 1;
+  const touches = (tx, ty) => {
+    if (!wall(tx, ty)) return false;
+    for (let k = 0; k < 8; k++) {
+      const ox = [1, -1, 0, 0, 1, 1, -1, -1][k];
+      const oy = [0, 0, 1, -1, 1, -1, 1, -1][k];
+      if (!wall(tx + ox, ty + oy)) return true;
+    }
+    return false;
+  };
+  const side = mixHex(pal.wall, pal.void, 0.5);
+  const cap = mixHex(pal.glow, '#ffffff', 0.3);
+  const faceTop = mixHex(pal.wall, pal.glow, 0.55);
+  const faceBot = mixHex(pal.wall, pal.void, 0.9);
+
+  // tops — also filled one tile deep behind a lit tile so the lift leaves no gap.
+  // per-tile jitter keeps a long wall run from reading as one flat slab.
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
-      if (world.grid[ty * W + tx] !== 1) continue;
-      let touches = false;
-      for (let k = 0; k < 8 && !touches; k++) {
-        const ox = [1, -1, 0, 0, 1, 1, -1, -1][k];
-        const oy = [0, 0, 1, -1, 1, -1, 1, -1][k];
-        if (!wall(tx + ox, ty + oy)) touches = true;
-      }
-      if (!touches) continue;
-      c.fillStyle = pal.wall;
-      c.fillRect(tx * TILE, ty * TILE, TILE, TILE);
+      if (!wall(tx, ty)) continue;
+      if (!touches(tx, ty) && !touches(tx, ty - 1)) continue;
+      const n = ((tx * 73856093) ^ (ty * 19349663)) >>> 0;
+      c.fillStyle = mixHex(pal.wall, pal.glow, 0.13 * (0.55 + (n % 23) / 23));
+      c.fillRect(tx * TILE, ty * TILE - WALL_H, TILE, TILE);
     }
   }
 
-  // glowing outline only along wall edges that face open ground
+  // side faces on east/west exposures — a sliver of shade that reads as depth
+  c.fillStyle = side;
+  for (let ty = 0; ty < H; ty++) {
+    for (let tx = 0; tx < W; tx++) {
+      if (!wall(tx, ty)) continue;
+      const y = ty * TILE - WALL_H;
+      if (!wall(tx - 1, ty)) c.fillRect(tx * TILE, y, 5, TILE);
+      if (!wall(tx + 1, ty)) c.fillRect((tx + 1) * TILE - 5, y, 5, TILE);
+    }
+  }
+
+  // front faces: the wall's south side, standing on the floor tile below it
+  for (let ty = 0; ty < H; ty++) {
+    for (let tx = 0; tx < W; tx++) {
+      if (!wall(tx, ty) || wall(tx, ty + 1)) continue;
+      const x = tx * TILE;
+      const fy = (ty + 1) * TILE - WALL_H;
+      const grd = c.createLinearGradient(0, fy, 0, fy + WALL_H);
+      grd.addColorStop(0, faceTop);
+      grd.addColorStop(1, faceBot);
+      c.fillStyle = grd;
+      c.fillRect(x, fy, TILE, WALL_H);
+      c.fillStyle = cap;
+      c.fillRect(x, fy, TILE, 2);
+      if (opt.shadow) {
+        // contact shadow the wall drops onto the floor it stands on
+        const sh = c.createLinearGradient(0, fy + WALL_H, 0, fy + WALL_H + 11);
+        sh.addColorStop(0, 'rgba(0,0,0,0.5)');
+        sh.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = sh;
+        c.fillRect(x, fy + WALL_H, TILE, 11);
+      }
+    }
+  }
+
+  if (!opt.glow) return;
+
+  // glowing outline along the lifted silhouette
+  c.save();
   c.strokeStyle = pal.edge;
   c.lineWidth = 2;
   c.lineCap = 'round';
@@ -241,25 +331,26 @@ export function bakeWorld(world) {
     for (let tx = 0; tx < W; tx++) {
       if (world.grid[ty * W + tx] !== 1) continue;
       const x = tx * TILE;
-      const y = ty * TILE;
+      const y = ty * TILE - WALL_H;
       if (!wall(tx, ty - 1)) {
         c.moveTo(x, y);
         c.lineTo(x + TILE, y);
       }
       if (!wall(tx, ty + 1)) {
-        c.moveTo(x, y + TILE);
-        c.lineTo(x + TILE, y + TILE);
+        // the base of the front face, down on the floor
+        c.moveTo(x, y + TILE + WALL_H);
+        c.lineTo(x + TILE, y + TILE + WALL_H);
       }
       if (!wall(tx - 1, ty)) {
         c.moveTo(x, y);
-        c.lineTo(x, y + TILE);
+        c.lineTo(x, y + TILE + (wall(tx, ty + 1) ? 0 : WALL_H));
       }
       if (!wall(tx + 1, ty)) {
         c.moveTo(x + TILE, y);
-        c.lineTo(x + TILE, y + TILE);
+        c.lineTo(x + TILE, y + TILE + (wall(tx, ty + 1) ? 0 : WALL_H));
       }
     }
   }
   c.stroke();
-  return cv;
+  c.restore();
 }

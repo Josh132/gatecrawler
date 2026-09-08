@@ -340,6 +340,8 @@ function startWorld(g, addr, hop) {
   g.save.lastAddress = worldParams(addr, hop).address;
   g.hop = hop;
   g.dhdActive = false;
+  g.bossIntroT = 0;
+  g.bossIntroSeen = false;
   g.emp = false;
   g.empT = 10;
   g.flowT = 0;
@@ -776,7 +778,14 @@ function updatePlay(g, dt) {
   if (rNow) {
     g.curRoom = rNow;
     rNow.everSeen = true;
+    if (rNow === g.world.dhdRoom && !g.bossIntroSeen) {
+      g.bossIntroSeen = true;
+      g.bossIntroT = 3.4;
+      addShake(g, 14, 0, 1);
+      sfx.bossSting(g.params.faction || g.params.primary);
+    }
   }
+  if (g.bossIntroT > 0) g.bossIntroT -= dt;
 
   // grenades
   for (const gr of g.grenades) {
@@ -870,6 +879,23 @@ function updatePlay(g, dt) {
   for (const e of g.enemies) {
     if (!e.alive) continue;
     e.flash = Math.max(0, e.flash - dt);
+    // routing guards (boss dead): flee the player, then vanish through the gate
+    if (e.rout > 0) {
+      e.rout -= dt;
+      const rdx = e.x - g.player.x;
+      const rdy = e.y - g.player.y;
+      const rl = Math.hypot(rdx, rdy) || 1;
+      e.facing = Math.atan2(rdy, rdx);
+      const nx = e.x + (rdx / rl) * e.speed * 1.25 * dt;
+      const ny = e.y + (rdy / rl) * e.speed * 1.25 * dt;
+      if (tileAt(g.world, nx, e.y) === 0) e.x = nx;
+      if (tileAt(g.world, e.x, ny) === 0) e.y = ny;
+      if (e.rout <= 0) {
+        e.alive = false;
+        spark(g, e.x, e.y, '#ffb347');
+      }
+      continue;
+    }
     if (e.kind === 'jaffa') updateJaffa(g, e, dt);
     else if (e.kind === 'jaffa_heavy') updateJaffaHeavy(g, e, dt);
     else if (e.kind === 'jaffa_grenadier') updateGrenadier(g, e, dt);
@@ -1546,6 +1572,12 @@ function damagePlayer(g, amount, vx, vy) {
 }
 
 const BOSS_NAME = { jaffa: 'Serpent Guard Prime', wraith: 'The Wraith Queen', replicator: 'Replicator Carrier' };
+const BOSS_SUB = {
+  jaffa: 'First Prime of the System Lord',
+  wraith: 'Hive Matriarch',
+  replicator: 'Assimilation Nexus',
+};
+const BOSS_TINT = { jaffa: '#ffb347', wraith: '#9df7a0', replicator: '#8fe4ff' };
 
 function killEnemy(g, e) {
   if (!e.alive) return;
@@ -1595,6 +1627,18 @@ function killEnemy(g, e) {
       g.pickups.push(new Pickup('naquadah', e.x + rr(-40, 40), e.y + rr(-40, 40), 16 * mult));
     }
     g.message((BOSS_NAME[e.variant] || 'Boss') + ' down');
+    // morale break: the commander is dead, surviving guards rout for the gate.
+    // Drop their room tag so the DHD lights up immediately; they flee then despawn.
+    let broke = 0;
+    for (const g2 of g.enemies) {
+      if (g2.alive && g2 !== e && g2._room === e._room) {
+        g2._room = null;
+        g2.rout = 3.5;
+        g2.state = 'active';
+        broke++;
+      }
+    }
+    if (broke) g.message('The guards break and run');
   } else if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy' || e.kind === 'jaffa_grenadier') {
     const heavy = e.kind === 'jaffa_heavy';
     g.pickups.push(new Pickup('naquadah', e.x, e.y, (heavy ? 12 : 6) * mult));
@@ -2262,17 +2306,46 @@ function updateBoss(g, e, dt) {
       g.message('Carrier shifts phase — ' + e.immuneType + ' fire deflects');
     }
   }
-  if (e.shield > 0 || v === 'jaffa' || v === 'replicator') {
+  if (!e.phase2 && (e.shield > 0 || v === 'jaffa' || v === 'replicator')) {
     e.shieldT += dt;
     const cap = v === 'replicator' ? 70 : 90;
     if (e.shieldT > 6 && e.shield < cap) e.shield = Math.min(cap, e.shield + 16 * dt);
   }
 
+  // phase two: past 40% HP the boss enrages — faster and hits sooner, but
+  // drops its shield and stops regenerating it (reckless, not tankier)
+  if (!e.phase2 && e.hp < e.maxHp * 0.4) {
+    e.phase2 = true;
+    e.shield = 0;
+    e.speed *= 1.32;
+    e.attackT = Math.min(e.attackT, 0.4);
+    burst(g, e.x, e.y, 30, v === 'wraith' ? '#9df7a0' : v === 'replicator' ? '#8fe4ff' : '#ffb347');
+    addShake(g, 16, 0, 1);
+    sfx.bossSting(v);
+    g.message((BOSS_NAME[v] || 'Boss') + ' — ENRAGED');
+  }
+
+  // charge attack: a fixed telegraph (e.windup) then the dash (e.charging)
+  if (e.windup > 0) {
+    e.windup -= dt;
+    // keep tracking the player slowly during the tell so it's dodgeable but real
+    e.chargeDir += Math.atan2(Math.sin(e.facing - e.chargeDir), Math.cos(e.facing - e.chargeDir)) * Math.min(1, 3 * dt);
+    if (e.windup <= 0) {
+      e.charging = e.phase2 ? 0.5 : 0.42;
+      addShake(g, 10, Math.cos(e.chargeDir), Math.sin(e.chargeDir));
+    }
+    return;
+  }
   if (e.charging > 0) {
     e.charging -= dt;
-    e.x += Math.cos(e.chargeDir) * 460 * dt;
-    e.y += Math.sin(e.chargeDir) * 460 * dt;
-    if (e.charging <= 0) e.attackT = 1.5;
+    const nx = e.x + Math.cos(e.chargeDir) * 460 * dt;
+    const ny = e.y + Math.sin(e.chargeDir) * 460 * dt;
+    // stop the dash on wall contact so the boss never tunnels out of the arena
+    if (tileAt(g.world, nx, e.y) === 0) e.x = nx;
+    else e.charging = 0;
+    if (tileAt(g.world, e.x, ny) === 0) e.y = ny;
+    else e.charging = 0;
+    if (e.charging <= 0) e.attackT = e.phase2 ? 1.0 : 1.5;
     return;
   }
 
@@ -2312,11 +2385,11 @@ function updateBoss(g, e, dt) {
   }
 
   if (e.attackT <= 0) {
-    if (v !== 'wraith' && Math.random() < 0.4 && dist < 400) {
-      e.charging = 0.4;
+    if (v !== 'wraith' && Math.random() < (e.phase2 ? 0.5 : 0.4) && dist < 400) {
+      e.windup = e.phase2 ? 0.45 : 0.6; // visible tell before the dash
       e.chargeDir = e.facing;
-      g.message((BOSS_NAME[v] || 'Boss') + ' charges!');
-      g.shake = Math.min(20, g.shake + 8);
+      e.attackT = 1;
+      sfx.bossWindup();
     } else if (v === 'replicator') {
       for (let i = 0; i < 2; i++) {
         const r = new Enemy('replicator', e.x + rr(-24, 24), e.y + rr(-24, 24), g.params.threat);
@@ -2325,7 +2398,7 @@ function updateBoss(g, e, dt) {
         r.mode = 'advance';
         g.enemies.push(r);
       }
-      e.attackT = 2.4;
+      e.attackT = e.phase2 ? 1.7 : 2.4;
     } else {
       const spread = v === 'wraith' ? 5 : 3;
       for (let i = 0; i < spread; i++) {
@@ -2341,7 +2414,7 @@ function updateBoss(g, e, dt) {
         );
       }
       enemyShotSound(g, e, 'boss');
-      e.attackT = v === 'wraith' ? 1.6 : 1.3;
+      e.attackT = (v === 'wraith' ? 1.6 : 1.3) * (e.phase2 ? 0.66 : 1);
     }
   }
 }
@@ -2616,6 +2689,7 @@ function renderPlay(g, dim) {
 
   ctx.drawImage(g.worldCanvas, 0, 0);
   drawDecals(ctx, g, dim);
+  if (g.world.dhdRoom && g.world.dhdRoom.everSeen) drawArenaFloor(ctx, g);
   for (const hz of g.hazards) drawHazard(ctx, hz, g.time);
 
   const R = g.params && g.params.mods.includes('eclipse') ? 330 : 560;
@@ -2677,6 +2751,7 @@ function renderPlay(g, dim) {
     renderHUD(g);
     renderHotbar(g);
     renderMessages(g);
+    if (g.bossIntroT > 0) drawBossIntro(g);
     if (!g.panelOpen) drawCrosshair(g);
   }
 }
@@ -2716,6 +2791,46 @@ function drawGate(ctx, c, t) {
     ctx.beginPath();
     ctx.arc(Math.cos(a) * 58, Math.sin(a) * 58, 3.5, 0, TAU);
     ctx.fill();
+  }
+  ctx.restore();
+}
+
+// a faint boundary ring + tinted floor wash under the DHD room so the boss
+// fight reads as a named arena rather than just another room
+function drawArenaFloor(ctx, g) {
+  const r = g.world.dhdRoom;
+  const c = r.centerPx;
+  const rect = r.rectPx;
+  const v = g.params.faction || g.params.primary;
+  const tint = BOSS_TINT[v] || '#ffb347';
+  const rad = Math.min(rect.w, rect.h) * 0.42;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x + 6, rect.y + 6, rect.w - 12, rect.h - 12);
+  ctx.clip();
+  const grad = ctx.createRadialGradient(c.x, c.y, rad * 0.2, c.x, c.y, rad);
+  grad.addColorStop(0, hexA(tint, 0.05));
+  grad.addColorStop(1, hexA(tint, 0));
+  ctx.fillStyle = grad;
+  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.strokeStyle = hexA(tint, 0.22 + 0.06 * Math.sin(g.time * 2));
+  ctx.lineWidth = 2;
+  ctx.setLineDash([14, 10]);
+  ctx.lineDashOffset = -g.time * 12;
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, rad, 0, TAU);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // corner ticks
+  ctx.strokeStyle = hexA(tint, 0.3);
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+    const x = c.x + sx * rad * 0.96;
+    const y = c.y + sy * rad * 0.96;
+    ctx.beginPath();
+    ctx.moveTo(x - sx * 10, y);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x, y - sy * 10);
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -2999,7 +3114,28 @@ function drawEnemy(ctx, e, t) {
       ctx.textAlign = 'center';
       ctx.fillText(e.immuneType === 'kinetic' ? 'KINETIC-IMMUNE' : 'ENERGY-IMMUNE', e.x, e.y - e.r - 16);
     }
-    if (e.charging > 0) glowCircle(ctx, e.x, e.y, e.r + 4, 'rgba(255,120,40,0.3)', 20);
+    if (e.windup > 0) {
+      // charge telegraph: a lance of light on the floor along the dash line
+      const reach = 340;
+      const grow = clamp(1 - e.windup / 0.6, 0, 1);
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(e.chargeDir);
+      const grad = ctx.createLinearGradient(0, 0, reach, 0);
+      grad.addColorStop(0, `rgba(255,90,40,${0.32 + 0.25 * grow})`);
+      grad.addColorStop(1, 'rgba(255,90,40,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(0, -e.r - 4);
+      ctx.lineTo(reach * (0.4 + 0.6 * grow), -e.r - 4 - 10 * grow);
+      ctx.lineTo(reach * (0.4 + 0.6 * grow), e.r + 4 + 10 * grow);
+      ctx.lineTo(0, e.r + 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      glowCircle(ctx, e.x, e.y, e.r + 5 + 6 * Math.sin(t * 30), 'rgba(255,120,40,0.5)', 24);
+    }
+    if (e.charging > 0) glowCircle(ctx, e.x, e.y, e.r + 4, 'rgba(255,120,40,0.35)', 22);
   }
 
   if (hunter && !idle) glowCircle(ctx, e.x, e.y, e.r + 5, 'rgba(255,90,60,0.25)', 18);
@@ -3710,6 +3846,47 @@ function renderMessages(g) {
   ctx.globalAlpha = 1;
 }
 
+// boss arena name plate — slides in, holds, fades over g.bossIntroT (starts 3.4)
+function drawBossIntro(g) {
+  const { ctx, view } = g;
+  const v = g.params.faction || g.params.primary;
+  const T = g.bossIntroT;
+  // 3.4..2.8 slide in, 2.8..1.0 hold, 1.0..0 fade
+  const inP = clamp((3.4 - T) / 0.6, 0, 1);
+  const out = clamp(T / 1.0, 0, 1);
+  const a = Math.min(inP, out);
+  const cy = view.h * 0.32;
+  const tint = BOSS_TINT[v] || '#ffb347';
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  // banner bars
+  ctx.globalAlpha = a * 0.9;
+  ctx.fillStyle = 'rgba(6,8,12,0.72)';
+  const bw = view.w * (0.3 + 0.5 * inP);
+  ctx.fillRect(view.w / 2 - bw / 2, cy - 34, bw, 68);
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(view.w / 2 - bw / 2, cy - 34);
+  ctx.lineTo(view.w / 2 + bw / 2, cy - 34);
+  ctx.moveTo(view.w / 2 - bw / 2, cy + 34);
+  ctx.lineTo(view.w / 2 + bw / 2, cy + 34);
+  ctx.stroke();
+  // text
+  ctx.globalAlpha = a;
+  ctx.shadowBlur = 16;
+  ctx.shadowColor = tint;
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText((BOSS_NAME[v] || 'Boss').toUpperCase(), view.w / 2, cy + 2);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = tint;
+  ctx.font = '12px monospace';
+  ctx.fillText((BOSS_SUB[v] || '').toUpperCase(), view.w / 2, cy + 22);
+  ctx.restore();
+}
+
 function button(g, label, x, y, w, h, fn, enabled = true) {
   const { ctx } = g;
   ctx.save();
@@ -3979,12 +4156,11 @@ function renderResearchPanel(g) {
   const bname = { ops: 'FIELD OPS', armory: 'ARMORY', gate: 'GATE SCIENCE' };
   const colW = (fr.w - 48) / 3;
   const owned = new Set(g.save.tech || []);
-  const maxTier = 3;
-  const rowH = (fr.h - 130) / (maxTier + 1);
-  const nw = colW - 24;
-  const nh = Math.min(42, rowH - 10);
+  const nw = colW - 20;
+  const nh = 42;
 
-  // rects by node id — tier -> row, branch -> column, ordered within a row
+  // one column per branch; nodes stacked by tier, a gap between tier groups so
+  // the rows read as tiers. rects keyed by id so we can draw dependency lines.
   const rect = {};
   branches.forEach((br, bi) => {
     const bx = fr.x + 24 + bi * colW;
@@ -3992,30 +4168,35 @@ function renderResearchPanel(g) {
     ctx.font = 'bold 12px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(bname[br], bx + colW / 2, fr.y + 74);
-    for (let tier = 0; tier <= maxTier; tier++) {
-      const inTier = TECH.filter((n) => n.branch === br && n.tier === tier);
-      inTier.forEach((n, k) => {
-        const slots = inTier.length;
-        const x = bx + 12 + (colW - 24 - nw) * (slots > 1 ? k / (slots - 1) : 0.5) + (slots > 1 ? (k - (slots - 1) / 2) * 6 : 0);
-        const y = fr.y + 92 + tier * rowH;
-        rect[n.id] = { x, y, w: nw, h: nh };
-      });
+    const list = TECH.filter((n) => n.branch === br).sort((a, b) => a.tier - b.tier || a.id.localeCompare(b.id));
+    let y = fr.y + 86;
+    let lastTier = list.length ? list[0].tier : 0;
+    for (const n of list) {
+      if (n.tier !== lastTier) {
+        y += 6; // tier break
+        lastTier = n.tier;
+      }
+      rect[n.id] = { x: bx + 10, y, w: nw, h: nh };
+      y += nh + 2;
     }
   });
 
-  // dependency lines first, under the cards
-  ctx.strokeStyle = 'rgba(120,170,220,0.28)';
-  ctx.lineWidth = 1;
+  // dependency lines first, under the cards — routed as an elbow down the
+  // left gutter of the column so they don't cross through intervening cards
+  ctx.lineWidth = 1.25;
   for (const n of TECH) {
     const to = rect[n.id];
     if (!to) continue;
     for (const req of n.requires) {
       const from = rect[req];
       if (!from) continue;
-      ctx.strokeStyle = owned.has(req) ? 'rgba(120,220,150,0.4)' : 'rgba(120,170,220,0.22)';
+      const gutter = to.x - 6;
+      ctx.strokeStyle = owned.has(req) ? 'rgba(120,220,150,0.45)' : 'rgba(120,170,220,0.3)';
       ctx.beginPath();
-      ctx.moveTo(from.x + from.w / 2, from.y + from.h);
-      ctx.lineTo(to.x + to.w / 2, to.y);
+      ctx.moveTo(from.x, from.y + from.h / 2);
+      ctx.lineTo(gutter, from.y + from.h / 2);
+      ctx.lineTo(gutter, to.y + to.h / 2);
+      ctx.lineTo(to.x, to.y + to.h / 2);
       ctx.stroke();
     }
   }
@@ -4038,13 +4219,14 @@ function renderResearchPanel(g) {
     ctx.fillStyle = have ? '#cfe' : ok ? '#eff' : '#889';
     ctx.font = 'bold 10px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(n.name.length > 22 ? n.name.slice(0, 21) + '…' : n.name, rc.x + 7, rc.y + 15);
+    const maxc = Math.floor((rc.w - 14) / 6);
+    ctx.fillText(n.name.length > maxc ? n.name.slice(0, maxc - 1) + '…' : n.name, rc.x + 7, rc.y + 15);
     ctx.fillStyle = have ? '#7c9' : locked ? '#667' : '#9cd';
     ctx.font = '9px monospace';
     ctx.fillText(
       have ? '✓ researched' : `${n.cost.naquadah} N${n.cost.intel ? '  ·  ' + n.cost.intel + ' I' : ''}`,
       rc.x + 7,
-      rc.y + 30
+      rc.y + 29
     );
     if (ok) {
       g.buttons.push({

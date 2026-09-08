@@ -264,6 +264,23 @@ export const sfx = {
     toneVoice(t + 0.02, 'sine', 2637, 2637, 0, 0.001, 0.14, 0.1, 0.04);
     toneVoice(t + 0.04, 'sine', 3520, 3520, 0, 0.001, 0.12, 0.05, 0.04);
   },
+  // low brass-ish stab + rising sub — plays when you enter the boss arena
+  bossSting(variant) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const root = variant === 'wraith' ? 58 : variant === 'replicator' ? 49 : 55; // A#1 / G1 / A1
+    toneVoice(t, 'sawtooth', root, root, 0, 0.02, 1.1, 0.16, 0.2);
+    toneVoice(t, 'square', root * 1.5, root * 1.5, 0, 0.03, 0.9, 0.07, 0.2);
+    toneVoice(t + 0.06, 'sine', root / 2, root, 0.9, 0.01, 1.0, 0.18, 0.2);
+    noiseVoice(t, 0.9, 'lowpass', 600, 90, null, 0.01, 0.8, 0.14, 0.1);
+  },
+  // tense tick-up that plays while the boss telegraphs its charge
+  bossWindup() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'square', 180, 520, 0.5, 0.01, 0.5, 0.09, 0.06);
+    noiseVoice(t, 0.5, 'bandpass', 400, 2400, 6, 0.02, 0.46, 0.08, 0.05);
+  },
   p90() {
     if (!ctx) return;
     fireP90(ctx.currentTime);

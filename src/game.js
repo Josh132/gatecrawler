@@ -1503,8 +1503,9 @@ function hitEnemy(g, e, b) {
   e.ky += (b.vy / bl) * b.knockback;
   if (b.stun) e.stun = Math.max(e.stun, b.stun);
   spark(g, b.x, b.y, b.color);
-  scorch(g, b.x, b.y, rr(2.5, 4.5));
-  splat(g, b.x, b.y, factionSplatColor(e.kind), 2);
+  // only meaningful hits leave a mark on the floor — no mud from a P90 stream
+  if (dmg >= 8 && Math.random() < 0.5) scorch(g, b.x, b.y, rr(2, 3.5));
+  if (dmg >= 20) splat(g, b.x, b.y, factionSplatColor(e.kind), 1);
 
   // tactile weight on a solid connect that doesn't kill
   sfx.impact(dmg >= 24);
@@ -2382,29 +2383,38 @@ function addShake(g, mag, dx, dy) {
 // battlefield marks — capped ring buffer, drawn under everything
 function addDecal(g, kind, x, y, r, color, ang) {
   if (g.hub) return;
+  // local density cap — don't pile marks on the same spot
+  if (kind !== 'casing') {
+    let near = 0;
+    for (let i = g.decals.length - 1; i >= 0 && i > g.decals.length - 40; i--) {
+      const o = g.decals[i];
+      if (o.kind === kind && (o.x - x) ** 2 + (o.y - y) ** 2 < 15 * 15) near++;
+    }
+    if (near >= 2) return;
+  }
   const d = new Decal(kind, x, y, r, color, ang);
   d.born = g.time;
   g.decals.push(d);
-  if (g.decals.length > 520) g.decals.splice(0, g.decals.length - 520);
+  if (g.decals.length > 500) g.decals.splice(0, g.decals.length - 500);
 }
 function scorch(g, x, y, r) {
-  addDecal(g, 'scorch', x, y, r, 'rgba(8,6,5,0.5)');
+  addDecal(g, 'scorch', x, y, r, 'rgba(8,6,5,0.42)');
 }
 function ejectCasing(g, x, y, aim) {
   const a = aim + Math.PI + rr(-0.9, 0.9);
-  addDecal(g, 'casing', x + Math.cos(a) * rr(12, 30), y + Math.sin(a) * rr(12, 30), rr(2.2, 3.4), 'rgba(224,192,120,0.75)', rr(0, TAU));
+  addDecal(g, 'casing', x + Math.cos(a) * rr(12, 30), y + Math.sin(a) * rr(12, 30), rr(2.2, 3.4), 'rgba(224,192,120,0.7)', rr(0, TAU));
 }
 function splat(g, x, y, color, n) {
   for (let i = 0; i < (n || 3); i++) {
-    addDecal(g, 'splat', x + rr(-11, 11), y + rr(-11, 11), rr(3, 7.5), color, rr(0, TAU));
+    addDecal(g, 'splat', x + rr(-11, 11), y + rr(-11, 11), rr(3, 6.5), color, rr(0, TAU));
   }
 }
 
 function factionSplatColor(kind) {
-  if (kind.startsWith('wraith')) return 'rgba(120,240,150,0.5)';
-  if (kind.startsWith('replicator')) return 'rgba(140,230,255,0.42)';
-  if (kind === 'boss') return 'rgba(255,160,110,0.5)';
-  return 'rgba(255,150,90,0.42)'; // jaffa
+  if (kind.startsWith('wraith')) return 'rgba(120,240,150,0.34)';
+  if (kind.startsWith('replicator')) return 'rgba(140,230,255,0.28)';
+  if (kind === 'boss') return 'rgba(255,160,110,0.34)';
+  return 'rgba(255,150,90,0.28)'; // jaffa
 }
 
 // ---------------------------------------------------------------- camera

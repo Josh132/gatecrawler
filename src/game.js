@@ -3219,6 +3219,7 @@ function drawCrosshair(g) {
 function renderHUD(g) {
   const { ctx, view } = g;
   const p = g.player;
+  const eff = fx(g);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
 
@@ -3272,18 +3273,30 @@ function renderHUD(g) {
     ctx.fillRect(bx + 150, wLineY + 3, 62 * rf, 4);
   }
 
-  ctx.fillStyle = p.dodgeCd > 0 ? 'rgba(120,230,255,0.25)' : '#7fe8ff';
-  ctx.fillRect(bx + bw + 10, by, 14, bh);
+  // dodge charges — one pip per charge, dim while regenerating
+  const dmax = p.dodgeMax || 1;
+  for (let i = 0; i < dmax; i++) {
+    const ready = i < (p.dodgeCharge || 0);
+    ctx.fillStyle = ready ? '#7fe8ff' : 'rgba(120,230,255,0.2)';
+    ctx.fillRect(bx + bw + 10 + i * 10, by, 7, bh);
+  }
+  if (dmax > 0 && (p.dodgeCharge || 0) < dmax) {
+    const rf = clamp((p.dodgeRegenT || 0) / (1.15 * (eff.dodgeCdMul || 1)), 0, 1);
+    ctx.fillStyle = 'rgba(127,232,255,0.5)';
+    ctx.fillRect(bx + bw + 10 + Math.floor(p.dodgeCharge || 0) * 10, by + bh - 2, 7 * rf, 2);
+  }
   if (p.stimT > 0) {
     ctx.fillStyle = '#ffd54a';
     ctx.font = '10px monospace';
-    ctx.fillText('STIM ' + p.stimT.toFixed(1) + 's', bx + bw + 30, by + 12);
+    ctx.fillText('STIM ' + p.stimT.toFixed(1) + 's', bx + bw + 10 + dmax * 10 + 8, by + 12);
   }
 
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#8ef';
   ctx.font = 'bold 13px monospace';
-  ctx.fillText(`NAQUADAH  ${g.runNaq}   (banked ${g.save.naquadah})`, view.w - 20, view.h - 24);
+  ctx.fillStyle = '#8ef';
+  ctx.fillText(`NAQUADAH  ${g.runNaq}   (banked ${g.save.naquadah})`, view.w - 20, view.h - 40);
+  ctx.fillStyle = '#b6f0ff';
+  ctx.fillText(`INTEL  ${g.runIntel}   (banked ${g.save.intel || 0})`, view.w - 20, view.h - 22);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#9cf';
@@ -3606,7 +3619,14 @@ function drawMinimap(g) {
   }
   const w = (mgx + 1) * cell;
   const ox = view.w - 20 - w;
-  const oy = 24;
+  const oy = 30;
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '9px monospace';
+  ctx.fillStyle = '#8ab';
+  ctx.fillText('MAP', view.w - 20, oy - 6);
+
   for (const r of g.world.rooms) {
     const x = ox + r.gx * cell;
     const y = oy + r.gy * cell;
@@ -3615,12 +3635,46 @@ function drawMinimap(g) {
     if (r.kind === 'dhd') col = r.cleared ? '#55ddee' : '#8a5a2a';
     ctx.fillStyle = col;
     ctx.fillRect(x, y, cell - pad, cell - pad);
+    if (r.kind === 'dhd') {
+      ctx.strokeStyle = g.dhdActive ? '#8ef' : '#c96';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - 1, y - 1, cell - pad + 2, cell - pad + 2);
+    }
     if (g.curRoom === r) {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(x - 0.5, y - 0.5, cell - pad + 1, cell - pad + 1);
     }
   }
+
+  // objective arrow: at screen edge-ish, pointing player -> DHD room
+  const dhd = g.world.dhdRoom;
+  if (dhd && dhd !== g.curRoom && !dhd.cleared) {
+    const p = g.player;
+    const a = Math.atan2(dhd.centerPx.y - p.y, dhd.centerPx.x - p.x);
+    ctx.save();
+    ctx.translate(view.w / 2 + Math.cos(a) * 46, view.h / 2 + Math.sin(a) * 46);
+    ctx.rotate(a);
+    ctx.fillStyle = 'rgba(140,220,255,0.5)';
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(-6, 5);
+    ctx.lineTo(-6, -5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // one-line legend
+  ctx.textAlign = 'right';
+  ctx.font = '8px monospace';
+  const ly = oy + (mgy + 1) * cell + 8;
+  ctx.fillStyle = '#4a6a9a';
+  ctx.fillText('gate', view.w - 84, ly);
+  ctx.fillStyle = '#4a8a6a';
+  ctx.fillText('clear', view.w - 52, ly);
+  ctx.fillStyle = '#b07a3a';
+  ctx.fillText('DHD', view.w - 20, ly);
 }
 
 function renderMessages(g) {

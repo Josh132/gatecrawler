@@ -2785,12 +2785,30 @@ function inPoly(x, y, poly) {
   return inside;
 }
 
+function polyBox(poly) {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i < poly.length; i += 2) {
+    if (poly[i] < x0) x0 = poly[i];
+    if (poly[i] > x1) x1 = poly[i];
+    if (poly[i + 1] < y0) y0 = poly[i + 1];
+    if (poly[i + 1] > y1) y1 = poly[i + 1];
+  }
+  return [x0, y0, x1, y1];
+}
+
 function litAt(g, x, y) {
   const p = g.player;
   const dx = x - p.x;
   const dy = y - p.y;
   if (dx * dx + dy * dy < 6400) return true;
-  return !!g.visPoly && inPoly(x, y, g.visPoly);
+  if (!g.visPoly) return false;
+  // the polygon's bounds reject most callers before the point-in-poly walk
+  const bb = g.visBox;
+  if (bb && (x < bb[0] || x > bb[2] || y < bb[1] || y > bb[3])) return false;
+  return inPoly(x, y, g.visPoly);
 }
 
 function drawFog(ctx, g, R) {
@@ -2841,6 +2859,7 @@ function renderPlay(g, dim) {
 
   const R = worldMods(g).visionR;
   g.visPoly = dim ? null : computeVisPoly(g, R);
+  g.visBox = g.visPoly ? polyBox(g.visPoly) : null;
   const lit = (x, y) => dim || litAt(g, x, y);
   drawLights(ctx, g, dim);
 

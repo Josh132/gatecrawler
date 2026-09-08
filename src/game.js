@@ -1164,7 +1164,7 @@ function throwGrenade(g) {
       'player'
     )
   );
-  sfx.dodge();
+  sfx.grenadeThrow();
   saveInv(g);
 }
 
@@ -1775,7 +1775,13 @@ function jaffaShoot(g, e, spread) {
       life: 2,
     })
   );
-  sfx.staff();
+  enemyShotSound(g, e, 'jaffa');
+}
+
+// enemy weapon voice + an "incoming" tick if fired from outside your vision
+function enemyShotSound(g, e, fam) {
+  sfx.enemyFire(fam);
+  if (g.visPoly && !litAt(g, e.x, e.y)) sfx.incoming();
 }
 
 // look for a floor tile nearby that breaks LOS to the player (a "tuck" spot) but
@@ -2128,7 +2134,7 @@ function updateWraithDrone(g, e, dt) {
       })
     );
     e.cool = 0.7 + Math.random() * 0.5;
-    sfx.p90();
+    enemyShotSound(g, e, 'wraith');
   }
 }
 
@@ -2222,7 +2228,7 @@ function updateGrenadier(g, e, dt) {
     gr.hazard = 46; // radius of the plasma pool it leaves
     g.grenades.push(gr);
     e.cool = 2.5 + Math.random() * 0.8;
-    sfx.fire('launcher');
+    enemyShotSound(g, e, 'jaffa');
   }
 }
 
@@ -2322,7 +2328,7 @@ function updateBoss(g, e, dt) {
           })
         );
       }
-      sfx.staff();
+      enemyShotSound(g, e, 'boss');
       e.attackT = v === 'wraith' ? 1.6 : 1.3;
     }
   }

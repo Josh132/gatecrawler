@@ -182,6 +182,36 @@ export const sfx = {
     if (on) beamStart();
     else beamStop();
   },
+  // enemy weapon discharge — deliberately duller / lower than the player's guns
+  // so incoming fire never sounds like your own. `fam`: 'jaffa'|'wraith'|'boss'.
+  enemyFire(fam) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (fam === 'wraith') {
+      noiseVoice(t, 0.07, 'bandpass', 1400, 700, 3, 0.002, 0.06, 0.09, 0.02);
+      toneVoice(t, 'sawtooth', 600, 260, 0.05, 0.001, 0.05, 0.06, 0.015);
+    } else if (fam === 'boss') {
+      toneVoice(t, 'square', 300, 70, 0.22, 0.003, 0.22, 0.16, 0.05);
+      toneVoice(t, 'sine', 66, 40, 0.16, 0.004, 0.16, 0.11, 0.045);
+    } else {
+      // jaffa staff — a muffled thud, no bright crack
+      noiseVoice(t, 0.09, 'lowpass', 900, 320, 0.7, 0.002, 0.08, 0.07, 0.02);
+      toneVoice(t, 'square', 260, 110, 0.09, 0.002, 0.09, 0.06, 0.015);
+    }
+  },
+  // a soft rising tick when a shot is fired at you from outside your vision
+  incoming() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sine', 1500, 2400, 0.06, 0.002, 0.05, 0.05, 0.02);
+  },
+  // player lobs a grenade — a short airy whuff + a pin-pull tick
+  grenadeThrow() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.16, 'bandpass', 500, 1500, 0.9, 0.004, 0.14, 0.09, 0.02);
+    toneVoice(t, 'square', 2400, 2400, 0, 0.001, 0.01, 0.04, 0.01);
+  },
   // empty chamber: a short mechanical click, quiet
   dryFire() {
     if (!ctx) return;

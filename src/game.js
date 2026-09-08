@@ -2955,7 +2955,14 @@ function drawWallTops(ctx, g, R, dim) {
 
 function drawGrenade(ctx, gr) {
   const pulse = 0.5 + 0.5 * Math.sin(gr.fuse * 40);
+  // visual-only arc: up out of the hand, back down onto the floor as it cooks
+  const z = 30 * Math.sin(Math.PI * clamp(1 - gr.fuse / 0.95, 0, 1));
+  drawShadow(ctx, gr.x, gr.y, gr.r * 1.1, z);
+  ctx.save();
+  ctx.translate(0, -z);
   glowCircle(ctx, gr.x, gr.y, gr.r + pulse * 2, '#ff8a3c', 12);
+  ctx.restore();
+  // the blast ring belongs on the ground, not up with the shell
   ctx.strokeStyle = `rgba(255,180,120,${0.25 + 0.25 * pulse})`;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -3057,10 +3064,55 @@ function drawDHD(ctx, c, t, active) {
   ctx.restore();
 }
 
+// ---------------------------------------------------------------- fake-3d light
+
+// one fixed key light, high and to the north-west, so every shadow in the
+// scene falls the same way and the world reads as a single lit space
+const LIGHT = { x: 0.42, y: 0.66 };
+let shadowBlob = null;
+function shadowSprite() {
+  if (shadowBlob) return shadowBlob;
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const c = cv.getContext('2d');
+    const grd = c.createRadialGradient(32, 32, 1, 32, 32, 31);
+    grd.addColorStop(0, 'rgba(0,0,0,0.8)');
+    grd.addColorStop(0.5, 'rgba(0,0,0,0.5)');
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = grd;
+    c.fillRect(0, 0, 64, 64);
+    shadowBlob = cv;
+  } catch (e) {
+    /* headless */
+  }
+  return shadowBlob;
+}
+
+// soft ground shadow offset along the light vector. z lifts the caster: the
+// shadow slides away, shrinks and fades as it climbs.
+function drawShadow(ctx, x, y, r, z, alpha) {
+  const sp = shadowSprite();
+  if (!sp) return;
+  const h = z || 0;
+  const k = 1 / (1 + h / 40);
+  const rx = r * 1.3 * k;
+  const ry = r * 0.66 * k;
+  const cx = x + LIGHT.x * (r * 0.45 + h * 0.6);
+  const cy = y + LIGHT.y * (r * 0.45 + h * 0.6);
+  const a0 = ctx.globalAlpha == null ? 1 : ctx.globalAlpha;
+  ctx.save();
+  ctx.globalAlpha = a0 * (alpha == null ? 1 : alpha) * (0.4 + 0.6 * k);
+  ctx.drawImage(sp, cx - rx, cy - ry, rx * 2, ry * 2);
+  ctx.restore();
+}
+
 // vaguely-humanoid top-down figure: legs trailing, torso, shoulder bar, weapon
 // arm forward, head toward facing.
 function drawHumanoid(ctx, x, y, ang, s, body, head, o) {
   o = o || {};
+  if (o.shadow !== false) drawShadow(ctx, x, y + 2.5 * s, 6.6 * s, o.z || 0);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(ang);
@@ -3256,6 +3308,7 @@ function drawEnemy(ctx, e, t) {
     }
   } else if (e.kind === 'replicator' || e.kind === 'replicator_brute') {
     const brute = e.kind === 'replicator_brute';
+    drawShadow(ctx, e.x, e.y + 3, e.r * 0.95, 0);
     ctx.save();
     ctx.translate(e.x, e.y);
     ctx.rotate(e.wobble * 0.3);
@@ -3363,7 +3416,14 @@ function drawBullet(ctx, b) {
   // threat tiering: the harder a shot hits, the brighter/fatter it reads
   const heavy = b.from === 'enemy' && b.dmg >= 12;
   const big = b.dmg >= 24;
+  // rounds fly at chest height: the sprite rides up, the shadow stays down
+  const z = b.z == null ? 8 : b.z;
   ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  drawShadow(ctx, b.x, b.y, b.r * 1.6, z, 0.8);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(0, -z);
   ctx.strokeStyle = b.color;
   ctx.lineWidth = b.r * (heavy ? 1.4 : 1);
   ctx.lineCap = 'round';
@@ -3475,6 +3535,8 @@ function drawBeam(ctx, bm, t) {
 
 function drawPickup(ctx, pk, playerNear) {
   const y = pk.y + Math.sin(pk.bob) * 3;
+  // the shadow stays pinned to the ground while the item bobs above it
+  drawShadow(ctx, pk.x, pk.y + 3, pk.r * 0.8, 3 - Math.sin(pk.bob) * 3);
 
   if (pk.kind === 'item' && pk.item && ITEMS[pk.item.id]) {
     const def = ITEMS[pk.item.id];

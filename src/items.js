@@ -79,7 +79,7 @@ export const ITEMS = {
     type: 'weapon',
     weapon: 'shotgun',
     color: '#ffd27a',
-    icon: 'G',
+    icon: 'S',
     blurb: 'Seven-pellet spread, heavy knockback. R to reload.',
   },
   w_burst: {

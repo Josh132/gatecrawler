@@ -1,6 +1,6 @@
 import { keys, mouse, pressed, endFrameInput } from './input.js';
 import { WEAPONS } from './weapons.js';
-import { sfx } from './audio.js';
+import { sfx, music, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
 import { TAU, clamp, glowCircle } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
@@ -504,6 +504,11 @@ function update(g, dt) {
   g.time += dt;
   for (const m of g.messages) m.t -= dt;
   if (g.messages.length && g.messages[0].t <= 0) g.messages = g.messages.filter((m) => m.t > 0);
+
+  // global audio keys — work in any state
+  if (pressed('KeyM')) g.message(toggleMute() ? 'Audio muted' : 'Audio on');
+  if (pressed('BracketLeft')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() - 0.1) * 100) + '%');
+  if (pressed('BracketRight')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() + 0.1) * 100) + '%');
 
   if (g.state === 'play') {
     if (pressed('Tab') || pressed('KeyI')) togglePanel(g);
@@ -1030,14 +1035,33 @@ function updatePlay(g, dt) {
 
   if (p.hp <= 0 && p.alive) onDeath(g);
 
-  // camera
-  const laX = Math.cos(p.aim) * 55;
-  const laY = Math.sin(p.aim) * 55;
+  // camera look-ahead: blend where you're aiming with where you're moving so
+  // the view leads the action without snapping around every time you flick aim
+  const camSpd = Math.hypot(p.vx || 0, p.vy || 0);
+  const velX = camSpd > 1 ? (p.vx / camSpd) * 42 : 0;
+  const velY = camSpd > 1 ? (p.vy / camSpd) * 42 : 0;
+  const laX = Math.cos(p.aim) * 34 + velX;
+  const laY = Math.sin(p.aim) * 34 + velY;
   g.cam.x += (p.x + laX - g.cam.x) * Math.min(1, 6 * dt);
   g.cam.y += (p.y + laY - g.cam.y) * Math.min(1, 6 * dt);
   clampCam(g);
   g.shake -= g.shake * Math.min(1, 5 * dt);
   if (g.shake < 0.2) g.shake = 0;
+
+  // audio: ambient bed tracks the threat, plus a low-HP heartbeat
+  const fighting = g.enemies.some((e) => e.alive && e.state === 'active' && !e.hunter);
+  const intensity = Math.min(1, g.heat / 3.5 + (fighting ? 0.35 : 0) + (g.dhdActive === false && g.curRoom === w.dhdRoom ? 0.4 : 0));
+  g._musIntT = (g._musIntT || 0) - dt;
+  if (g._musIntT <= 0) {
+    g._musIntT = 0.5;
+    if (music && music.setIntensity) music.setIntensity(intensity);
+  }
+  const hpFrac = p.hp / p.maxHp;
+  g._lowHpT = (g._lowHpT || 0) - dt;
+  if (hpFrac > 0 && hpFrac < 0.3 && p.alive && g._lowHpT <= 0) {
+    g._lowHpT = 0.55 + hpFrac; // faster beat the lower you are
+    sfx.lowHp();
+  }
 }
 
 function updateModifiers(g, dt) {
@@ -4064,7 +4088,7 @@ function panelDrop(g) {
 
 function renderPanel(g) {
   const { ctx, view } = g;
-  ctx.fillStyle = 'rgba(4,6,12,0.82)';
+  ctx.fillStyle = 'rgba(4,6,12,0.93)';
   ctx.fillRect(0, 0, view.w, view.h);
 
   const lay = panelLayout(g);
@@ -4590,7 +4614,7 @@ function renderHub(g) {
 
 function panelFrame(g, title, sub) {
   const { ctx, view } = g;
-  ctx.fillStyle = 'rgba(4,6,12,0.82)';
+  ctx.fillStyle = 'rgba(4,6,12,0.93)';
   ctx.fillRect(0, 0, view.w, view.h);
   const w = Math.min(760, view.w - 80);
   const h = Math.min(520, view.h - 80);
@@ -4913,9 +4937,11 @@ function renderGateMap(g) {
     ctx.textAlign = 'center';
     ctx.font = '11px monospace';
     ctx.fillStyle = '#9ab';
-    const nextThreat = canSee && g.mapNodes[0] ? g.mapNodes[0].prev.threat : g.params.threat + 1;
+    const nextThreat = canSee && g.mapNodes[0] ? g.mapNodes[0].prev.threat : null;
+    const threatTxt = nextThreat != null ? `threat ${nextThreat}` : `threat unknown`;
+    const costTxt = dialCost > 0 ? `pay ${dialCost} naquadah, ` : ``;
     ctx.fillText(
-      `DESCEND — pay ${dialCost} naquadah, heat rises, threat ~${nextThreat}, better loot` +
+      `DESCEND — ${costTxt}heat rises, ${threatTxt}, better loot` +
         `      ·      DIAL HOME — keep it all, run ends`,
       cx,
       view.h - 84

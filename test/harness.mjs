@@ -780,6 +780,169 @@ section('inventory (live): armour cuts damage, thrown grenade damages enemies');
   assert(g.grenades.length === 0, 'grenade: detonated grenade is removed');
 }
 
+// ---------------------------------------------------------------- 3f. new weapons + reload
+section('weapons: shotgun/burst/launcher/beam fire, consume mag, reload from reserve');
+{
+  const { WEAPONS } = await import('../src/weapons.js');
+  const { Enemy } = await import('../src/entities.js');
+
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  assert(g.state === 'play', 'weapons: run started');
+  const p = g.player;
+  p.iframe = 1e6; // this bench is about the guns, not survival
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+
+  const equip = (wid) => {
+    g.inv.equip.weapon1 = { id: 'w_' + wid, count: 1 };
+    g.inv.active = 'weapon1';
+    assert(inv.activeWeaponId(g.inv) === wid, `weapons: w_${wid} resolves to ${wid}`);
+  };
+  const resetGun = (wid) => {
+    delete p.mag[wid];
+    p.ammo[wid] = WEAPONS[wid].ammoMax;
+    p.cool = 0;
+    p.reloadT = 0;
+    p.reloading = false;
+    p.burstN = 0;
+    p.stun = 0;
+    p.dodge = 0;
+    p.aim = 0;
+    input.mouse.down = false;
+    g.mouseWasDown = false;
+  };
+
+  // --- fire + mag decrement + manual R reload for the magazine weapons
+  for (const wid of ['shotgun', 'burst', 'launcher']) {
+    equip(wid);
+    const wp = WEAPONS[wid];
+    resetGun(wid);
+    tick(gApi, g); // lazy-init p.mag[wid]
+    assert(p.mag[wid] === wp.mag, `weapons: ${wid} mag lazily inits to ${wp.mag} (got ${p.mag[wid]})`);
+
+    const before = g.bullets.length;
+    g.mouseWasDown = false;
+    input.mouse.down = true; // trigger down-edge
+    tick(gApi, g);
+    input.mouse.down = false;
+    assert(g.bullets.length > before, `weapons: ${wid} spawned projectiles`);
+    for (let f = 0; f < 30; f++) tick(gApi, g); // let a burst finish / cool
+    const magAfterFire = p.mag[wid];
+    assert(magAfterFire < wp.mag, `weapons: ${wid} firing consumed mag (${wp.mag} -> ${magAfterFire})`);
+
+    // top the reserve back up, then reload with R
+    p.ammo[wid] = wp.ammoMax;
+    keyDown('KeyR');
+    tick(gApi, g);
+    keyUp('KeyR');
+    assert(p.reloadT > 0 || p.mag[wid] === wp.mag, `weapons: ${wid} R begins a reload`);
+    for (let f = 0; f < 150; f++) tick(gApi, g); // > 1.6s reloads finish
+    assert(p.mag[wid] === wp.mag, `weapons: ${wid} reload refilled the mag (got ${p.mag[wid]})`);
+    assert(
+      p.ammo[wid] === wp.ammoMax - (wp.mag - magAfterFire),
+      `weapons: ${wid} reload pulled the delta from reserve (reserve ${p.ammo[wid]})`
+    );
+  }
+
+  // --- burst rifle really queues the extra rounds off one click
+  equip('burst');
+  resetGun('burst');
+  tick(gApi, g);
+  const bm0 = p.mag.burst;
+  g.mouseWasDown = false;
+  input.mouse.down = true;
+  tick(gApi, g);
+  input.mouse.down = false;
+  for (let f = 0; f < 24; f++) tick(gApi, g);
+  assert(
+    bm0 - p.mag.burst === WEAPONS.burst.burst,
+    `weapons: one click fired a ${WEAPONS.burst.burst}-round burst (used ${bm0 - p.mag.burst})`
+  );
+
+  // --- launcher blast damages an enemy the shell never directly touches
+  equip('launcher');
+  resetGun('launcher');
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+  const lfoe = new Enemy('jaffa', p.x + 240, p.y + 60, 3);
+  lfoe.state = 'idle';
+  lfoe._room = g.curRoom;
+  lfoe.hp = lfoe.maxHp = 600;
+  g.enemies.push(lfoe);
+  tick(gApi, g);
+  g.mouseWasDown = false;
+  input.mouse.down = true;
+  tick(gApi, g);
+  input.mouse.down = false;
+  const shell = g.bullets[g.bullets.length - 1];
+  assert(!!shell && shell.explode, 'weapons: launcher shell is explosive');
+  if (shell) {
+    shell.x = lfoe.x - 45; // land it beside the foe, not on it
+    shell.y = lfoe.y;
+    shell.vx = shell.vy = 0;
+    shell.life = 0.01;
+  }
+  const lhp0 = lfoe.hp;
+  tick(gApi, g);
+  tick(gApi, g);
+  assert(lfoe.hp < lhp0, `weapons: launcher blast caught the nearby enemy (${lhp0} -> ${lfoe.hp | 0})`);
+
+  // --- beam: continuous hitscan damages the first enemy on the ray and drains its cell
+  equip('beam');
+  resetGun('beam');
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+  // aim down an axis that is clear of walls for at least 140px
+  let bang = 0;
+  for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    let clear = true;
+    for (let d = 20; d <= 140 && clear; d += 10) {
+      if (tileAt(g.world, p.x + Math.cos(a) * d, p.y + Math.sin(a) * d) === 1) clear = false;
+    }
+    if (clear) {
+      bang = a;
+      break;
+    }
+  }
+  const zfoe = new Enemy('jaffa', p.x + Math.cos(bang) * 110, p.y + Math.sin(bang) * 110, 3);
+  zfoe.state = 'idle';
+  zfoe._room = g.curRoom;
+  zfoe.hp = zfoe.maxHp = 600;
+  g.enemies.push(zfoe);
+  // updatePlay derives p.aim from the mouse, so steer the mouse onto the foe each frame
+  const aimAt = (t) => {
+    input.mouse.x = t.x - g.cam.x + g.view.w / 2;
+    input.mouse.y = t.y - g.cam.y + g.view.h / 2;
+  };
+  aimAt(zfoe);
+  tick(gApi, g);
+  const beamMag0 = p.mag.beam;
+  const zhp0 = zfoe.hp;
+  input.mouse.down = true;
+  for (let f = 0; f < 45; f++) {
+    aimAt(zfoe);
+    tick(gApi, g);
+  }
+  input.mouse.down = false;
+  assert(zfoe.hp < zhp0, `weapons: beam burned the enemy on the ray (${zhp0} -> ${zfoe.hp | 0})`);
+  assert(p.mag.beam < beamMag0, `weapons: beam drained its cell while held (${beamMag0.toFixed(1)} -> ${p.mag.beam.toFixed(1)})`);
+  assert(!!g.player.beam && typeof g.player.beam === 'object', 'weapons: beam exposes render state');
+
+  // --- restore a clean slate for the sections that follow
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+  g.inv.equip.weapon1 = { id: 'w_p90', count: 1 };
+  g.inv.equip.weapon2 = null;
+  g.inv.active = 'weapon1';
+  p.iframe = 0;
+  p.reloadT = 0;
+  p.burstN = 0;
+  input.mouse.down = false;
+  g.mouseWasDown = false;
+}
+
 // ---------------------------------------------------------------- 4. requisition / persistence
 section('meta: requisition + persistence');
 {

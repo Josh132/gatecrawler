@@ -351,6 +351,8 @@ function updatePlay(g, dt) {
   // hotbar consumables / weapon swap / grenade
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
   if (pressed('KeyQ')) {
+    cancelReload(p); // swapping weapons aborts a reload in progress
+    p.burstN = 0;
     const wid = toggleWeapon(g.inv);
     g.message('Weapon: ' + (ITEMS[weaponItemId(g.inv)] ? ITEMS[weaponItemId(g.inv)].name : wid));
   }
@@ -358,20 +360,71 @@ function updatePlay(g, dt) {
 
   // fire
   p.cool -= dt;
+  if (p.reloadT > 0) {
+    p.reloadT -= dt;
+    if (p.reloadT <= 0) finishReload(p);
+  }
   const wid = activeWeaponId(g.inv);
   const wp = WEAPONS[wid];
-  const mdEdge = mouse.down && !g.mouseWasDown;
-  const wantFire = wp.auto ? mouse.down : mdEdge;
-  const ammoLeft = wp.ammoMax === Infinity ? Infinity : p.ammo[wid] || 0;
-  const blocked = g.emp && wp.energy;
-  if (wantFire && p.cool <= 0 && p.dodge <= 0 && p.stun <= 0) {
-    if (blocked || ammoLeft <= 0) {
-      if (mdEdge) sfx.hit();
-      p.cool = 0.12;
-    } else {
-      fireWeapon(g, p, wp);
-      p.cool = wp.fireRate * (stim ? 0.6 : 1);
-      if (wp.ammoMax !== Infinity) p.ammo[wid]--;
+  const hasMag = wp.mag != null;
+  if (wp.ammoMax !== Infinity && p.ammo[wid] == null) p.ammo[wid] = wp.ammoMax; // first pickup grants a full reserve
+  if (hasMag && p.mag[wid] == null) p.mag[wid] = Math.min(wp.mag, p.ammo[wid] || 0);
+
+  // manual reload (R)
+  if (hasMag && pressed('KeyR') && p.reloadT <= 0 && (p.mag[wid] || 0) < wp.mag && (p.ammo[wid] || 0) > 0) {
+    startReload(g, p, wid);
+  }
+
+  const coolMul = stim ? 0.6 : 1;
+
+  if (wp.hitscan) {
+    fireBeam(g, p, wp, dt);
+  } else {
+    if (p.beam) p.beam.on = false;
+    const mdEdge = mouse.down && !g.mouseWasDown;
+    const wantFire = wp.auto ? mouse.down : mdEdge;
+    const blocked = g.emp && wp.energy;
+    const canAct = p.cool <= 0 && p.dodge <= 0 && p.stun <= 0 && p.reloadT <= 0;
+    const ammoOK = hasMag ? (p.mag[wid] || 0) > 0 : wp.ammoMax === Infinity || (p.ammo[wid] || 0) > 0;
+
+    // keep an in-progress burst rolling, independent of the trigger
+    if (p.burstN > 0 && p.burstWid === wid) {
+      if (p.dodge > 0 || p.stun > 0 || p.reloadT > 0) {
+        p.burstN = 0;
+      } else {
+        p.burstT -= dt;
+        while (p.burstN > 0 && p.burstT <= 0) {
+          if (hasMag && (p.mag[wid] || 0) <= 0) {
+            p.burstN = 0;
+            break;
+          }
+          fireWeapon(g, p, wp);
+          if (hasMag) p.mag[wid]--;
+          else if (wp.ammoMax !== Infinity) p.ammo[wid]--;
+          p.burstN--;
+          p.burstT += wp.burstDelay || 0.06;
+        }
+        if (p.burstN <= 0 && hasMag && (p.mag[wid] || 0) <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
+      }
+    }
+
+    if (wantFire && canAct && p.burstN <= 0) {
+      if (blocked || !ammoOK) {
+        if (mdEdge) sfx.hit();
+        p.cool = 0.12;
+        if (!blocked && hasMag && (p.mag[wid] || 0) <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
+      } else {
+        fireWeapon(g, p, wp);
+        if (hasMag) p.mag[wid]--;
+        else if (wp.ammoMax !== Infinity) p.ammo[wid]--;
+        p.cool = wp.fireRate * coolMul;
+        if (wp.burst > 1) {
+          p.burstWid = wid;
+          p.burstN = wp.burst - 1;
+          p.burstT = wp.burstDelay || 0.06;
+        }
+        if (hasMag && (p.mag[wid] || 0) <= 0 && (p.ammo[wid] || 0) > 0 && !(wp.burst > 1)) startReload(g, p, wid);
+      }
     }
   }
 
@@ -574,7 +627,16 @@ function rollLoot(R, threat) {
       : R.pick(['a_visor', 'a_vest', 'a_greaves', 'a_boots']);
     return { id: armor, count: 1 };
   }
-  return { id: R.pick(['w_staff', 'w_zat']), count: 1 };
+  // launcher is deliberately scarce; everything else shares the common weapon roll
+  const wid = R.chance(0.12) ? 'w_launcher' : R.pick(['w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam']);
+  return { id: wid, count: 1 };
+}
+
+// a weapon drop for the kill tables — launcher stays rare here too
+function rollWeaponItem() {
+  if (Math.random() < 0.1) return 'w_launcher';
+  const t = ['w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam'];
+  return t[Math.floor(Math.random() * t.length)];
 }
 
 // faction rosters — factions never mix within a world.
@@ -775,6 +837,110 @@ function explode(g, gr) {
 
 // ---------------------------------------------------------------- combat
 
+function startReload(g, p, wid) {
+  const wp = WEAPONS[wid];
+  if (!wp || wp.mag == null) return;
+  p.reloadT = wp.reload || 1.1;
+  p.reloadDur = p.reloadT;
+  p.reloading = true;
+  p.reloadWid = wid;
+  p.burstN = 0;
+  if (p.beam) p.beam.on = false;
+  sfx.pickup();
+}
+
+function finishReload(p) {
+  const wid = p.reloadWid;
+  p.reloading = false;
+  p.reloadT = 0;
+  const wp = wid && WEAPONS[wid];
+  if (!wp || wp.mag == null) return;
+  const cur = p.mag[wid] || 0;
+  const take = Math.max(0, Math.min(wp.mag - cur, p.ammo[wid] || 0));
+  p.mag[wid] = cur + take;
+  p.ammo[wid] = (p.ammo[wid] || 0) - take;
+}
+
+function cancelReload(p) {
+  p.reloading = false;
+  p.reloadT = 0;
+  p.reloadWid = null;
+}
+
+// continuous hitscan beam: rays out to the first wall/enemy, ticks damage,
+// drains the loaded cell, and forces a recharge when the cell runs dry.
+function fireBeam(g, p, wp, dt) {
+  const wid = 'beam';
+  if (!p.beam) p.beam = { on: false };
+  const blocked = g.emp && wp.energy;
+  const held = mouse.down;
+  const dry = (p.mag[wid] || 0) <= 0;
+  if (!held || p.reloadT > 0 || p.stun > 0 || p.dodge > 0 || blocked || dry) {
+    p.beam.on = false;
+    if (held && !blocked && dry && p.reloadT <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
+    return;
+  }
+  const dx = Math.cos(p.aim);
+  const dy = Math.sin(p.aim);
+  const ox = p.x + dx * 16;
+  const oy = p.y + dy * 16;
+  const range = wp.range || 460;
+  let hx = ox + dx * range;
+  let hy = oy + dy * range;
+  let target = null;
+  const step = 7;
+  for (let d = 0; d <= range; d += step) {
+    const x = ox + dx * d;
+    const y = oy + dy * d;
+    if (tileAt(g.world, x, y) === 1) {
+      hx = x;
+      hy = y;
+      break;
+    }
+    let found = null;
+    for (const e of g.enemies) {
+      if (!e.alive) continue;
+      const rr2 = (e.r + 5) ** 2;
+      if ((e.x - x) ** 2 + (e.y - y) ** 2 <= rr2) {
+        found = e;
+        break;
+      }
+    }
+    if (found) {
+      target = found;
+      hx = found.x;
+      hy = found.y;
+      break;
+    }
+  }
+  p.beam = { on: true, x1: ox, y1: oy, x2: hx, y2: hy, color: wp.color };
+  p.mag[wid] = Math.max(0, (p.mag[wid] || 0) - (wp.drain || 20) * dt);
+  p.beamTick -= dt;
+  if (target && p.beamTick <= 0) {
+    p.beamTick = 0.09;
+    hitEnemy(g, target, {
+      x: hx,
+      y: hy,
+      vx: dx,
+      vy: dy,
+      dmg: (wp.dps || 40) * 0.09,
+      energy: true,
+      knockback: 0,
+      stun: 0,
+      color: wp.color,
+    });
+  }
+  g.shake = Math.min(14, g.shake + 0.5);
+  for (let i = 0; i < 2; i++) {
+    g.particles.push(new Particle(hx, hy, rr(-90, 90), rr(-90, 90), rr(0.1, 0.24), wp.color, rr(1.5, 3)));
+  }
+}
+
+// radial blast from a bullet's terminal point (grenade launcher shells)
+function bulletExplode(g, b) {
+  explode(g, { x: b.x, y: b.y, dmg: b.blastDmg, radius: b.blastRadius, from: b.from });
+}
+
 function fireWeapon(g, p, wp) {
   const muzzle = 18;
   for (let i = 0; i < wp.pellets; i++) {
@@ -792,8 +958,11 @@ function fireWeapon(g, p, wp) {
           knockback: wp.knockback,
           energy: wp.energy,
           stun: wp.stun || 0,
-          r: wp.energy ? 5 : 3,
-          life: 2.2,
+          r: wp.blastRadius ? 6 : wp.energy ? 5 : 3,
+          life: wp.blastRadius ? 2.6 : 2.2,
+          explode: !!wp.blastRadius,
+          blastDmg: wp.blastDmg || 0,
+          blastRadius: wp.blastRadius || 0,
         }
       )
     );
@@ -829,6 +998,7 @@ function updateBullet(g, b, dt) {
   b.life -= dt;
   if (b.life <= 0) {
     b.alive = false;
+    if (b.explode) bulletExplode(g, b);
     return;
   }
   b.trail.push({ x: b.x, y: b.y });
@@ -839,7 +1009,8 @@ function updateBullet(g, b, dt) {
     b.y += (b.vy * dt) / sub;
     if (tileAt(g.world, b.x, b.y) === 1) {
       b.alive = false;
-      spark(g, b.x, b.y, b.color);
+      if (b.explode) bulletExplode(g, b);
+      else spark(g, b.x, b.y, b.color);
       return;
     }
     if (b.from === 'player') {
@@ -849,6 +1020,7 @@ function updateBullet(g, b, dt) {
         if ((b.x - e.x) ** 2 + (b.y - e.y) ** 2 <= rad * rad) {
           hitEnemy(g, e, b);
           b.alive = false;
+          if (b.explode) bulletExplode(g, b);
           return;
         }
       }
@@ -859,6 +1031,7 @@ function updateBullet(g, b, dt) {
           bl.alive = false;
           spark(g, bl.x, bl.y, '#b6f0ff');
           b.alive = false;
+          if (b.explode) bulletExplode(g, b);
           return;
         }
       }
@@ -984,6 +1157,7 @@ function killEnemy(g, e) {
 
   if (dead) {
     drop('w_staff', 1, -18, -6);
+    drop(rollWeaponItem(), 1, -18, 12);
     drop(Math.random() < 0.5 ? 'a_plate' : 'a_helm', 1, 18, -6);
     drop('medkit', 2, 0, 16);
     drop('frag', 2, -16, 16);
@@ -999,13 +1173,13 @@ function killEnemy(g, e) {
     if (r < (heavy ? 0.4 : 0.16)) drop(heavy ? 'a_plate' : 'bandage', 1, 0, 12);
     else if (r < 0.28) drop('frag', 1, 0, 12);
     else if (r < 0.35) drop(rollArmor(), 1, 0, 12);
-    else if (r < 0.38) drop('w_staff', 1, 0, 12);
+    else if (r < 0.38) drop(rollWeaponItem(), 1, 0, 12);
   } else if (e.kind.startsWith('replicator')) {
     g.pickups.push(new Pickup('naquadah', e.x, e.y, (e._reformed ? 8 : 4) * mult));
     const r = Math.random();
     if (r < 0.14) drop('shieldcell', 1, 0, 10);
     else if (r < 0.22) drop('bandage', 1, 0, 10);
-    else if (e._reformed && r < 0.3) drop('w_zat', 1, 0, 10);
+    else if (e._reformed && r < 0.3) drop(rollWeaponItem(), 1, 0, 10);
   } else {
     // wraith / wraith_drone
     g.pickups.push(new Pickup('naquadah', e.x, e.y, 4 * mult));
@@ -1914,6 +2088,7 @@ function renderPlay(g, dim) {
   }
   ctx.globalAlpha = 1;
   for (const b of g.bullets) drawBullet(ctx, b);
+  if (g.player.beam && g.player.beam.on) drawBeam(ctx, g.player.beam, g.time);
   ctx.globalCompositeOperation = 'source-over';
 
   for (const gr of g.grenades) drawGrenade(ctx, gr);
@@ -2252,6 +2427,32 @@ function drawBullet(ctx, b) {
   ctx.restore();
 }
 
+function drawBeam(ctx, bm, t) {
+  const col = bm.color || '#7dd3fc';
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.shadowBlur = 16;
+  ctx.shadowColor = col;
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 4 + Math.sin((t || 0) * 40) * 0.8;
+  ctx.beginPath();
+  ctx.moveTo(bm.x1, bm.y1);
+  ctx.lineTo(bm.x2, bm.y2);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(bm.x1, bm.y1);
+  ctx.lineTo(bm.x2, bm.y2);
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(bm.x2, bm.y2, 4, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawPickup(ctx, pk) {
   const y = pk.y + Math.sin(pk.bob) * 3;
   const cmap = { naquadah: '#8ef', 'staff-ammo': '#ffb347', health: '#7ef77e', 'weapon-staff': '#ffd54a' };
@@ -2318,12 +2519,26 @@ function renderHUD(g) {
   const witem = ITEMS[weaponItemId(g.inv)];
   ctx.fillStyle = wp.color;
   ctx.font = 'bold 13px monospace';
-  const ammo = wp.ammoMax === Infinity ? '∞' : p.ammo[wid] || 0;
+  const wLineY = by - (p.shieldMax > 0 ? 16 : 8);
+  let ammoStr;
+  if (wp.ammoMax === Infinity) ammoStr = '∞';
+  else if (wp.mag != null) ammoStr = `${Math.ceil(p.mag[wid] != null ? p.mag[wid] : wp.mag)} / ${p.ammo[wid] || 0}`;
+  else ammoStr = `${p.ammo[wid] || 0}`;
   ctx.fillText(
-    `${witem ? witem.name : wp.name}  ${ammo}${g.inv.equip.weapon2 ? '   [Q swap]' : ''}`,
+    `${witem ? witem.name : wp.name}  ${ammoStr}${g.inv.equip.weapon2 ? '   [Q]' : ''}`,
     bx,
-    by - (p.shieldMax > 0 ? 16 : 8)
+    wLineY
   );
+  if (p.reloadT > 0 && p.reloadWid === wid) {
+    const rf = clamp(1 - p.reloadT / (p.reloadDur || 1), 0, 1);
+    ctx.fillStyle = '#ffd54a';
+    ctx.font = '10px monospace';
+    ctx.fillText('RELOADING', bx + 150, wLineY);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bx + 150, wLineY + 3, 62, 4);
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillRect(bx + 150, wLineY + 3, 62 * rf, 4);
+  }
 
   ctx.fillStyle = p.dodgeCd > 0 ? 'rgba(120,230,255,0.25)' : '#7fe8ff';
   ctx.fillRect(bx + bw + 10, by, 14, bh);

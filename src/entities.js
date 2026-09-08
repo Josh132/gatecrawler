@@ -48,7 +48,17 @@ export class Player {
     this.maxHp = 100;
     this.aim = 0;
     this.speed = 232;
-    this.ammo = { staff: 0, zat: 0 };
+    this.ammo = { staff: 0, zat: 0 }; // reserve rounds per weapon id
+    this.mag = {}; // loaded rounds per weapon id (lazily filled on first use)
+    this.reloadT = 0;
+    this.reloadDur = 0;
+    this.reloading = false;
+    this.reloadWid = null;
+    this.burstN = 0; // queued shots left in the current burst
+    this.burstT = 0;
+    this.burstWid = null;
+    this.beam = null; // { on, x1, y1, x2, y2, color } render state for the ion beam
+    this.beamTick = 0;
     this.cool = 0;
     this.dodge = 0;
     this.dodgeCd = 0;
@@ -151,6 +161,9 @@ export class Bullet {
     this.knockback = opt.knockback || 0;
     this.energy = !!opt.energy;
     this.stun = opt.stun || 0;
+    this.explode = !!opt.explode; // detonates a radial blast on hit / expiry
+    this.blastDmg = opt.blastDmg || 0;
+    this.blastRadius = opt.blastRadius || 0;
     this.trail = [];
     this.alive = true;
   }

@@ -72,6 +72,38 @@ export const ITEMS = {
     icon: 'Z',
     blurb: 'Fast energy bolts that briefly stun.',
   },
+  w_shotgun: {
+    name: 'Assault Shotgun',
+    type: 'weapon',
+    weapon: 'shotgun',
+    color: '#ffd27a',
+    icon: 'G',
+    blurb: 'Seven-pellet spread, heavy knockback. R to reload.',
+  },
+  w_burst: {
+    name: 'Burst Rifle',
+    type: 'weapon',
+    weapon: 'burst',
+    color: '#dfe8ff',
+    icon: 'B',
+    blurb: 'Tight three-round bursts per trigger pull. R to reload.',
+  },
+  w_launcher: {
+    name: 'Grenade Launcher',
+    type: 'weapon',
+    weapon: 'launcher',
+    color: '#ff8a3c',
+    icon: 'L',
+    blurb: 'Slow shells that burst on impact. Scarce. R to reload.',
+  },
+  w_beam: {
+    name: 'Ion Beam',
+    type: 'weapon',
+    weapon: 'beam',
+    color: '#7dd3fc',
+    icon: 'I',
+    blurb: 'Continuous beam. Drains its cell, then recharges.',
+  },
 
   // ---- armour (region slot: head / torso / legs / feet). dr = fraction of a
   // hit to that region that is absorbed. ----

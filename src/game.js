@@ -182,6 +182,7 @@ export function createGame(canvas) {
     grenades: [],
     blocks: [],
     hazards: [],
+    flashes: [], // transient light pops (muzzle, blast) — render only
     decals: [],
     pickups: [],
     particles: [],
@@ -302,6 +303,7 @@ function enterHub(g) {
   g.grenades = [];
   g.blocks = [];
   g.hazards = [];
+  g.flashes = [];
   g.decals = [];
   g.pickups = [];
   g.particles = [];
@@ -373,6 +375,7 @@ function startWorld(g, addr, hop) {
   g.grenades = [];
   g.blocks = [];
   g.hazards = [];
+  g.flashes = [];
   g.decals = [];
   g.pickups = [];
   g.particles = [];
@@ -998,6 +1001,8 @@ function updatePlay(g, dt) {
   g.hazards = g.hazards.filter((x) => x.alive);
   g.pickups = g.pickups.filter((x) => x.alive);
   g.particles = g.particles.filter((x) => x.alive);
+  for (const f of g.flashes) f.t -= dt;
+  g.flashes = g.flashes.filter((f) => f.t > 0);
 
   // room-cleared checks
   for (const rm of w.rooms) {
@@ -1279,6 +1284,7 @@ function throwGrenade(g) {
 
 function explode(g, gr) {
   burst(g, gr.x, gr.y, 42, '#ff8a3c');
+  addFlash(g, gr.x, gr.y, gr.radius * 3.2, '#ffb066', 0.3);
   for (let i = 0; i < 10; i++) {
     g.particles.push(new Particle(gr.x, gr.y, rr(-260, 260), rr(-260, 260), rr(0.2, 0.5), '#ffd27a', rr(2, 4)));
   }
@@ -1474,6 +1480,7 @@ function fireWeapon(g, p, wp, wid) {
       )
     );
   }
+  addFlash(g, p.x + Math.cos(p.aim) * muzzle, p.y + Math.sin(p.aim) * muzzle, wp.energy ? 130 : 82, wp.color, 0.07);
   const recoil = wp.energy ? 120 : scatter ? 90 : 18;
   addShake(g, wp.energy ? 4 : scatter ? 3 : 1.3, Math.cos(p.aim), Math.sin(p.aim));
   p.kx -= Math.cos(p.aim) * recoil;
@@ -1941,6 +1948,7 @@ function jaffaShoot(g, e, spread) {
       life: 2,
     })
   );
+  addFlash(g, e.x + Math.cos(a) * 20, e.y + Math.sin(a) * 20, 86, '#ffc27a', 0.07);
   enemyShotSound(g, e, 'jaffa');
 }
 
@@ -2834,6 +2842,7 @@ function renderPlay(g, dim) {
   const R = worldMods(g).visionR;
   g.visPoly = dim ? null : computeVisPoly(g, R);
   const lit = (x, y) => dim || litAt(g, x, y);
+  drawLights(ctx, g, dim);
 
   if (lit(g.world.gateRoom.centerPx.x, g.world.gateRoom.centerPx.y)) {
     drawGate(ctx, g.world.gateRoom.centerPx, g.time);
@@ -3113,6 +3122,69 @@ function drawShadow(ctx, x, y, r, z, alpha) {
   ctx.save();
   ctx.globalAlpha = a0 * (alpha == null ? 1 : alpha) * (0.4 + 0.6 * k);
   ctx.drawImage(sp, cx - rx, cy - ry, rx * 2, ry * 2);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- lights
+
+// one cached radial sprite per colour, composited additively onto the floor
+const lightCache = new Map();
+function lightSprite(color) {
+  if (lightCache.has(color)) return lightCache.get(color);
+  let sp = null;
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = 128;
+    cv.height = 128;
+    const c = cv.getContext('2d');
+    const grd = c.createRadialGradient(64, 64, 0, 64, 64, 63);
+    grd.addColorStop(0, hexA(color, 0.7));
+    grd.addColorStop(0.35, hexA(color, 0.24));
+    grd.addColorStop(1, hexA(color, 0));
+    c.fillStyle = grd;
+    c.fillRect(0, 0, 128, 128);
+    sp = cv;
+  } catch (e) {
+    /* headless, or a colour hexA can't parse */
+  }
+  lightCache.set(color, sp);
+  return sp;
+}
+
+function addFlash(g, x, y, r, color, life) {
+  if (!g.flashes) return;
+  g.flashes.push({ x, y, r, color, t: life, max: life });
+  if (g.flashes.length > 40) g.flashes.shift();
+}
+
+// every emitter in the world spills coloured light on the floor it stands on,
+// clipped to the visibility polygon so nothing leaks through a wall
+function drawLights(ctx, g, dim) {
+  ctx.save();
+  const poly = g.visPoly;
+  if (!dim && poly && poly.length >= 6) {
+    ctx.beginPath();
+    ctx.moveTo(poly[0], poly[1]);
+    for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
+    ctx.closePath();
+    ctx.clip();
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  const add = (x, y, r, color, a) => {
+    const sp = lightSprite(color);
+    if (!sp) return;
+    ctx.globalAlpha = clamp(a, 0, 1);
+    ctx.drawImage(sp, x - r, y - r, r * 2, r * 2);
+  };
+  add(g.world.gateRoom.centerPx.x, g.world.gateRoom.centerPx.y, 150, '#5aa8ff', 0.5);
+  const dc = g.world.dhdRoom.centerPx;
+  add(dc.x, dc.y, 96, g.dhdActive ? '#5eefff' : '#b04a4a', g.dhdActive ? 0.5 : 0.28);
+  for (const hz of g.hazards) add(hz.x, hz.y, hz.r * 2.1, '#ff8a3c', 0.34 * clamp(hz.life / hz.maxLife, 0, 1));
+  for (const gr of g.grenades) add(gr.x, gr.y, 62, '#ff8a3c', 0.3);
+  for (const b of g.bullets) add(b.x, b.y, b.energy ? 54 : 30, b.color, b.energy ? 0.28 : 0.13);
+  for (const f of g.flashes) add(f.x, f.y, f.r, f.color, 0.6 * clamp(f.t / f.max, 0, 1));
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
   ctx.restore();
 }
 

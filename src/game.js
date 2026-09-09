@@ -3616,11 +3616,20 @@ function fogRGB(g) {
   return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
 }
 
+function isOutdoor(g) {
+  const pal = BIOMES[(g.params && g.params.biome) || 'ruins'];
+  return !!(pal && pal.outdoor);
+}
+
 function drawFog(ctx, g, R) {
   const p = g.player;
   const poly = g.visPoly;
   if (!poly || poly.length < 6) return;
   const rgb = fogRGB(g);
+  // outdoors under open sky: the unseen area is dusk-dim, not pitch black
+  const out = isOutdoor(g);
+  const outerA = out ? 0.8 : 0.95;
+  const edgeA = out ? 0.66 : 0.92;
   const pad = 2600;
   ctx.save();
   ctx.beginPath();
@@ -3628,7 +3637,7 @@ function drawFog(ctx, g, R) {
   ctx.moveTo(poly[0], poly[1]);
   for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
   ctx.closePath();
-  ctx.fillStyle = `rgba(${rgb},0.95)`;
+  ctx.fillStyle = `rgba(${rgb},${outerA})`;
   ctx.fill('evenodd');
 
   ctx.beginPath();
@@ -3638,9 +3647,20 @@ function drawFog(ctx, g, R) {
   ctx.clip();
   const grd = ctx.createRadialGradient(p.x, p.y, R * 0.32, p.x, p.y, R * 1.02);
   grd.addColorStop(0, `rgba(${rgb},0)`);
-  grd.addColorStop(1, `rgba(${rgb},0.92)`);
+  grd.addColorStop(1, `rgba(${rgb},${edgeA})`);
   ctx.fillStyle = grd;
   ctx.fillRect(p.x - R - 4, p.y - R - 4, R * 2 + 8, R * 2 + 8);
+  // a faint sky-light wash lifts the lit ground on surface worlds
+  if (out) {
+    const amb = (BIOMES[g.params.biome] && BIOMES[g.params.biome].ambient) || '#dfe8f0';
+    ctx.globalCompositeOperation = 'lighter';
+    const sg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
+    sg.addColorStop(0, hexA(amb, 0.06));
+    sg.addColorStop(1, hexA(amb, 0));
+    ctx.fillStyle = sg;
+    ctx.fillRect(p.x - R, p.y - R, R * 2, R * 2);
+    ctx.globalCompositeOperation = 'source-over';
+  }
   ctx.restore();
 }
 

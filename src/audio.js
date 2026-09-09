@@ -224,6 +224,117 @@ function beamStop() {
   beamNodes = null;
 }
 
+// --- looping event-horizon shimmer (while a gate stands open) -------------
+let ehNodes = null;
+function ehStart() {
+  if (ehNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer(3);
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 680;
+    bp.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.05, t + 0.4);
+    // slow watery wobble on the cutoff
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.55;
+    const ld = ctx.createGain();
+    ld.gain.value = 260;
+    lfo.connect(ld).connect(bp.frequency);
+    // faint low tonal bed so it has a body
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = 68;
+    const og = ctx.createGain();
+    og.gain.value = 0.022;
+    src.connect(bp).connect(g).connect(busOut());
+    o.connect(og).connect(busOut());
+    src.start(t);
+    lfo.start(t);
+    o.start(t);
+    ehNodes = { g, og, oscs: [src, lfo, o] };
+  } catch (e) {
+    ehNodes = null;
+  }
+}
+function ehStop() {
+  if (!ehNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
+    ehNodes.g.gain.cancelScheduledValues(t);
+    ehNodes.g.gain.setValueAtTime(ehNodes.g.gain.value || 0.05, t);
+    ehNodes.g.gain.linearRampToValueAtTime(0.0001, t + 0.35);
+    ehNodes.og.gain.linearRampToValueAtTime(0.0001, t + 0.35);
+    for (const o of ehNodes.oscs) {
+      try {
+        o.stop(t + 0.45);
+      } catch (e) {}
+    }
+  } catch (e) {}
+  ehNodes = null;
+}
+
+// --- looping SGC alert klaxon (two-tone) --------------------------------
+let klaxonNodes = null;
+function klaxonStart() {
+  if (klaxonNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.11, t + 0.1);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 760;
+    bp.Q.value = 2;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = 660;
+    // square LFO swaps the pitch 660 <-> 800 — the classic two-tone
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 1.5;
+    const ld = ctx.createGain();
+    ld.gain.value = 140;
+    lfo.connect(ld).connect(o.frequency);
+    // amplitude throb locked to the same period
+    const alfo = ctx.createOscillator();
+    alfo.type = 'sine';
+    alfo.frequency.value = 1.5;
+    const ad = ctx.createGain();
+    ad.gain.value = 0.03;
+    alfo.connect(ad).connect(g.gain);
+    o.connect(bp).connect(g).connect(busOut());
+    o.start(t);
+    lfo.start(t);
+    alfo.start(t);
+    klaxonNodes = { g, oscs: [o, lfo, alfo] };
+  } catch (e) {
+    klaxonNodes = null;
+  }
+}
+function klaxonStop() {
+  if (!klaxonNodes || !ctx) return;
+  const t = ctx.currentTime;
+  try {
+    klaxonNodes.g.gain.cancelScheduledValues(t);
+    klaxonNodes.g.gain.setValueAtTime(klaxonNodes.g.gain.value || 0.11, t);
+    klaxonNodes.g.gain.linearRampToValueAtTime(0.0001, t + 0.2);
+    for (const o of klaxonNodes.oscs) {
+      try {
+        o.stop(t + 0.3);
+      } catch (e) {}
+    }
+  } catch (e) {}
+  klaxonNodes = null;
+}
+
 export const sfx = {
   // shot sound, distinct per weapon id; unknown id falls back to the p90 voice
   fire(weaponId) {
@@ -449,6 +560,214 @@ export const sfx = {
     src.connect(lp).connect(g).connect(busOut());
     src.start(t);
     src.stop(t + 1.35);
+  },
+
+  // --- gate dialling ----------------------------------------------------
+  // heavy mechanical ka-CHUNK of a chevron engaging; n 1..7 rises in pitch/tension
+  chevronLock(n) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const k = Math.max(1, Math.min(7, n || 1));
+    const p = (k - 1) / 6; // 0..1 tension
+    // ring rotation grinding to a halt, then the lock slams home
+    toneVoice(t, 'square', 92 + p * 44, 44 + p * 22, 0.09, 0.002, 0.15, 0.26, 0.05);
+    noiseVoice(t, 0.12, 'lowpass', 780 + p * 520, 200, null, 0.001, 0.1, 0.2, 0.03);
+    const t2 = t + 0.06;
+    noiseVoice(t2, 0.09, 'bandpass', 1500 + p * 1500, 1500 + p * 1500, 2 + p * 3, 0.001, 0.08, 0.18, 0.03);
+    toneVoice(t2, 'triangle', 300 + p * 320, 300 + p * 320, 0, 0.001, 0.12, 0.08 + p * 0.06, 0.03);
+    // a rising sub tone underneath that climbs with each chevron
+    toneVoice(t, 'sine', 150 + p * 210, 170 + p * 250, 0.2, 0.02, 0.22, 0.05 + p * 0.04, 0.05);
+  },
+  // the big cinematic kawoosh: unstable vortex whoomp settling into the horizon
+  wormholeOpen() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    // the eruption — long noise whoosh whose cutoff blooms then collapses
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer(2.3);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(150, t);
+    lp.frequency.exponentialRampToValueAtTime(4400, t + 0.35);
+    lp.frequency.exponentialRampToValueAtTime(220, t + 1.95);
+    const g = ctx.createGain();
+    env(g, t, 0.18, 1.85, 0.42);
+    src.connect(lp).connect(g).connect(busOut());
+    src.start(t);
+    src.stop(t + 2.4);
+    // sub whoomp of the unstable vortex punching out
+    toneVoice(t, 'sine', 92, 30, 0.6, 0.02, 0.72, 0.32, 0.1);
+    toneVoice(t + 0.04, 'triangle', 55, 24, 0.9, 0.03, 0.92, 0.16, 0.1);
+    // vortex warble — fast at first, decelerates as it stabilises
+    const warb = ctx.createOscillator();
+    warb.type = 'sawtooth';
+    warb.frequency.setValueAtTime(320, t);
+    warb.frequency.exponentialRampToValueAtTime(120, t + 1.6);
+    const wlfo = ctx.createOscillator();
+    wlfo.type = 'sine';
+    wlfo.frequency.setValueAtTime(19, t);
+    wlfo.frequency.exponentialRampToValueAtTime(3, t + 1.6);
+    const wd = ctx.createGain();
+    wd.gain.value = 42;
+    const wg = ctx.createGain();
+    env(wg, t, 0.1, 1.7, 0.12);
+    wlfo.connect(wd).connect(warb.frequency);
+    warb.connect(wg).connect(busOut());
+    warb.start(t);
+    wlfo.start(t);
+    warb.stop(t + 2.05);
+    wlfo.stop(t + 2.05);
+    // tail: the settled event-horizon shimmer swelling in
+    noiseVoice(t + 1.35, 0.95, 'bandpass', 1200, 900, 6, 0.32, 0.72, 0.06, 0.1);
+  },
+  // start (truthy) / stop the looping low watery event-horizon shimmer; idempotent
+  eventHorizon(on) {
+    if (!ctx) return;
+    if (on) ehStart();
+    else ehStop();
+  },
+  // the sad descending "address unreachable" tri-tone + a dead mechanical clunk
+  dialFail() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    [392, 330, 247].forEach((f, i) => {
+      toneVoice(t + i * 0.18, 'triangle', f, f * 0.995, 0.16, 0.006, 0.22, 0.14, 0.05);
+      toneVoice(t + i * 0.18, 'sine', f / 2, f / 2, 0, 0.006, 0.2, 0.06, 0.05);
+    });
+    noiseVoice(t + 0.6, 0.16, 'lowpass', 480, 150, null, 0.002, 0.14, 0.14, 0.03);
+  },
+
+  // --- hub / alert stings --------------------------------------------
+  // start (truthy) / stop the looping two-tone SGC alert klaxon; idempotent
+  klaxon(on) {
+    if (!ctx) return;
+    if (on) klaxonStart();
+    else klaxonStop();
+  },
+  // short pneumatic blast-door slide + a seating clunk
+  doorServo() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, 0.5, 'bandpass', 1200, 500, 1.2, 0.02, 0.42, 0.12, 0.05); // pneumatic hiss
+    toneVoice(t, 'triangle', 60, 44, 0.4, 0.03, 0.4, 0.14, 0.06); // slab rumble
+    noiseVoice(t, 0.45, 'lowpass', 240, 120, null, 0.02, 0.4, 0.16, 0.05);
+    const t2 = t + 0.46;
+    toneVoice(t2, 'square', 120, 60, 0.06, 0.002, 0.1, 0.2, 0.04); // seats home
+    noiseVoice(t2, 0.08, 'lowpass', 600, 200, null, 0.001, 0.07, 0.16, 0.03);
+  },
+  // a very short filtered "bong" to play ahead of a PA line
+  pa() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sine', 587, 587, 0, 0.004, 0.5, 0.12, 0.08); // D5
+    toneVoice(t, 'sine', 880, 880, 0, 0.004, 0.42, 0.05, 0.08); // A5
+    noiseVoice(t, 0.05, 'bandpass', 900, 900, 1, 0.002, 0.04, 0.03, 0.02); // speaker click
+  },
+
+  // --- extra weapon character --------------------------------------
+  // sparse brass-on-concrete tings you can trigger after a burst
+  p90Tail() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const n = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) {
+      const tt = t + 0.03 + Math.random() * 0.5;
+      const f = 2600 + Math.random() * 2600;
+      toneVoice(tt, 'triangle', f, f * 0.93, 0.05, 0.001, 0.06 + Math.random() * 0.05, 0.05 + Math.random() * 0.04, 0.03);
+      noiseVoice(tt, 0.03, 'bandpass', f * 1.3, f * 1.1, 6, 0.001, 0.03, 0.02, 0.02);
+    }
+  },
+  // weapon-appropriate mag-in / bolt-forward two-part sound (distinct from reloadStart/Done)
+  reloadMag(weaponId) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    if (weaponId === 'staff') {
+      // energy cell seats, then a rising prime whir
+      noiseVoice(t, 0.08, 'lowpass', 700, 300, null, 0.002, 0.07, 0.18, 0.03);
+      toneVoice(t + 0.05, 'sawtooth', 120, 520, 0.35, 0.01, 0.34, 0.06, 0.05);
+    } else if (weaponId === 'shotgun') {
+      // shells thumbed in, then the pump forward
+      noiseVoice(t, 0.04, 'bandpass', 1200, 1200, 3, 0.001, 0.035, 0.14, 0.02);
+      noiseVoice(t + 0.12, 0.04, 'bandpass', 1000, 1000, 3, 0.001, 0.035, 0.14, 0.02);
+      const t2 = t + 0.28;
+      noiseVoice(t2, 0.06, 'bandpass', 1800, 1400, 2.5, 0.001, 0.05, 0.2, 0.02);
+      toneVoice(t2, 'square', 180, 90, 0.03, 0.001, 0.04, 0.1, 0.02);
+    } else if (weaponId === 'zat' || weaponId === 'beam') {
+      // energy weapons: a soft click then a capacitor whine settling
+      toneVoice(t, 'square', 900, 600, 0.03, 0.001, 0.03, 0.1, 0.02);
+      toneVoice(t + 0.04, 'sine', 1800, 1200, 0.4, 0.01, 0.4, 0.04, 0.05);
+    } else {
+      // p90 / burst / launcher: mag rocks in, then charging handle forward
+      noiseVoice(t, 0.06, 'lowpass', 1100, 500, null, 0.001, 0.05, 0.18, 0.02);
+      toneVoice(t, 'square', 320, 160, 0.03, 0.001, 0.03, 0.1, 0.02);
+      const t2 = t + 0.16;
+      noiseVoice(t2, 0.05, 'bandpass', 2400, 1600, 2, 0.001, 0.045, 0.22, 0.02);
+      toneVoice(t2, 'square', 260, 130, 0.02, 0.001, 0.03, 0.12, 0.02);
+      toneVoice(t2 + 0.01, 'triangle', 3000, 3000, 0, 0.002, 0.05, 0.04, 0.02);
+    }
+  },
+
+  // --- player state cues ------------------------------------------
+  // shield collapse: a glassy shatter over a low pitch drop
+  shieldBreak() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    for (let i = 0; i < 5; i++) {
+      const tt = t + Math.random() * 0.12;
+      const f = 3200 + Math.random() * 3800;
+      toneVoice(tt, 'triangle', f, f * 0.8, 0.08, 0.001, 0.09, 0.06, 0.03);
+    }
+    noiseVoice(t, 0.18, 'highpass', 4000, 2500, 0.7, 0.001, 0.16, 0.14, 0.03);
+    toneVoice(t, 'sawtooth', 300, 42, 0.28, 0.004, 0.3, 0.2, 0.06);
+    toneVoice(t + 0.02, 'sine', 90, 30, 0.3, 0.005, 0.3, 0.12, 0.06);
+  },
+  // shield restored: a rising hum that settles onto a soft chord
+  shieldRecharge() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sawtooth', 120, 440, 0.5, 0.05, 0.5, 0.08, 0.08);
+    toneVoice(t, 'sine', 240, 880, 0.55, 0.05, 0.55, 0.04, 0.08);
+    toneVoice(t + 0.5, 'triangle', 660, 660, 0, 0.02, 0.3, 0.05, 0.05);
+    noiseVoice(t, 0.5, 'bandpass', 600, 2600, 4, 0.05, 0.45, 0.03, 0.05);
+  },
+  // brighter arpeggio than pickup() for good/epic/legendary loot; legendary gets a shimmer tail
+  pickupRare(tier) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const scales = {
+      good: [659, 988, 1319],
+      epic: [659, 988, 1319, 1760],
+      legendary: [523, 784, 1046, 1568, 2093],
+    };
+    const notes = scales[tier] || scales.good;
+    notes.forEach((f, i) => {
+      toneVoice(t + i * 0.06, 'triangle', f, f, 0, 0.002, 0.16, 0.13, 0.04);
+      toneVoice(t + i * 0.06, 'sine', f * 2, f * 2, 0, 0.002, 0.1, 0.04, 0.04);
+    });
+    if (tier === 'legendary') {
+      noiseVoice(t + 0.3, 0.6, 'bandpass', 6000, 3000, 8, 0.02, 0.55, 0.05, 0.08);
+      toneVoice(t + 0.32, 'sine', 2637, 2637, 0, 0.01, 0.5, 0.05, 0.08);
+      toneVoice(t + 0.4, 'sine', 3520, 3520, 0, 0.01, 0.45, 0.035, 0.08);
+    }
+  },
+  // small heal blip — the quick "+HP" tick
+  heal() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sine', 523, 784, 0.12, 0.01, 0.18, 0.1, 0.04);
+    toneVoice(t + 0.06, 'sine', 784, 1046, 0.1, 0.01, 0.16, 0.06, 0.04);
+  },
+  // big heal — a warm rising pad with a sparkle on top, for a full/large restore
+  healBig() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'sine', 261, 523, 0.6, 0.06, 0.6, 0.12, 0.1);
+    toneVoice(t, 'triangle', 392, 784, 0.6, 0.06, 0.6, 0.07, 0.1);
+    toneVoice(t + 0.08, 'sine', 523, 1046, 0.55, 0.05, 0.55, 0.05, 0.1);
+    [1046, 1319, 1568].forEach((f, i) => {
+      toneVoice(t + 0.2 + i * 0.08, 'triangle', f, f, 0, 0.003, 0.2, 0.05, 0.04);
+    });
+    noiseVoice(t, 0.7, 'bandpass', 400, 2000, 3, 0.1, 0.6, 0.03, 0.08);
   },
 };
 

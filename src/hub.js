@@ -3,6 +3,7 @@
 // with the stuff a real mountain base would have. Compatible with the play
 // renderer: same grid/rooms/gateRoom contract, no combat, no fog.
 import { TILE, WALL_H } from './worldgen.js';
+import { campaignStatus } from './campaign.js';
 
 export const HUB_W = 49; // tiles
 export const HUB_H = 28;
@@ -41,8 +42,10 @@ const DIALER_T = { x: 18, y: 20 }; // dialling console in the control room
 // (the old separate Requisitions console folded into it).
 export const STATIONS = [
   { kind: 'armory', tx: 6, ty: 9, label: 'ARMOURY', hint: 'loadout · requisition · gear', room: 'ready' },
+  { kind: 'workbench', tx: 11, ty: 9, label: 'WEAPON WORKBENCH', hint: 'level · mod · sell weapons', room: 'ready' },
   { kind: 'research', tx: 29, ty: 21, label: 'RESEARCH', hint: 'tech tree', room: 'control' },
   { kind: 'infirmary', tx: 44, ty: 9, label: 'INFIRMARY', hint: 'restock supplies', room: 'infirm' },
+  { kind: 'operations', tx: 44, ty: 17, label: 'OPERATIONS', hint: 'the Incursion — current mission', room: 'brief' },
 ];
 
 export function buildHub() {
@@ -1574,6 +1577,19 @@ export function drawHubLive(ctx, world, t, p, save) {
   ctx.fill();
   ctx.restore();
 
+  // the Incursion status, written across the briefing wall board
+  const cs = campaignStatus(save);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 8px monospace';
+  ctx.fillStyle = `rgba(150,225,255,${0.5 + 0.2 * Math.sin(t * 2)})`;
+  const opLine = cs.won
+    ? 'THE INCURSION IS BROKEN'
+    : 'OP: ' + cs.activeName.toUpperCase() + '   —   ' + cs.opsDone + ' / ' + cs.opsTotal;
+  ctx.fillText(opLine, bR.x + bR.w / 2, bR.y + 46);
+  ctx.restore();
+
   // --- ready room: the bench lamp flickers very slightly
   const rR = room('ready').rectPx;
   const lx = rR.x + 78;
@@ -1723,6 +1739,53 @@ export function drawStation(ctx, s, t, near) {
     ctx.moveTo(-9, -1);
     ctx.lineTo(9, -1);
     ctx.stroke();
+  } else if (s.kind === 'workbench') {
+    // a gunsmith's bench: a heavy slab, a bench vice, a pegboard of tools
+    ctx.beginPath();
+    ctx.moveTo(-24, 12);
+    ctx.lineTo(-24, 0);
+    ctx.lineTo(24, 0);
+    ctx.lineTo(24, 12);
+    ctx.stroke();
+    // the vice clamped to the benchtop
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-6, -7, 12, 7);
+    ctx.beginPath();
+    ctx.moveTo(-12, -3.5);
+    ctx.lineTo(12, -3.5);
+    ctx.stroke();
+    // pegboard with a few hung tools
+    ctx.strokeRect(-20, -22, 40, 13);
+    for (let i = -2; i <= 2; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 8, -21);
+      ctx.lineTo(i * 8, -12 - (i & 1) * 3);
+      ctx.stroke();
+    }
+    ctx.fillStyle = near ? 'rgba(140,230,255,0.22)' : 'rgba(90,140,180,0.10)';
+    ctx.fillRect(-18, -20, 36, 4);
+  } else if (s.kind === 'operations') {
+    // a briefing console: raked body + a wide objectives screen + a data spool
+    ctx.beginPath();
+    ctx.moveTo(-20, 12);
+    ctx.lineTo(-20, -4);
+    ctx.lineTo(-12, -14);
+    ctx.lineTo(12, -14);
+    ctx.lineTo(20, -4);
+    ctx.lineTo(20, 12);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-16, -12, 32, 10);
+    // three objective ticks scrolling on the screen
+    for (let i = 0; i < 3; i++) {
+      const w = 4 + ((Math.floor(t * 1.4) + i) % 3) * 6;
+      ctx.beginPath();
+      ctx.moveTo(-12, -9.5 + i * 3.4);
+      ctx.lineTo(-12 + w, -9.5 + i * 3.4);
+      ctx.stroke();
+    }
+    ctx.fillStyle = near ? 'rgba(140,230,255,0.26)' : 'rgba(90,140,180,0.12)';
+    ctx.fillRect(-14, -11, 28, 8 + Math.sin(t * 3 + s.tx) * 1.2);
   } else {
     // a research console: angled body + screen
     ctx.beginPath();

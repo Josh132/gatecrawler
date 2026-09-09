@@ -21,6 +21,7 @@
   const api = createGame(canvas);
   initInput(canvas);
   const g = api.g;
+  if (qs.has('nofx')) g.postfx = false; // skip the webgl grade — headless swiftshader chokes on the readback
   const STEP = 1 / 60;
   const key = (c) => window.dispatchEvent(new KeyboardEvent('keydown', { code: c }));
 

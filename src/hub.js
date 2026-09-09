@@ -377,7 +377,7 @@ function corridorsAndSigns(c, world) {
   // room name stencilled on the inside of each room's north wall
   for (const r of world.rooms) {
     const R = r.rectPx;
-    stencil(c, r.sign, R.x + R.w / 2, R.y - 9, 13, '#9fc4e0', 0.34);
+    stencil(c, r.sign, R.x + R.w / 2, R.y - 9, 12, '#9fc4e0', 0.26);
     // painted floor border so every room has an edge
     c.save();
     c.strokeStyle = 'rgba(150,190,230,0.10)';
@@ -499,8 +499,9 @@ function embarkDecor(c, r, world) {
     c.restore();
   }
 
-  // SGC emblem painted on the floor at the foot of the ramp
-  emblem(c, gc.x, bot + 66, 44);
+  // SGC emblem painted on the floor at the foot of the ramp — kept well clear
+  // of the south doorway and the control-room sign just below it
+  emblem(c, gc.x, bot + 30, 34);
 
   // blast door on the west wall, framing the ready-room doorway
   const dy = P(7);
@@ -562,9 +563,8 @@ function embarkDecor(c, r, world) {
   pool(c, gc.x, gc.y + 40, 190, '#5aa8ff', 0.10);
   pool(c, gc.x, bot + 40, 150, '#cfe0f0', 0.07);
 
-  // stairs marker down to control
-  stencil(c, 'TO CONTROL  ▼', P(19) + TILE, P(15) - 8, 10, '#8fc0e0', 0.45);
-  stencil(c, 'SG TEAMS ONLY', R.x + 106, R.y + R.h - 24, 10, '#7fa8c4', 0.26);
+  // stairs marker down to control (by the doorway, well left of the emblem)
+  stencil(c, 'TO CONTROL  ▼', P(18) + 6, P(15) - 10, 9, '#8fc0e0', 0.4, 'left');
 }
 
 // the wheeled recon probe that goes through first
@@ -881,11 +881,12 @@ function readyDecor(c, r) {
     c.fillRect(-4, 1, 14, 3);
     c.restore();
   }
-  // ammo crates stacked in the corner
-  for (const [x, y] of [[R.w - 92, 30], [R.w - 92, 74], [R.w - 46, 52]]) {
+  // ammo crates stacked in the corner (one small stencil, not three)
+  const crates = [[R.w - 92, 30], [R.w - 92, 74], [R.w - 46, 52]];
+  crates.forEach(([x, y], i) => {
     box(c, R.x + x, R.y + y, 38, 30, 'rgba(38,44,32,0.95)', 'rgba(150,175,120,0.35)', 2);
-    stencil(c, '5.7', R.x + x + 19, R.y + y + 16, 8, '#c9a227', 0.4);
-  }
+    if (i === 2) stencil(c, '5.7', R.x + x + 19, R.y + y + 16, 7, '#c9a227', 0.28);
+  });
   // a bench for kitting up
   box(c, R.x + R.w - 120, R.y + R.h - 74, 96, 22, 'rgba(30,36,44,0.9)', 'rgba(130,160,190,0.3)', 3);
   stencil(c, 'KIT UP', R.x + R.w - 72, R.y + R.h - 40, 9, '#7fa8c4', 0.28);

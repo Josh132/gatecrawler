@@ -289,9 +289,23 @@ export class Decal {
   }
 }
 
-// lingering area-denial: plasma fire from a grenadier's shell
+// per-biome hazard kinds the renderer / game switch on. 'plasma' is the original
+// grenadier-fire behaviour and stays the default so old `new Hazard(x,y,r,life,dps,from)`
+// calls are byte-for-byte unchanged.
+export const HAZARD_KINDS = ['plasma', 'spore', 'steam', 'thin-ice', 'quicksand'];
+
+// area hazard. legacy shape (x,y,r,life,dps,from) is 100% preserved; kind + opts
+// are optional trailing args that unlock the biome variants below.
+//   plasma    — (default) grenadier fire; damages, ticks life down normally
+//   spore     — hive: green cloud, slows (this.slow) + light DoT, room-persistent
+//   steam     — foundry: telegraphed vent that pulses on/off (this.on); no damage while off
+//   thin-ice  — ice: no damage; standT accrues while the player is on it, game sets
+//               this.broken past ~0.8s and decides the payoff (stun / drop)
+//   quicksand — desert: no damage; saps move speed to this.slow while inside
+// room-persistent kinds set this.everlasting — game.js must NOT tick their life down
+// (life/maxLife are still populated so any generic reader keeps working).
 export class Hazard {
-  constructor(x, y, r, life, dps, from) {
+  constructor(x, y, r, life, dps, from, kind = 'plasma', opts = {}) {
     this.x = x;
     this.y = y;
     this.r = r;
@@ -299,7 +313,44 @@ export class Hazard {
     this.maxLife = life;
     this.dps = dps;
     this.from = from; // 'enemy' | 'player'
+    this.kind = kind;
     this.tick = 0;
+    this.phase = Math.random() * Math.PI * 2;
+    // room-persistent unless told otherwise; plasma is the transient exception
+    this.everlasting = opts.everlasting != null ? opts.everlasting : kind !== 'plasma';
+    // move-speed multiplier applied to anyone standing inside (1 == no slow)
+    this.slow =
+      opts.slow != null ? opts.slow : kind === 'spore' ? 0.6 : kind === 'quicksand' ? 0.45 : 1;
+    // steam pulse: on for onT, off for offT; deals no damage while off. telegraphed.
+    this.cycleT = opts.cycleT || 0;
+    this.onT = opts.onT != null ? opts.onT : 1.1;
+    this.offT = opts.offT != null ? opts.offT : 1.6;
+    this.on = opts.on != null ? opts.on : true;
+    // thin-ice: seconds the player has stood here; game flips broken past ~0.8s
+    this.standT = 0;
+    this.broken = false;
+    this.alive = true;
+  }
+}
+
+// temple dart-trap: dormant until the player crosses its trigger line, then it fires.
+// the raycast + bolt spawn are game.js's job — this just holds armed / aim / cooldown.
+// lifecycle: armed && cd<=0  ->  player within triggerR of the forward axis
+//   -> game raycasts along dir up to range, spawns an enemy Bullet, sets armed=false, cd=fireCd
+//   -> cd ticks down; at 0 it re-arms. set alive=false to retire a one-shot trap.
+export class Trap {
+  constructor(x, y, dir, opts = {}) {
+    this.x = x;
+    this.y = y;
+    this.dir = dir; // radians: the way it faces / away from the wall it's mounted on
+    this.kind = opts.kind || 'dart-trap';
+    this.armed = opts.armed != null ? opts.armed : true;
+    this.cd = 0; // seconds until it can fire again
+    this.fireCd = opts.fireCd != null ? opts.fireCd : 1.6; // cd value set after a shot
+    this.triggerR = opts.triggerR != null ? opts.triggerR : 26; // half-width of the trip line
+    this.range = opts.range != null ? opts.range : 360; // how far the bolt reaches
+    this.dmg = opts.dmg != null ? opts.dmg : 22;
+    this.tick = 0; // free-running clock for the telegraph
     this.phase = Math.random() * Math.PI * 2;
     this.alive = true;
   }

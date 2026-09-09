@@ -6,7 +6,7 @@ import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
-import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
+import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid, DataCore, VaultDoor, Captive, Vendor } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import {
   buildHub,
@@ -43,8 +43,11 @@ import {
   claimActiveOperation,
   campaignStatus,
   objectiveLabel,
+  recordEvents,
+  worldAdvancesActive,
   OPERATIONS,
   FINALE,
+  FINALE_ADDRESS,
 } from './campaign.js';
 import {
   modsForWeapon,
@@ -53,6 +56,7 @@ import {
   weaponMaxLevel,
   weaponLevelXp,
   levelForXp,
+  xpForKill,
   upgradeCost,
   installCost,
   uninstallRefund,
@@ -436,12 +440,23 @@ function launchRun(g, addr) {
   g.runIntel = 0;
   g.heat = 0;
   g._firstWorld = true;
+  // per-run campaign event buffer + bookkeeping — flushed in dialHome / onDeath
+  g._events = [{ t: 'runStart' }];
+  g._seenKinds = new Set(); // bestiary: kinds that have gone active this run
+  g._runRoomsCleared = 0; // sectors cleared this run (for surviveRun objective)
+  g._escortSafe = false;
   const hop = e.startHop || 0;
   startWorld(g, addr || g.save.lastAddress || HOME, hop);
 }
 
 function startWorld(g, addr, hop) {
   g.params = worldParams(addr, hop);
+  // hint for worldgen: does this world help the active op? steers special-room weights
+  try {
+    g.params.campaignTarget = worldAdvancesActive(g.save, g.params);
+  } catch (e) {
+    g.params.campaignTarget = false;
+  }
   g.world = buildWorld(g.params);
   g.worldCanvas = bakeWorld(g.world);
   if (ambient && ambient.set) ambient.set(g.params.biome);
@@ -473,6 +488,19 @@ function startWorld(g, addr, hop) {
   g.empT = 10;
   g.flowT = 0;
   g.time = 0;
+  g._worldClearFired = false;
+
+  // per-world special-room state (populateWorld fills these)
+  g.dataCores = [];
+  g.vaultDoors = [];
+  g.vendors = [];
+  g.captives = [];
+  g.arenaRooms = [];
+  g.vendorOpen = null;
+
+  // arrived on this world — depth event toward the active op
+  if (!g._events) g._events = [];
+  g._events.push({ t: 'depth', threat: g.params.threat, hop: hop });
 
   const gr = g.world.gateRoom;
   gr.populated = true;
@@ -510,11 +538,39 @@ function startWorld(g, addr, hop) {
   g.message('Arrived: ' + g.params.address + (g.params.mods.length ? '  [' + modLabels(g.params.mods).join(', ') + ']' : ''));
 }
 
+// fold the run's buffered events into the campaign, then persist. resilient to a
+// malformed save.campaign — ensureCampaign repairs it first.
+function flushEvents(g) {
+  try {
+    ensureCampaign(g.save);
+    recordEvents(g.save, g._events || []);
+  } catch (e) {
+    /* campaign shape was broken beyond repair — drop this batch, keep playing */
+  }
+  g._events = [];
+  persist(g.save);
+}
+
 function dialHome(g) {
   g.save.naquadah += g.runNaq;
   g.save.intel = (g.save.intel || 0) + g.runIntel;
   g.save.runs += 1;
   if (g.params) g.save.deepestThreat = Math.max(g.save.deepestThreat, g.params.threat);
+  // a freed captive standing in the gate room when the dial fires is home safe
+  if (g.captives) {
+    for (let i = 0; i < g.captives.length; i++) {
+      const cap = g.captives[i];
+      if (cap.freed && cap.atGate && cap.hp > 0 && !cap._banked) {
+        cap._banked = true;
+        if (!g._events) g._events = [];
+        g._events.push({ t: 'rescue' });
+        g.message(cap.name + ' — extracted');
+      }
+    }
+  }
+  if (!g._events) g._events = [];
+  g._events.push({ t: 'dialHome', roomsCleared: g._runRoomsCleared || 0, died: false });
+  flushEvents(g);
   g.runNaq = 0;
   g.runIntel = 0;
   enterHub(g);
@@ -533,6 +589,9 @@ function onDeath(g) {
     return;
   }
   p.alive = false;
+  if (!g._events) g._events = [];
+  g._events.push({ t: 'dialHome', roomsCleared: g._runRoomsCleared || 0, died: true });
+  flushEvents(g);
   const keptN = Math.floor(g.runNaq * (e.deathKeepFrac != null ? e.deathKeepFrac : 0.5));
   g.save.naquadah += keptN;
   g.save.intel = (g.save.intel || 0) + g.runIntel; // intel is knowledge — recovered in full
@@ -1093,6 +1152,8 @@ function updatePlay(g, dt) {
     if (pt.life <= 0) pt.alive = false;
   }
 
+  updateSpecials(g, dt);
+
   g.enemies = g.enemies.filter((e) => e.alive);
   g.bullets = g.bullets.filter((b) => b.alive);
   g.grenades = g.grenades.filter((x) => x.alive);
@@ -1107,12 +1168,24 @@ function updatePlay(g, dt) {
   for (const rm of w.rooms) {
     if (rm.populated && !rm.cleared && !g.enemies.some((e) => e._room === rm)) {
       rm.cleared = true;
+      if (rm.kind !== 'gate') g._runRoomsCleared = (g._runRoomsCleared || 0) + 1;
       if (rm.kind === 'dhd') {
         g.dhdActive = true;
         g.message('DHD online — approach and press E to dial');
         sfx.pickup();
       } else {
         g.message('Sector clear');
+      }
+      // last un-cleared room on the world just flipped -> world clear event
+      if (!g._worldClearFired && w.rooms.every((r2) => r2.cleared)) {
+        g._worldClearFired = true;
+        if (!g._events) g._events = [];
+        g._events.push({
+          t: 'worldClear',
+          faction: g.params.faction || g.params.primary,
+          threat: g.params.threat,
+          mods: g.params.mods || [],
+        });
       }
     }
   }
@@ -1282,6 +1355,13 @@ function populateWorld(g) {
     const heatTier = Math.min(3, Math.floor(g.heat));
     const slot = { heavies: 0, brutes: 0, grenadiers: 0 };
 
+    // special set-piece room (tagged in worldgen). Places its own occupants +
+    // set-piece and skips the normal fill / scatter.
+    if (room.special) {
+      placeSpecial(g, room, R, fac, p.threat, placeXY);
+      continue;
+    }
+
     if (room.kind === 'dhd') {
       const c = room.centerPx;
       const boss = new Enemy('boss', c.x, c.y - 80, p.threat, { variant: fac });
@@ -1344,6 +1424,453 @@ function populateWorld(g) {
       g.pickups.push(new Pickup('intel', q.x, q.y, 3 + R.int(0, 3)));
     }
   }
+}
+
+// ------------------------------------------------------------- special rooms
+// worldgen tags one normal room per world with room.special; here we drop the
+// set-piece + its guards. All guards start idle like any other room.
+
+const SG_NAMES = ['Cpt. Reyes', 'Lt. Okafor', 'Sgt. Duval', 'Dr. Halvorsen', 'Cpl. Tran', 'Lt. Marsh'];
+
+function factionOfKind(kind) {
+  if (kind.indexOf('wraith') === 0) return 'wraith';
+  if (kind.indexOf('replicator') === 0) return 'replicator';
+  return 'jaffa';
+}
+
+function placeSpecial(g, room, R, fac, threat, placeXY) {
+  const kind = room.special;
+  const c = room.centerPx;
+  const gslot = { heavies: 0, brutes: 0, grenadiers: 0 };
+  const guard = (n, tBump) => {
+    for (let i = 0; i < n; i++) {
+      const q = placeXY();
+      const e = new Enemy(guardKind(fac, R, gslot), q.x, q.y, threat + (tBump || 0));
+      e._room = room;
+      g.enemies.push(e);
+    }
+  };
+
+  if (kind === 'datacore') {
+    const dc = new DataCore(c.x, c.y);
+    dc._room = room;
+    dc.born = g.time;
+    g.dataCores.push(dc);
+    guard(4 + Math.min(3, Math.floor(threat / 2)), 1); // above-average pack
+  } else if (kind === 'vault') {
+    const al = room.alcove;
+    const vd = al
+      ? new VaultDoor(al.x, al.y, al.w, al.h)
+      : new VaultDoor(c.x - 34, room.rectPx.y + 20, 68, 18);
+    vd._room = room;
+    vd.lootX = al ? al.cx : c.x;
+    vd.lootY = al ? al.cy : room.rectPx.y + 44;
+    g.vaultDoors.push(vd);
+    guard(2 + Math.floor(threat / 3));
+  } else if (kind === 'arena') {
+    room._arena = { wave: 0, waves: 3, locked: false, done: false, t: 0 };
+    g.arenaRooms.push(room);
+    spawnArenaWave(g, room, fac, threat, 1, false); // wave 1 pre-placed, idle
+  } else if (kind === 'vendor') {
+    const v = new Vendor(c.x, c.y, rollVendorStock(R, threat));
+    v._room = room;
+    g.vendors.push(v);
+    guard(2);
+  } else if (kind === 'rescue') {
+    const q = placeXY();
+    const cap = new Captive(q.x, q.y, R.pick(SG_NAMES));
+    cap._room = room;
+    g.captives.push(cap);
+    guard(4 + Math.min(3, Math.floor(threat / 2)));
+  }
+}
+
+function spawnArenaWave(g, room, fac, threat, waveNum, active) {
+  const R = rngHelpers(makeRng('arena:' + g.params.seedStr + ':' + room.gx + ':' + room.gy + ':' + waveNum));
+  const rect = room.rectPx;
+  const gslot = { heavies: 0, brutes: 0, grenadiers: 0 };
+  const put = () => {
+    for (let t = 0; t < 40; t++) {
+      const x = rect.x + R.range(46, rect.w - 46);
+      const y = rect.y + R.range(46, rect.h - 46);
+      if (tileAt(g.world, x, y) === 0) return { x, y };
+    }
+    return { x: room.centerPx.x, y: room.centerPx.y };
+  };
+  const wake = (e) => {
+    e._room = room;
+    if (active) {
+      e.state = 'active';
+      e.aggressive = true;
+      e.mode = 'advance';
+    }
+    g.enemies.push(e);
+  };
+  const n = 3 + waveNum;
+  for (let i = 0; i < n; i++) {
+    const q = put();
+    wake(new Enemy(guardKind(fac, R, gslot), q.x, q.y, threat));
+  }
+  if (waveNum >= 3) {
+    const q = put();
+    const elite = fac === 'wraith' ? 'wraith' : fac === 'replicator' ? 'replicator_brute' : 'jaffa_heavy';
+    wake(new Enemy(elite, q.x, q.y, threat + 2, { hpMul: 1.5, hunter: true }));
+  }
+}
+
+function spawnArenaReward(g, room) {
+  const c = room.centerPx;
+  const R = rngHelpers(makeRng('arenaReward:' + g.params.seedStr + ':' + room.gx + ':' + room.gy));
+  const armour = R.chance(0.5);
+  const id = armour
+    ? R.pick(['a_plate', 'a_helm', 'a_greaves'])
+    : R.chance(0.35)
+    ? 'w_launcher'
+    : R.pick(['w_staff', 'w_beam', 'w_burst', 'w_shotgun']);
+  g.pickups.push(new Pickup('item', c.x, c.y, 0, { id, count: 1, rarity: 'epic' }));
+  g.pickups.push(new Pickup('naquadah', c.x + 16, c.y, 30 * worldMods(g).naqMul));
+  burst(g, c.x, c.y, 24, '#ffd27a');
+  if (sfx.crit) sfx.crit();
+}
+
+function spawnVaultLoot(g, vd) {
+  const ax = vd.lootX;
+  const ay = vd.lootY;
+  const R = rngHelpers(makeRng('vault:' + g.params.seedStr + ':' + (vd._room ? vd._room.gx + ':' + vd._room.gy : '0')));
+  const threat = (g.params.threat || 0) + 3;
+  const wid = R.chance(0.4) ? 'w_launcher' : R.pick(['w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam']);
+  g.pickups.push(new Pickup('item', ax - 14, ay, 0, { id: wid, count: 1, rarity: 'epic' })); // guaranteed rare+
+  const extra = 1 + R.int(1, 2);
+  for (let i = 0; i < extra; i++) {
+    g.pickups.push(new Pickup('item', ax + R.range(-16, 16), ay + R.range(-10, 14), 0, rollLoot(R, threat)));
+  }
+  g.pickups.push(new Pickup('naquadah', ax + 12, ay - 6, 40 * worldMods(g).naqMul));
+  burst(g, ax, ay, 22, '#7fe8e0');
+  if (sfx.pickup) sfx.pickup();
+}
+
+function rollVendorStock(R, threat) {
+  const n = 3 + R.int(0, 1);
+  const pool = [
+    'w_staff', 'w_zat', 'w_shotgun', 'w_burst', 'w_beam', 'w_launcher',
+    'a_plate', 'a_helm', 'a_greaves', 'medkit', 'stim', 'shieldcell', 'frag',
+  ];
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const id = R.pick(pool);
+    const rarity = rollRarity(threat + 2, R.rand);
+    const def = ITEMS[id];
+    const base = def && def.type === 'weapon' ? 90 : def && def.type === 'armor' ? 70 : 24;
+    const rmul = RARITY_MULT[normRarity(rarity)] || 1;
+    out.push({ id, price: Math.round(base * rmul * (1 + threat * 0.12)), rarity });
+  }
+  return out;
+}
+
+function buyFromVendor(g, v, i) {
+  const it = v.stock[i];
+  if (!it || it.sold || g.runNaq < it.price) return;
+  if (!invHasSpace(g.inv, it.id)) {
+    g.message('Inventory full');
+    return;
+  }
+  g.runNaq -= it.price;
+  invAdd(g.inv, it.id, 1, it.rarity || null);
+  it.sold = true;
+  saveInv(g);
+  if (sfx.pickup) sfx.pickup();
+  g.message('Bought ' + ((ITEMS[it.id] && ITEMS[it.id].name) || it.id));
+}
+
+// runs from updatePlay each frame — allocation-free hot path.
+function updateSpecials(g, dt) {
+  if (!g.world || g.hub || !g.dataCores) return;
+  const p = g.player;
+  const w = g.world;
+
+  // bestiary: first time each kind goes active this run
+  for (let i = 0; i < g.enemies.length; i++) {
+    const e = g.enemies[i];
+    if (!e.alive || e.state !== 'active') continue;
+    if (g._seenKinds.has(e.kind)) continue;
+    g._seenKinds.add(e.kind);
+    const b = g.save.bestiary || (g.save.bestiary = {});
+    const rec = b[e.kind] || (b[e.kind] = { seen: 0, killed: 0 });
+    rec.seen++;
+  }
+
+  // ---- data cores ----
+  for (let i = 0; i < g.dataCores.length; i++) {
+    const dc = g.dataCores[i];
+    if (dc.taken) continue;
+    dc.bob += dt * 3;
+    dc.glow = 0.5 + 0.5 * Math.sin(g.time * 4);
+    if ((dc.x - p.x) ** 2 + (dc.y - p.y) ** 2 < (dc.r + p.r + 10) ** 2) {
+      dc.taken = true;
+      if (!g._events) g._events = [];
+      g._events.push({ t: 'recover' });
+      g.message('Ancient data core recovered');
+      if (sfx.pickup) sfx.pickup();
+      burst(g, dc.x, dc.y, 20, '#7fe8e0');
+    }
+  }
+
+  // ---- vault doors ----
+  for (let i = 0; i < g.vaultDoors.length; i++) {
+    const vd = g.vaultDoors[i];
+    if (vd.locked) {
+      let clear = true;
+      for (let k = 0; k < g.enemies.length; k++) {
+        const e = g.enemies[k];
+        if (e.alive && e._room === vd._room) {
+          clear = false;
+          break;
+        }
+      }
+      vd._t = (vd._t || 0) + dt;
+      if (clear || vd._t > 45) {
+        // failsafe: force the seal after 45s so a stalled fight can't lock the vault
+        vd.locked = false;
+        g.message('Vault seal released');
+        if (sfx.pickup) sfx.pickup();
+      }
+    } else if (vd.openT < 1) {
+      vd.openT = Math.min(1, vd.openT + dt); // ~1s slide
+      if (vd.openT >= 1 && !vd._looted) {
+        vd._looted = true;
+        spawnVaultLoot(g, vd);
+      }
+    }
+  }
+
+  // ---- arenas ----
+  for (let i = 0; i < g.arenaRooms.length; i++) {
+    const rm = g.arenaRooms[i];
+    const a = rm._arena;
+    if (!a || a.done) continue;
+    const rp = rm.rectPx;
+    const inside = p.x >= rp.x && p.x <= rp.x + rp.w && p.y >= rp.y && p.y <= rp.y + rp.h;
+    if (!a.locked && a.wave === 0 && inside) {
+      a.locked = true;
+      a.wave = 1;
+      a.t = 0;
+      for (let k = 0; k < g.enemies.length; k++) {
+        const e = g.enemies[k];
+        if (e.alive && e._room === rm) {
+          e.state = 'active';
+          e.aggressive = true;
+          e.mode = 'advance';
+        }
+      }
+      g.message('Containment field — survive ' + a.waves + ' waves');
+      if (sfx.bossSting) sfx.bossSting(g.params.faction || g.params.primary);
+    }
+    if (!a.locked) continue;
+    a.t += dt;
+    let live = 0;
+    for (let k = 0; k < g.enemies.length; k++) {
+      const e = g.enemies[k];
+      if (e.alive && e._room === rm) live++;
+    }
+    if (a.t > 40) {
+      // failsafe: a real player finishes 3 waves inside 40s; the bot might not,
+      // so cut it loose rather than trap the run
+      for (let k = 0; k < g.enemies.length; k++) {
+        const e = g.enemies[k];
+        if (e.alive && e._room === rm) {
+          e.alive = false;
+          spark(g, e.x, e.y, '#ffd27a');
+        }
+      }
+      a.done = true;
+      a.locked = false;
+      spawnArenaReward(g, rm);
+    } else if (live === 0 && a.wave < a.waves) {
+      a.wave++;
+      spawnArenaWave(g, rm, g.params.faction || g.params.primary, g.params.threat, a.wave, true);
+      g.message('Wave ' + a.wave + ' / ' + a.waves);
+    } else if (live === 0 && a.wave >= a.waves) {
+      a.done = true;
+      a.locked = false;
+      spawnArenaReward(g, rm);
+      g.message('Containment cleared');
+    }
+  }
+
+  // ---- vendors ----
+  let anyVendorNear = false;
+  for (let i = 0; i < g.vendors.length; i++) {
+    const v = g.vendors[i];
+    if (!v.alive) continue;
+    v.t += dt;
+    const near = (v.x - p.x) ** 2 + (v.y - p.y) ** 2 < 60 * 60;
+    if (near) anyVendorNear = true;
+    if (near && !g.vendorOpen && pressed('KeyE')) g.vendorOpen = v;
+    if (g.vendorOpen === v && !near) g.vendorOpen = null;
+  }
+  if (g.vendorOpen && (pressed('Escape') || !anyVendorNear)) g.vendorOpen = null;
+
+  // ---- captive escort ----
+  for (let i = 0; i < g.captives.length; i++) {
+    const cap = g.captives[i];
+    if (cap.hp <= 0) continue;
+    if (!cap.freed) {
+      let guards = 0;
+      for (let k = 0; k < g.enemies.length; k++) {
+        const e = g.enemies[k];
+        if (e.alive && e._room === cap._room) guards++;
+      }
+      if (guards === 0) {
+        cap.freed = true;
+        cap.follow = true;
+        g.message(cap.name + ' — on your six');
+        if (sfx.pickup) sfx.pickup();
+      }
+      continue;
+    }
+    cap.bob += dt * 6;
+    const dx = p.x - cap.x;
+    const dy = p.y - cap.y;
+    const d = Math.hypot(dx, dy) || 1;
+    cap.facing = Math.atan2(dy, dx);
+    if (d > 44) {
+      const sp = d > 220 ? 260 : 150;
+      const r = circleVsGrid(w, cap, cap.x + (dx / d) * sp * dt, cap.y + (dy / d) * sp * dt);
+      cap.x = r.x;
+      cap.y = r.y;
+    }
+    for (let k = 0; k < g.bullets.length; k++) {
+      const b = g.bullets[k];
+      if (!b.alive || b.from !== 'enemy') continue;
+      if ((b.x - cap.x) ** 2 + (b.y - cap.y) ** 2 < (cap.r + b.r + 2) ** 2) {
+        cap.hp -= b.dmg;
+        b.alive = false;
+        if (cap.hp <= 0) {
+          g.message(cap.name + ' is down');
+          burst(g, cap.x, cap.y, 16, '#ff6a4a');
+        }
+      }
+    }
+    const gr = w.gateRoom;
+    const grp = gr && gr.rectPx;
+    cap.atGate = !!grp && cap.x >= grp.x && cap.x <= grp.x + grp.w && cap.y >= grp.y && cap.y <= grp.y + grp.h;
+  }
+}
+
+// world-space draw, called from renderPlay's lit pass. keep it cheap.
+function drawSpecials(ctx, g) {
+  const t = g.time;
+  if (!g.dataCores) return;
+
+  for (let i = 0; i < g.dataCores.length; i++) {
+    const dc = g.dataCores[i];
+    if (dc.taken) continue;
+    const yb = dc.y + Math.sin(dc.bob) * 3;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.4 + 0.25 * Math.sin(t * 4);
+    ctx.fillStyle = '#7fe8e0';
+    ctx.beginPath();
+    ctx.moveTo(dc.x - 4, dc.y + 6);
+    ctx.lineTo(dc.x + 4, dc.y + 6);
+    ctx.lineTo(dc.x + 2, dc.y - 130);
+    ctx.lineTo(dc.x - 2, dc.y - 130);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    glowCircle(ctx, dc.x, yb - 10, dc.r, '#7fe8e0', 16);
+    ctx.fillStyle = '#08201e';
+    ctx.fillRect(dc.x - 6, yb - 16, 12, 12);
+    ctx.strokeStyle = '#7fe8e0';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(dc.x - 6, yb - 16, 12, 12);
+  }
+
+  for (let i = 0; i < g.vaultDoors.length; i++) {
+    const vd = g.vaultDoors[i];
+    const slide = vd.openT * (vd.h * 0.92);
+    ctx.save();
+    ctx.fillStyle = vd.locked ? '#3a4450' : '#252c34';
+    ctx.fillRect(vd.x, vd.y - slide, vd.w, vd.h);
+    ctx.strokeStyle = vd.locked ? '#ffb347' : '#7fe8e0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(vd.x + 1, vd.y - slide + 1, vd.w - 2, vd.h - 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.32)';
+    for (let k = 0; k * 12 < vd.h - 8; k++) ctx.fillRect(vd.x + 3, vd.y - slide + 5 + k * 12, vd.w - 6, 3);
+    ctx.restore();
+    if (vd.locked) {
+      ctx.fillStyle = '#ffb347';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('SEALED', vd.x + vd.w / 2, vd.y - 4);
+    }
+  }
+
+  for (let i = 0; i < g.vendors.length; i++) {
+    const v = g.vendors[i];
+    if (!v.alive) continue;
+    glowCircle(ctx, v.x, v.y - 6, 15, '#ffd27a', 10);
+    drawHumanoid(ctx, v.x, v.y, Math.sin(t) * 0.3, 1.05, '#6b5a3a', '#e8c46a', {});
+    ctx.fillStyle = '#ffd27a';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('TRADE  [E]', v.x, v.y - 24);
+  }
+
+  for (let i = 0; i < g.captives.length; i++) {
+    const cap = g.captives[i];
+    if (cap.hp <= 0) continue;
+    drawHumanoid(ctx, cap.x, cap.y + Math.sin(cap.bob) * 1.5, cap.facing, 1.0, cap.freed ? '#8fd45a' : '#c8d6e4', '#eaf4ff', {});
+    if (!cap.freed) {
+      ctx.strokeStyle = 'rgba(255,150,90,0.5)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cap.x - 14, cap.y - 20, 28, 34);
+    }
+  }
+}
+
+function renderVendorPanel(g) {
+  const v = g.vendorOpen;
+  if (!v) return;
+  const { ctx, view } = g;
+  const rows = v.stock.length;
+  const w = 384;
+  const h = 40 + rows * 34 + 24;
+  const x = (view.w - w) / 2;
+  const y = view.h - h - 20;
+  ctx.fillStyle = 'rgba(10,12,18,0.94)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(255,210,122,0.5)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#ffd27a';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('BLACK MARKET', x + 14, y + 23);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#8ef';
+  ctx.font = '11px monospace';
+  ctx.fillText(g.runNaq + ' naq', x + w - 14, y + 23);
+  for (let i = 0; i < rows; i++) {
+    const it = v.stock[i];
+    const ry = y + 34 + i * 34;
+    const def = ITEMS[it.id];
+    const afford = !it.sold && g.runNaq >= it.price;
+    ctx.fillStyle = it.sold ? 'rgba(28,28,32,0.7)' : afford ? 'rgba(40,52,40,0.7)' : 'rgba(34,30,30,0.7)';
+    ctx.fillRect(x + 10, ry, w - 20, 30);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = it.sold ? '#666' : '#dbe';
+    ctx.font = '11px monospace';
+    ctx.fillText((it.sold ? '[SOLD] ' : '') + (def ? def.name : it.id) + '  ·  ' + (it.rarity || 'common'), x + 18, ry + 19);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = afford ? '#8ef' : '#a66';
+    ctx.fillText(String(it.price), x + w - 18, ry + 19);
+    if (afford) g.buttons.push({ x: x + 10, y: ry, w: w - 20, h: 30, fn: () => buyFromVendor(g, v, i) });
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#678';
+  ctx.font = '10px monospace';
+  ctx.fillText('click to buy   ·   ESC / walk away to close', x + w / 2, y + h - 9);
 }
 
 function weaponItemId(inv) {
@@ -1836,6 +2363,44 @@ const BOSS_SUB = {
 };
 const BOSS_TINT = { jaffa: '#ffb347', wraith: '#9df7a0', replicator: '#8fe4ff' };
 
+// every real enemy death: bestiary tally, active-weapon mastery xp, and the
+// campaign kill / bossKill events. Cheap; called from killEnemy.
+function recordKill(g, e) {
+  const threat = (g.params && g.params.threat) || 0;
+
+  const bst = g.save.bestiary || (g.save.bestiary = {});
+  const rec = bst[e.kind] || (bst[e.kind] = { seen: 0, killed: 0 });
+  rec.killed++;
+
+  try {
+    const wkey = activeWeaponId(g.inv);
+    const ws = g.save.weapons[wkey] || (g.save.weapons[wkey] = { level: 1, xp: 0, mods: [] });
+    const xpKind =
+      e.kind === 'boss' || e.kind === 'nexus'
+        ? 'boss'
+        : e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute'
+        ? 'heavy'
+        : e.hunter
+        ? 'elite'
+        : 'grunt';
+    ws.xp = (ws.xp || 0) + Math.round(xpForKill(wkey, xpKind, threat) * (fx(g).xpMul || 1));
+    ws.level = Math.min(weaponMaxLevel, Math.max(ws.level || 1, levelForXp(ws.xp)));
+  } catch (err) {
+    /* odd save.weapons shape — skip mastery for this kill */
+  }
+
+  if (!g._events) g._events = [];
+  g._events.push({ t: 'kill', kind: e.kind, faction: factionOfKind(e.kind), threat });
+  if (e.kind === 'boss' || e.kind === 'nexus') {
+    g._events.push({
+      t: 'bossKill',
+      faction: e.kind === 'nexus' ? 'nexus' : (g.params && (g.params.faction || g.params.primary)) || 'jaffa',
+      threat,
+      mods: (g.params && g.params.mods) || [],
+    });
+  }
+}
+
 function killEnemy(g, e) {
   if (!e.alive) return;
 
@@ -1853,6 +2418,7 @@ function killEnemy(g, e) {
 
   e.alive = false;
   sfx.death();
+  recordKill(g, e); // campaign events + weapon mastery xp + bestiary
   const dead = e.kind === 'boss';
   const elite = e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
   burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') ? '#b6f0ff' : '#ffb347');
@@ -3117,6 +3683,8 @@ function renderPlay(g, dim) {
     else drawPlayer(ctx, d.o, g.time, g);
   }
 
+  drawSpecials(ctx, g); // data cores / vault doors / vendor / captive
+
   // energy on top of the sort: bullets, beams and sparks read as light
   ctx.globalCompositeOperation = 'lighter';
   for (const pt of g.particles) {
@@ -3159,6 +3727,7 @@ function renderPlay(g, dim) {
     renderHUD(g);
     renderHotbar(g);
     renderMessages(g);
+    if (g.vendorOpen) renderVendorPanel(g);
     if (g.bossIntroT > 0) drawBossIntro(g);
     if (!g.panelOpen) drawCrosshair(g);
   }
@@ -5862,6 +6431,31 @@ function renderGateMap(g) {
       ctx.fillText('telemetry offline', x, y + 30);
       ctx.fillStyle = '#678';
       ctx.fillText('research Forward Telemetry', x, y + 44);
+    }
+    // campaign markers: an amber flag on worlds that feed the active op, and a
+    // red capstone for the fixed finale address once it's unlocked
+    let advances = false;
+    try {
+      advances = worldAdvancesActive(g.save, pr);
+    } catch (e) {
+      advances = false;
+    }
+    if (advances) {
+      ctx.fillStyle = '#fd6';
+      ctx.font = 'bold 10px monospace';
+      ctx.fillText('⚑ ADVANCES OP', x, y - 36);
+    }
+    let finaleReady = false;
+    try {
+      finaleReady = campaignStatus(g.save).finaleUnlocked;
+    } catch (e) {
+      finaleReady = false;
+    }
+    if (node.addr === FINALE_ADDRESS && finaleReady) {
+      glowCircle(ctx, x, y, 19, '#ff5a4a', 18);
+      ctx.fillStyle = '#ff9a8a';
+      ctx.font = 'bold 10px monospace';
+      ctx.fillText('THE INCURSION NEXUS', x, y - 36);
     }
     if (afford) {
       g.buttons.push({

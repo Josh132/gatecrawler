@@ -1,6 +1,6 @@
 import { keys, mouse, pressed, endFrameInput } from './input.js';
 import { WEAPONS } from './weapons.js';
-import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
+import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
 import { TAU, clamp, glowCircle, shade, figure, spider, critter } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
@@ -577,10 +577,10 @@ function dialHome(g) {
   g.message('Returned to SGC. Naquadah & intel banked.');
 }
 
-function onDeath(g) {
+function onDeath(g, abandon) {
   const p = g.player;
   const e = fx(g);
-  if (e.freeRevive && !g._revived) {
+  if (!abandon && e.freeRevive && !g._revived) {
     g._revived = true;
     p.hp = Math.max(1, Math.round(p.maxHp * 0.5));
     p.iframe = 1.6;
@@ -645,6 +645,18 @@ function update(g, dt) {
   if (pressed('KeyM')) g.message(toggleMute() ? 'Audio muted' : 'Audio on');
   if (pressed('BracketLeft')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() - 0.1) * 100) + '%');
   if (pressed('BracketRight')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() + 0.1) * 100) + '%');
+
+  // pause overlay — works in play or hub, freezes the world
+  if ((g.state === 'play' || g.state === 'hub') && !g.panelOpen && !g.station && !g.vendorOpen && pressed('Escape')) {
+    g.paused = !g.paused;
+  }
+  if (g.paused) {
+    updatePauseMenu(g);
+    g.mouseWasDown = mouse.down;
+    g.wheel = 0;
+    endFrameInput();
+    return;
+  }
 
   if (g.state === 'play') {
     if (pressed('Tab') || pressed('KeyI')) togglePanel(g);
@@ -3457,6 +3469,7 @@ function render(g, dt) {
     if (g.panelOpen) renderPanel(g);
     if (g.state === 'dead') renderDead(g);
   }
+  if (g.paused) renderPause(g);
 
   // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
   // createPostFX returns null wherever webgl isn't available; the 2d frame stands.
@@ -3635,7 +3648,7 @@ function renderPlay(g, dim) {
   if (!g.world) return;
   // directional shake: kick along the hit vector + a little omni jitter.
   // clamp the render read so a stacked firefight can't turn to mush.
-  const sh = g.shake > 22 ? 22 : g.shake;
+  const sh = (g.shake > 22 ? 22 : g.shake) * ((g.save && g.save.settings && g.save.settings.shake != null) ? g.save.settings.shake : 1);
   const jit = (Math.random() - 0.5) * sh * 0.4;
   const kick = sh * (0.35 + 0.45 * Math.random());
   const shx = -(g.shakeX || 0) * kick + jit;
@@ -5445,6 +5458,136 @@ function button(g, label, x, y, w, h, fn, enabled = true) {
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
   if (enabled) g.buttons.push({ x, y, w, h, fn });
+}
+
+// ---------------------------------------------------------------- pause + settings
+
+const CONTROLS = [
+  ['Move', 'W A S D'],
+  ['Aim', 'Mouse'],
+  ['Fire', 'Left mouse'],
+  ['Dodge roll', 'Space'],
+  ['Reload', 'R'],
+  ['Grenade', 'G'],
+  ['Swap weapon', 'X  /  mouse wheel'],
+  ['Quick heal', 'Q'],
+  ['Inventory & stats', 'Tab  /  I'],
+  ['Interact / dial', 'E'],
+  ['Mute audio', 'M'],
+  ['Volume', '[  ]'],
+  ['Pause / settings', 'Esc'],
+];
+
+function updatePauseMenu(g) {
+  // Esc toggle is handled in update(); nothing else needs polling here
+}
+
+function settingsShake(g) {
+  if (!g.save.settings) g.save.settings = { binds: {} };
+  if (g.save.settings.shake == null) g.save.settings.shake = 1;
+  return g.save.settings.shake;
+}
+
+function renderPause(g) {
+  const { ctx, view } = g;
+  textReset(ctx);
+  ctx.fillStyle = 'rgba(4,6,12,0.82)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  const w = Math.min(760, view.w - 80);
+  const h = Math.min(560, view.h - 60);
+  const x = (view.w - w) / 2;
+  const y = (view.h - h) / 2;
+  ctx.fillStyle = 'rgba(12,17,26,0.98)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(120,170,220,0.4)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+
+  ctx.fillStyle = '#9cf';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('PAUSED', x + 28, y + 38);
+
+  // --- settings column (left) ---
+  const sx = x + 28;
+  let sy = y + 78;
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#8ef';
+  ctx.fillText('SETTINGS', sx, sy);
+  sy += 22;
+  const stepper = (label, val, dec, inc) => {
+    ctx.fillStyle = '#bcd';
+    ctx.font = '12px monospace';
+    ctx.fillText(label, sx, sy + 4);
+    button(g, '–', sx + 210, sy - 12, 24, 22, dec);
+    ctx.fillStyle = '#dff';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(val, sx + 268, sy + 4);
+    ctx.textAlign = 'left';
+    button(g, '+', sx + 300, sy - 12, 24, 22, inc);
+    sy += 34;
+  };
+  const clampv = (v) => Math.max(0, Math.min(1, Math.round(v * 20) / 20));
+  stepper(
+    'SFX volume',
+    Math.round(getSfxVolume() * 100) + '%',
+    () => setSfxVolume(clampv(getSfxVolume() - 0.1)),
+    () => setSfxVolume(clampv(getSfxVolume() + 0.1))
+  );
+  const mv = music && music.getVolume ? music.getVolume() : 1;
+  stepper(
+    'Music volume',
+    Math.round(mv * 100) + '%',
+    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) - 0.1)),
+    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) + 0.1))
+  );
+  stepper(
+    'Screen shake',
+    Math.round(settingsShake(g) * 100) + '%',
+    () => {
+      g.save.settings.shake = Math.max(0, settingsShake(g) - 0.25);
+      persist(g.save);
+    },
+    () => {
+      g.save.settings.shake = Math.min(1.5, settingsShake(g) + 0.25);
+      persist(g.save);
+    }
+  );
+  button(g, isMuted() ? 'UNMUTE ALL' : 'MUTE ALL', sx, sy, 180, 30, () => toggleMute());
+  sy += 46;
+
+  // --- controls column (right) ---
+  const cx = x + w / 2 + 10;
+  let cy = y + 78;
+  ctx.fillStyle = '#8ef';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('CONTROLS', cx, cy);
+  cy += 20;
+  ctx.font = '11px monospace';
+  for (const [k, v] of CONTROLS) {
+    ctx.fillStyle = '#9ab';
+    ctx.fillText(k, cx, cy);
+    ctx.fillStyle = '#dff';
+    ctx.fillText(v, cx + 150, cy);
+    cy += 17;
+  }
+
+  // --- bottom actions ---
+  const by = y + h - 56;
+  button(g, 'RESUME   (Esc)', x + 28, by, 200, 36, () => {
+    g.paused = false;
+  });
+  if (g.state === 'play') {
+    button(g, 'ABANDON RUN → SGC', x + 244, by, 220, 36, () => {
+      g.paused = false;
+      onDeath(g, true);
+    });
+  }
+  ctx.fillStyle = '#567';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('the world is frozen while paused', x + w - 20, y + h - 14);
+  ctx.textAlign = 'left';
 }
 
 function starfield(g) {

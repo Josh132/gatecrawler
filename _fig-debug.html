@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>fig lab</title>
+<style>html,body{margin:0;background:#0b1016}canvas{display:block}</style></head>
+<body><canvas id="c" width="1240" height="760"></canvas>
+<script type="module">
+import { figure, spider, critter, TAU } from './src/draw.js';
+const ctx = document.getElementById('c').getContext('2d');
+const S = Number(new URLSearchParams(location.search).get('s') || 5);
+const T = Number(new URLSearchParams(location.search).get('t') || 1.3);
+const ANG = Number(new URLSearchParams(location.search).get('a') || 0);
+const BU = {
+  jaffa: { bulk: 1.14, pauldrons: true, helm: 'serpent', plate: 'front', boots: true, trim: '#f2d5a2', accent: '#ffb347', glove: '#4a3320' },
+  jaffa_heavy: { bulk: 1.5, pauldrons: true, helm: 'dome', plate: 'heavy', boots: true, greaves: true, trim: '#ffdca0', glove: '#4a3320' },
+  jaffa_grenadier: { bulk: 1.02, pauldrons: true, helm: 'dome', boots: true, trim: '#ffe3ac', glove: '#4a3320' },
+  jaffa_sniper: { bulk: 0.94, helm: 'serpent', kneel: true, boots: true, greaves: true, trim: '#e8c896', glove: '#4a3320' },
+  wraith: { bulk: 0.96, coatTails: true, helm: 'hood', spikes: true, claws: true, glove: '#4d6b4d' },
+  wraith_drone: { bulk: 0.82, insectoid: true, helm: 'mask', spikes: true, claws: true, glove: '#4d6b4d' },
+  player: { bulk: 1.14, vest: true, boots: true, greaves: true, helm: 'cap', trim: '#9fb8d0', accent: '#6fd6e6', glove: '#2e4a58' },
+  playerHelm: { bulk: 1.14, vest: true, boots: true, greaves: true, helm: 'dome', plate: 'heavy', trim: '#9fb8d0', accent: '#b06cff', glove: '#2e4a58' },
+  boss_jaffa: { bulk: 1.28, cloak: true, pauldrons: true, helm: 'serpent', plate: 'heavy', boots: true, greaves: true, bighead: true, trim: '#ffdca0', glove: '#4a3320' },
+  boss_wraith: { bulk: 1.16, cloak: true, coatTails: true, helm: 'crown', spikes: true, claws: true, bighead: true, trim: '#cfffd6', glove: '#4d6b4d' },
+};
+const rows = [
+  ['player', '#7fe6ff', '#e6faff', BU.player, { weaponKind: 'p90', weaponColor: '#cfe8ff', head: 3.1, pose: 'idle' }],
+  ['plr walk', '#7fe6ff', '#e6faff', BU.player, { weaponKind: 'p90', weaponColor: '#cfe8ff', head: 3.1, pose: 'walk', gait: 0.8 }],
+  ['plr geared', '#7fe6ff', '#e6faff', BU.playerHelm, { weaponKind: 'shotgun', head: 3.1, pose: 'idle' }],
+  ['plr reload', '#7fe6ff', '#e6faff', BU.player, { weaponKind: 'p90', head: 3.1, pose: 'reload', reload: 1 }],
+  ['plr fire', '#7fe6ff', '#e6faff', BU.player, { weaponKind: 'staff', head: 3.1, pose: 'fire', recoil: 1 }],
+  ['plr dead', '#7fe6ff', '#e6faff', BU.player, { weaponKind: 'p90', head: 3.1, pose: 'dead' }],
+  ['jaffa', '#ffb347', '#ffe6c8', BU.jaffa, { weaponKind: 'staff', weaponColor: '#ffcf9a', head: 3.3, pose: 'walk', gait: 0.5 }],
+  ['heavy', '#d97636', '#ffe6c8', BU.jaffa_heavy, { weaponKind: 'staff', weaponLen: 18, weaponColor: '#ffcf9a', head: 3.8, pose: 'walk', gait: 0.4 }],
+  ['grenadier', '#ffd45c', '#ffe6c8', BU.jaffa_grenadier, { weaponKind: 'launcher', weaponColor: '#ffcf9a', head: 3.3 }],
+  ['sniper', '#e0a45c', '#ffe6c8', BU.jaffa_sniper, { weaponKind: 'rifle', weaponColor: '#ffcf9a', head: 3.1, charge: 0.8, chargeColor: '#ffcf6a' }],
+  ['wraith', '#9df7a0', '#d7ffda', BU.wraith, { weapon: false, head: 2.8, handGlow: '#d6ffe0', pose: 'walk', gait: 0.9 }],
+  ['drone', '#bff8bf', '#d7ffda', BU.wraith_drone, { weaponKind: 'zat', weaponLen: 10, weaponColor: '#cffccf', head: 2.4, pose: 'run', gait: 1 }],
+  ['boss jaffa', '#ffb347', '#ffe9c8', BU.boss_jaffa, { weaponKind: 'cannon', weaponColor: '#ffcf9a', head: 3.4, blur: 16 }],
+  ['queen', '#9df7a0', '#d7ffda', BU.boss_wraith, { weapon: false, head: 3.4, blur: 16, handGlow: '#d6ffe0' }],
+];
+ctx.fillStyle = '#141c24';
+ctx.fillRect(0, 0, 1240, 760);
+ctx.font = '11px monospace';
+let i = 0;
+for (const [name, body, head, build, o] of rows) {
+  const cx = 110 + (i % 5) * 235;
+  const cy = 110 + ((i / 5) | 0) * 235;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeRect(cx - 105, cy - 105, 210, 210);
+  ctx.fillStyle = '#8aa';
+  ctx.fillText(name, cx - 100, cy + 96);
+  ctx.restore();
+  const sc = (name.startsWith('boss') || name === 'queen') ? S * 1.6 : name === 'heavy' ? S * 1.4 : S;
+  o.t = T; o.phase = 0.7; o.build = build;
+  figure(ctx, cx, cy, ANG, sc, body, head, o);
+  i++;
+}
+// non-humanoids
+const spots = [['repl', 0], ['brute', 1], ['weaver', 2], ['scav', 3]];
+for (const [name, k] of spots) {
+  const cx = 110 + (k % 5) * 235;
+  const cy = 110 + 3 * 235;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeRect(cx - 105, cy - 105, 210, 210);
+  ctx.fillStyle = '#8aa';
+  ctx.fillText(name, cx - 100, cy + 96);
+  ctx.restore();
+  if (name === 'scav') critter(ctx, cx, cy, ANG, S * 2, '#9fb8c8', { t: T, phase: 0.4, gait: 0.6, eye: '#bfe8ff' });
+  else spider(ctx, cx, cy, ANG, S * (name === 'brute' ? 3 : 2), name === 'brute' ? '#7fd0ff' : '#8fe4ff',
+    { t: T, phase: 0.4, legs: name === 'brute' ? 8 : 6, brute: name === 'brute', rate: 9, eye: '#dff6ff', emitter: name === 'weaver' ? 0.9 : null, weaveColor: '#9fe8ff' });
+}
+document.title = 'fig-ready';
+</script>
+</body></html>

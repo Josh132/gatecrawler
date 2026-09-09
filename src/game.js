@@ -1,7 +1,7 @@
 import { keys, mouse, pressed, endFrameInput } from './input.js';
 import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
-import { TAU, clamp, glowCircle } from './draw.js';
+import { TAU, clamp, glowCircle, shade, figure, spider, critter } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
@@ -2968,7 +2968,7 @@ function renderPlay(g, dim) {
     else if (d.k === 'grenade') drawGrenade(ctx, d.o);
     else if (d.k === 'block') drawBlock(ctx, d.o);
     else if (d.k === 'enemy') drawEnemy(ctx, d.o, g.time);
-    else drawPlayer(ctx, d.o, g.time);
+    else drawPlayer(ctx, d.o, g.time, g);
   }
 
   // energy on top of the sort: bullets, beams and sparks read as light
@@ -3289,57 +3289,22 @@ function drawLights(ctx, g, dim) {
   ctx.restore();
 }
 
-// vaguely-humanoid top-down figure: legs trailing, torso, shoulder bar, weapon
-// arm forward, head toward facing.
+// top-down figure: skeleton, gait and gear all live in draw.js `figure`. this
+// keeps the legacy signature + o keys and adds the ground shadow.
 function drawHumanoid(ctx, x, y, ang, s, body, head, o) {
   o = o || {};
-  if (o.shadow !== false) drawShadow(ctx, x, y + 2.5 * s, 6.6 * s, o.z || 0);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(ang);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.shadowBlur = o.blur == null ? 10 : o.blur;
-  ctx.shadowColor = body;
-
-  ctx.strokeStyle = body;
-  ctx.lineWidth = 2.2 * s;
-  ctx.beginPath();
-  ctx.moveTo(-1 * s, -2.4 * s);
-  ctx.lineTo(-6.5 * s, -3.7 * s);
-  ctx.moveTo(-1 * s, 2.4 * s);
-  ctx.lineTo(-6.5 * s, 3.7 * s);
-  ctx.stroke();
-
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 6 * s, 4.4 * s, 0, 0, TAU);
-  ctx.fill();
-
-  ctx.lineWidth = 3 * s;
-  ctx.beginPath();
-  ctx.moveTo(1.4 * s, -5.2 * s);
-  ctx.lineTo(1.4 * s, 5.2 * s);
-  ctx.stroke();
-
-  if (o.weapon !== false) {
-    ctx.lineWidth = 2.4 * s;
-    ctx.strokeStyle = o.weaponColor || '#e8f4ff';
-    ctx.beginPath();
-    ctx.moveTo(2 * s, 2.6 * s);
-    ctx.lineTo((o.weaponLen || 12) * s, 3.3 * s);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = head;
-  ctx.beginPath();
-  ctx.arc(3.2 * s, 0, (o.head || 3) * s, 0, TAU);
-  ctx.fill();
-
-  ctx.restore();
+  const bulk = (o.build && o.build.bulk) || 1;
+  if (o.shadow !== false) drawShadow(ctx, x, y + 2.5 * s, 6.6 * s * (0.78 + 0.22 * bulk), o.z || 0);
+  figure(ctx, x, y, ang, s, body, head, o);
 }
 
-function drawPlayer(ctx, p, t, hub) {
+// rank a rarity tier so the best worn piece can tint the whole kit
+function rarityRank(r) {
+  return r === 'legendary' ? 3 : r === 'epic' ? 2 : r === 'good' || r === 'uncommon' ? 1 : 0;
+}
+
+function drawPlayer(ctx, p, t, g) {
+  const hub = g && g.hub;
   // always-on locator so you never lose yourself in a busy frame
   ctx.save();
   const rg = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.r + 16);
@@ -3373,7 +3338,72 @@ function drawPlayer(ctx, p, t, hub) {
     body = 'rgba(140,235,255,0.5)';
     head = 'rgba(200,245,255,0.6)';
   }
-  drawHumanoid(ctx, p.x, p.y, p.aim, 1.12, body, head, { weaponColor: '#f4faff', weaponLen: 14, blur: 16 });
+
+  // gear read: equipped armour becomes plating, tinted by its rarity; the
+  // equipped gun picks the weapon silhouette
+  const inv = g && g.inv;
+  const eq = inv ? inv.equip : null;
+  const hs = eq ? eq.head : null;
+  const ts = eq ? eq.torso : null;
+  const ls = eq ? eq.legs : null;
+  const fs = eq ? eq.feet : null;
+  let tier = 'common';
+  if (hs && rarityRank(stackRarity(hs)) > rarityRank(tier)) tier = stackRarity(hs);
+  if (ts && rarityRank(stackRarity(ts)) > rarityRank(tier)) tier = stackRarity(ts);
+  if (ls && rarityRank(stackRarity(ls)) > rarityRank(tier)) tier = stackRarity(ls);
+  if (fs && rarityRank(stackRarity(fs)) > rarityRank(tier)) tier = stackRarity(fs);
+  const geared = !!(hs || ts || ls || fs);
+  const wid = inv ? activeWeaponId(inv) : 'p90';
+  const wdef = WEAPONS[wid];
+
+  // one persistent build/opts pair — this runs every frame, allocate nothing
+  const B = drawPlayer.B || (drawPlayer.B = {});
+  const O = drawPlayer.O || (drawPlayer.O = { build: B, muzzle: { x: 0, y: 0 } });
+  B.bulk = ts ? 1.14 : 1.04;
+  B.vest = true;
+  B.glove = '#2e4a58';
+  B.helm = hs ? (hs.id === 'a_helm' ? 'dome' : 'cap') : 'cap';
+  B.visor = hs && hs.id === 'a_visor' ? '#9fe6ff' : false;
+  B.plate = ts ? (ts.id === 'a_plate' ? 'heavy' : 'front') : false;
+  B.greaves = !!ls;
+  B.boots = !!fs;
+  // team teal by default, rarity tint once anything is worn
+  B.trim = geared ? RARITY_COLOR[tier] || '#6fd6e6' : '#6fd6e6';
+
+  // pose from player state
+  let pose = null;
+  if (p.alive === false) pose = 'dead';
+  else if (p.dodge > 0) pose = 'dodge';
+  else if (p.flash > 0) pose = 'hit';
+  else if (p.reloading || p.reloadT > 0) pose = 'reload';
+  O.pose = pose;
+  O.t = t;
+  O.phase = 0;
+  O.vx = p.vx;
+  O.vy = p.vy;
+  O.gait = clamp(Math.hypot(p.vx || 0, p.vy || 0) / (p.speed || 232), 0, 1);
+  O.hurt = p.flash > 0 ? clamp(p.flash / 0.12, 0, 1) : 0;
+  O.hitDir = p.kx || p.ky ? Math.atan2(p.ky, p.kx) : p.aim + Math.PI;
+  O.recoil = p.cool > 0 ? clamp(p.cool / 0.16, 0, 1) : 0;
+  O.reload =
+    p.reloadT > 0 && p.reloadDur > 0
+      ? clamp(Math.sin((1 - p.reloadT / p.reloadDur) * Math.PI) * 1.7, 0.3, 1)
+      : 1;
+  O.deathDir = p.aim + Math.PI;
+  O.weapon = true;
+  O.weaponKind = wid;
+  O.weaponLen = null;
+  O.weaponColor = p.flash > 0 ? '#fff' : (wdef && wdef.color) || '#f4faff';
+  O.head = 3.1;
+  O.blur = 14;
+  O.glow = '#7fe6ff';
+  O.z = 0;
+  drawHumanoid(ctx, p.x, p.y, p.aim, 1.12, body, head, O);
+
+  // top-tier kit gets a faint rim glow so an upgrade reads on the body
+  if (geared && (tier === 'epic' || tier === 'legendary')) {
+    glowCircle(ctx, p.x, p.y, p.r + 1, hexA(RARITY_COLOR[tier] || '#b06cff', 0.12), 16);
+  }
   if (p.dodge > 0) glowCircle(ctx, p.x, p.y, p.r + 4, 'rgba(120,230,255,0.28)', 18);
   if (p.stun > 0) {
     ctx.strokeStyle = 'rgba(255,220,120,0.7)';
@@ -3385,15 +3415,32 @@ function drawPlayer(ctx, p, t, hub) {
   if (!hub && p.stimT > 0) glowCircle(ctx, p.x, p.y, p.r + 2, 'rgba(255,213,74,0.22)', 14);
 }
 
+// replicator debris: a tumbling shard of the block that made it
 function drawBlock(ctx, bl) {
+  drawShadow(ctx, bl.x, bl.y + 2, bl.r * 0.8, 0, 0.6);
   ctx.save();
   ctx.translate(bl.x, bl.y);
   ctx.rotate(bl.spin);
+  const hot = bl.mergeT < 1;
+  ctx.fillStyle = hot ? 'rgba(190,240,255,0.5)' : 'rgba(40,90,120,0.55)';
+  ctx.fillRect(-bl.r, -bl.r, bl.r * 2, bl.r * 2);
+  ctx.strokeStyle = hot ? '#dff6ff' : '#7fe0ff';
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(-bl.r, -bl.r, bl.r * 2, bl.r * 2);
+  // inner cells — a block is a lattice, not a plate
+  ctx.strokeStyle = hot ? 'rgba(255,255,255,0.7)' : 'rgba(140,225,255,0.45)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-bl.r, 0);
+  ctx.lineTo(bl.r, 0);
+  ctx.moveTo(0, -bl.r);
+  ctx.lineTo(0, bl.r);
+  ctx.stroke();
   ctx.shadowBlur = 10;
   ctx.shadowColor = '#7fe0ff';
-  ctx.strokeStyle = bl.mergeT < 1 ? '#dff6ff' : '#7fe0ff';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(-bl.r, -bl.r, bl.r * 2, bl.r * 2);
+  ctx.strokeStyle = hot ? '#eaffff' : 'rgba(160,230,255,0.6)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-bl.r * 0.55, -bl.r * 0.55, bl.r * 1.1, bl.r * 1.1);
   ctx.restore();
 }
 
@@ -3401,8 +3448,28 @@ const FACTION_TINT = {
   jaffa: '#ffb347',
   wraith: '#8bf0a0',
   replicator: '#8fe4ff',
+  scav: '#9fb8c8',
   boss: '#ffd27a',
 };
+
+// per-kind silhouette descriptors — static, shared, never mutated per frame
+function enemyBuilds() {
+  return (
+    drawEnemy.B ||
+    (drawEnemy.B = {
+      jaffa: { bulk: 1.14, pauldrons: true, helm: 'serpent', plate: 'front', boots: true, trim: '#f2d5a2', glove: '#4a3320' },
+      jaffa_heavy: { bulk: 1.5, pauldrons: true, helm: 'dome', plate: 'heavy', boots: true, greaves: true, trim: '#ffdca0', glove: '#4a3320' },
+      jaffa_grenadier: { bulk: 1.02, pauldrons: true, helm: 'dome', boots: true, trim: '#ffe3ac', glove: '#4a3320' },
+      jaffa_sniper: { bulk: 0.94, helm: 'serpent', kneel: true, boots: true, greaves: true, trim: '#e8c896', glove: '#4a3320' },
+      wraith: { bulk: 0.96, coatTails: true, helm: 'hood', spikes: true, claws: true, glove: '#4d6b4d' },
+      wraith_drone: { bulk: 0.82, insectoid: true, helm: 'mask', spikes: true, claws: true, glove: '#4d6b4d' },
+      wraith_stalker: { bulk: 0.94, coatTails: true, helm: 'mask', spikes: true, claws: true, glove: '#4d6b4d' },
+      boss_jaffa: { bulk: 1.28, cloak: true, pauldrons: true, helm: 'serpent', plate: 'heavy', boots: true, greaves: true, bighead: true, trim: '#ffdca0', glove: '#4a3320' },
+      boss_wraith: { bulk: 1.16, cloak: true, coatTails: true, helm: 'crown', spikes: true, claws: true, bighead: true, trim: '#cfffd6', glove: '#4d6b4d' },
+      generic: { bulk: 1, boots: true },
+    })
+  );
+}
 
 function drawEnemy(ctx, e, t) {
   const flash = e.flash > 0;
@@ -3410,10 +3477,19 @@ function drawEnemy(ctx, e, t) {
   const idle = dormant;
   if (dormant) ctx.globalAlpha = 0.7;
   const hunter = e.hunter;
+  const kind = e.kind;
+  const fam = kind.startsWith('wraith')
+    ? 'wraith'
+    : kind.startsWith('replicator')
+      ? 'replicator'
+      : kind === 'boss'
+        ? 'boss'
+        : kind === 'scavenger'
+          ? 'scav'
+          : 'jaffa';
 
   // engaged enemies get a thin faction ring so awake reads instantly vs asleep
   if (!dormant && !flash) {
-    const fam = e.kind.startsWith('wraith') ? 'wraith' : e.kind.startsWith('replicator') ? 'replicator' : e.kind === 'boss' ? 'boss' : 'jaffa';
     ctx.strokeStyle = hexA(hunter ? '#ff6a4a' : FACTION_TINT[fam], 0.4 + 0.15 * Math.sin(t * 6 + e.wobble));
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -3421,92 +3497,158 @@ function drawEnemy(ctx, e, t) {
     ctx.stroke();
   }
 
-  if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy' || e.kind === 'jaffa_grenadier') {
-    const heavy = e.kind === 'jaffa_heavy';
-    const nade = e.kind === 'jaffa_grenadier';
-    // pull the three Jaffa types apart by hue as well as shape
-    const jc = flash ? '#fff' : hunter ? '#ff6a4a' : heavy ? '#d97636' : nade ? '#ffd45c' : '#ffb347';
-    drawHumanoid(ctx, e.x, e.y, e.facing, heavy ? 1.5 : nade ? 1.1 : 1.05, jc, flash ? '#fff' : '#ffe6c8', {
-      weaponColor: flash ? '#fff' : '#ffcf9a',
-      weaponLen: heavy ? 17 : nade ? 9 : 15,
-      head: heavy ? 4 : 3.4,
-      blur: heavy ? 12 : 10,
-    });
-    if (heavy) {
-      // a slab of frontal plating — the tank silhouette
-      ctx.save();
-      ctx.strokeStyle = flash ? '#fff' : '#ffdca0';
-      ctx.lineWidth = 5;
-      ctx.lineCap = 'round';
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = '#fb3';
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r + 3, e.facing - 1.1, e.facing + 1.1);
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      ctx.save();
-      ctx.strokeStyle = flash ? '#fff' : '#ffe0b0';
-      ctx.lineWidth = 2.6;
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = '#fb3';
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.r + 1, e.facing - 0.7, e.facing + 0.7);
-      ctx.stroke();
-      ctx.restore();
+  // shared animation state
+  const BU = enemyBuilds();
+  const sp = Math.hypot(e.vx || 0, e.vy || 0);
+  const dying = e.hp <= 0;
+  const hurt = flash ? clamp(e.flash / 0.1, 0, 1) : 0;
+  const hitDir = e.kx || e.ky ? Math.atan2(e.ky, e.kx) : e.facing + Math.PI;
+  const pose = dying ? 'dead' : dormant ? 'idle' : flash ? 'hit' : sp > 10 ? 'walk' : 'idle';
+  const gait = clamp(sp / (e.speed || 120), 0, 1);
+  const O = drawEnemy.O || (drawEnemy.O = { build: null, muzzle: { x: 0, y: 0 } });
+  O.t = t;
+  O.phase = e.wobble;
+  O.pose = pose;
+  O.gait = gait;
+  O.vx = e.vx;
+  O.vy = e.vy;
+  O.hurt = hurt;
+  O.hitDir = hitDir;
+  O.deathDir = hitDir;
+  O.death = 1;
+  O.recoil = 0;
+  O.reload = 0;
+  O.charge = 0;
+  O.chargeColor = null;
+  O.handGlow = null;
+  O.weapon = true;
+  O.weaponSide = 1;
+  O.weaponKind = null;
+  O.weaponLen = null;
+  O.weaponColor = null;
+  O.head = 3;
+  O.blur = 10;
+  O.glow = null;
+  O.z = 0;
+  O.shadow = true;
+
+  if (kind === 'jaffa' || kind === 'jaffa_heavy' || kind === 'jaffa_grenadier' || kind === 'jaffa_sniper') {
+    const heavy = kind === 'jaffa_heavy';
+    const nade = kind === 'jaffa_grenadier';
+    const snip = kind === 'jaffa_sniper';
+    // pull the Jaffa types apart by hue as well as shape
+    const jc = flash ? '#fff' : hunter ? '#ff6a4a' : heavy ? '#d97636' : nade ? '#ffd45c' : snip ? '#e0a45c' : '#ffb347';
+    const wind = nade && !dormant && e.cool < 0.45;
+    O.build = BU[kind] || BU.jaffa;
+    O.weaponKind = heavy ? 'staff' : nade ? 'launcher' : snip ? 'rifle' : 'staff';
+    O.weaponLen = heavy ? 18 : null;
+    O.weaponColor = flash ? '#fff' : '#ffcf9a';
+    O.head = heavy ? 3.8 : snip ? 3.1 : 3.3;
+    O.blur = heavy ? 12 : 10;
+    O.recoil = nade && wind ? 1 : e.cool < 0.14 && !dormant ? 1 - e.cool / 0.14 : 0;
+    if (snip && e.aimT > 0) {
+      O.charge = clamp(e.aimT / (e.aimDur || 1.3), 0, 1);
+      O.chargeColor = '#ffcf6a';
+      O.pose = 'fire';
     }
+    if (nade && wind) O.pose = 'fire';
+    const fscale = heavy ? 1.5 : nade ? 1.1 : snip ? 1.02 : 1.06;
+    drawHumanoid(ctx, e.x, e.y, e.facing, fscale, jc, flash ? '#fff' : '#ffe6c8', O);
+    // frontal armour cut: the arc the game's damage rule actually models,
+    // sitting right on the chest rather than floating off the body
+    const bodyR = 6 * (O.build.bulk || 1) * fscale + 1.4;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.shadowBlur = heavy ? 8 : 5;
+    ctx.shadowColor = '#fb3';
+    ctx.strokeStyle = flash ? '#fff' : hexA(heavy ? '#ffdca0' : '#ffe0b0', 0.85);
+    ctx.lineWidth = heavy ? 3 : 1.8;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, bodyR, e.facing - (heavy ? 1.15 : 0.8), e.facing + (heavy ? 1.15 : 0.8));
+    ctx.stroke();
+    ctx.restore();
     if (nade) {
-      // a lit shell held at the hip — distinct silhouette
-      const hx = e.x + Math.cos(e.facing - 1.4) * 10;
-      const hy = e.y + Math.sin(e.facing - 1.4) * 10;
-      glowCircle(ctx, hx, hy, 4, flash ? '#fff' : '#ff8a3c', 10);
+      // a lit shell: at the hip, raised overhead while winding up a lob
+      const a = wind ? e.facing - 0.35 : e.facing - 1.4;
+      const d = wind ? 13 : 10;
+      const hx = e.x + Math.cos(a) * d;
+      const hy = e.y + Math.sin(a) * d - (wind ? 4 : 0);
+      glowCircle(ctx, hx, hy, wind ? 4.6 : 4, flash ? '#fff' : '#ff8a3c', wind ? 14 : 10);
     }
-  } else if (e.kind === 'wraith' || e.kind === 'wraith_drone') {
-    const drone = e.kind === 'wraith_drone';
+    if (snip && e.aimT > 0 && !dormant) {
+      // charge bloom on the barrel tip
+      const m = O.muzzle;
+      glowCircle(ctx, m.x, m.y, 1.6 + 2.6 * O.charge, hexA('#ffd27a', 0.35 + 0.35 * O.charge), 16);
+    }
+  } else if (kind === 'wraith' || kind === 'wraith_drone' || kind === 'wraith_stalker') {
+    const drone = kind === 'wraith_drone';
+    const stalk = kind === 'wraith_stalker';
+    const phased = stalk && e.phaseT > 0;
     const jx = (Math.random() - 0.5) * (drone ? 3.5 : 2.5);
     const jy = (Math.random() - 0.5) * (drone ? 3.5 : 2.5);
-    drawHumanoid(ctx, e.x + jx, e.y + jy, e.facing, drone ? 0.8 : 1, flash ? '#fff' : hunter ? '#ff6a4a' : drone ? '#bff8bf' : '#9df7a0', flash ? '#fff' : '#d7ffda', {
-      weapon: drone,
-      weaponColor: '#cffccf',
-      weaponLen: 10,
-      head: drone ? 2.2 : 2.6,
-      blur: 12,
-    });
-    if (!drone) {
+    const wc = flash ? '#fff' : hunter ? '#ff6a4a' : drone ? '#bff8bf' : stalk ? '#7fe0c8' : '#9df7a0';
+    O.build = BU[kind] || BU.wraith;
+    O.weapon = drone;
+    O.weaponKind = 'zat';
+    O.weaponColor = '#cffccf';
+    O.weaponLen = 10;
+    O.head = drone ? 2.4 : 2.8;
+    O.blur = 12;
+    // the feeding hand lights up as it closes for a drain
+    if (!drone && !dormant && e.cool < 0.5) O.handGlow = flash ? '#fff' : '#d6ffe0';
+    const s = drone ? 0.82 : 1;
+    if (phased) {
+      // intangible: a translucent, chromatically-split after-image
+      const pa = 0.1 + 0.09 * Math.sin(t * 22 + e.wobble);
+      const a0 = ctx.globalAlpha;
+      const off = 1.6 + Math.sin(t * 9 + e.wobble) * 0.8;
+      O.blur = 0;
+      O.shadow = false;
+      ctx.globalAlpha = a0 * pa;
+      drawHumanoid(ctx, e.x + jx - off, e.y + jy, e.facing, s, '#7fd8ff', '#cfefff', O);
+      drawHumanoid(ctx, e.x + jx + off, e.y + jy, e.facing, s, '#ff8fd0', '#ffd7ee', O);
+      ctx.globalAlpha = a0 * (pa + 0.1);
+      drawHumanoid(ctx, e.x + jx, e.y + jy, e.facing, s, wc, '#d7ffda', O);
+      ctx.globalAlpha = a0;
+    } else {
+      drawHumanoid(ctx, e.x + jx, e.y + jy, e.facing, s, wc, flash ? '#fff' : '#d7ffda', O);
+      // just-materialised flash
+      if (stalk && e.nextPhase > 0 && e.phaseCd > e.nextPhase - 0.3) {
+        glowCircle(ctx, e.x, e.y, e.r + 4, 'rgba(150,255,220,0.3)', 20);
+      }
+    }
+    if (!drone && !phased) {
+      // trailing tendrils off the shoulders
       ctx.save();
       ctx.translate(e.x + jx, e.y + jy);
       ctx.rotate(e.facing);
       ctx.strokeStyle = flash ? '#fff' : '#bff8c2';
-      ctx.lineWidth = 1.6;
+      ctx.lineWidth = 1.4;
       ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(3, -4);
-      ctx.lineTo(9, -6);
-      ctx.moveTo(3, 4);
-      ctx.lineTo(9, 6);
-      ctx.stroke();
+      for (let i = -1; i <= 1; i += 2) {
+        const w = Math.sin(t * 3.4 + e.wobble + i) * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(2, i * 4);
+        ctx.quadraticCurveTo(6, i * 5 + w, 9.5, i * 6.5 + w * 1.4);
+        ctx.stroke();
+      }
       ctx.restore();
     }
-  } else if (e.kind === 'replicator' || e.kind === 'replicator_brute') {
-    const brute = e.kind === 'replicator_brute';
+  } else if (kind === 'replicator' || kind === 'replicator_brute' || kind === 'replicator_weaver') {
+    const brute = kind === 'replicator_brute';
+    const weav = kind === 'replicator_weaver';
     drawShadow(ctx, e.x, e.y + 3, e.r * 0.95, 0);
-    ctx.save();
-    ctx.translate(e.x, e.y);
-    ctx.rotate(e.wobble * 0.3);
-    ctx.shadowBlur = brute ? 14 : 8;
-    ctx.shadowColor = '#7fe0ff';
-    ctx.strokeStyle = flash ? '#fff' : hunter ? '#ff6a4a' : '#8fe4ff';
-    ctx.fillStyle = flash ? '#fff' : 'rgba(40,90,120,0.55)';
-    ctx.lineWidth = 2;
-    const s = e.r;
-    ctx.beginPath();
-    ctx.rect(-s, -s, s * 2, s * 2);
-    ctx.fill();
-    ctx.stroke();
-    if (brute) {
-      ctx.strokeRect(-s * 0.5, -s * 0.5, s, s);
-    }
-    ctx.restore();
+    const rc = flash ? '#fff' : hunter ? '#ff6a4a' : brute ? '#7fd0ff' : '#8fe4ff';
+    const RO = drawEnemy.RO || (drawEnemy.RO = {});
+    RO.t = t;
+    RO.phase = e.wobble;
+    RO.legs = brute ? 8 : 6;
+    RO.brute = brute;
+    RO.rate = dormant ? 1.6 : 7 + 9 * gait;
+    RO.eye = hunter ? '#ffb4a4' : '#dff6ff';
+    RO.emitter = weav ? clamp((e.weaveT || 0) / (e.weaveLife || 4.5), 0, 1) : null;
+    RO.weaveColor = '#9fe8ff';
+    spider(ctx, e.x, e.y + (dying ? 2 : 0), e.facing, (e.r / 5.2) * (dying ? 1.15 : 1), rc, RO);
     // adapt readout: little type pips
     if ((e.resist.kinetic > 0.05 || e.resist.energy > 0.05) && !idle) {
       ctx.fillStyle = 'rgba(180,240,255,0.7)';
@@ -3518,15 +3660,52 @@ function drawEnemy(ctx, e, t) {
         e.y - e.r - 12
       );
     }
-  } else {
-    // boss
-    const bc = e.variant === 'wraith' ? '#9df7a0' : e.variant === 'replicator' ? '#8fe4ff' : '#ffb347';
-    drawHumanoid(ctx, e.x, e.y, e.facing, 1.95, flash ? '#fff' : bc, flash ? '#fff' : '#ffe9c8', {
-      weaponColor: '#ffcf9a',
-      weaponLen: 13,
-      head: 3.3,
-      blur: 16,
-    });
+  } else if (kind === 'scavenger') {
+    drawShadow(ctx, e.x, e.y + 3, e.r * 0.8, 0);
+    const CO = drawEnemy.CO || (drawEnemy.CO = {});
+    CO.t = t;
+    CO.phase = e.wobble;
+    CO.gait = gait;
+    CO.startle = flash ? 1 : sp > e.speed * 0.7 ? 0.4 : 0;
+    CO.eye = flash ? '#fff' : '#bfe8ff';
+    critter(ctx, e.x, e.y, e.facing, e.r / 4.2, flash ? '#fff' : '#9fb8c8', CO);
+  } else if (kind === 'boss') {
+    const v = e.variant;
+    const bc = flash ? '#fff' : v === 'wraith' ? '#9df7a0' : v === 'replicator' ? '#8fe4ff' : '#ffb347';
+    if (v === 'replicator') {
+      // a towering carrier cluster rather than a body
+      const RO = drawEnemy.RO || (drawEnemy.RO = {});
+      RO.t = t;
+      RO.phase = e.wobble;
+      RO.legs = 8;
+      RO.brute = true;
+      RO.rate = 5 + 6 * gait;
+      RO.eye = '#dff6ff';
+      RO.emitter = null;
+      drawShadow(ctx, e.x, e.y + 4, e.r * 1.05, 0);
+      spider(ctx, e.x, e.y, e.facing, e.r / 5.6, bc, RO);
+      // a second, smaller cluster riding on top sells the height
+      spider(ctx, e.x - Math.cos(e.facing) * 2, e.y - 6, e.facing + 0.6, e.r / 8.5, shade(bc, 1.25), RO);
+    } else {
+      O.build = v === 'wraith' ? BU.boss_wraith : BU.boss_jaffa;
+      O.weaponKind = v === 'wraith' ? null : 'cannon';
+      O.weapon = v !== 'wraith';
+      O.weaponColor = '#ffcf9a';
+      O.head = 3.4;
+      O.blur = 16;
+      O.recoil = e.attackT != null && e.attackT < 0.2 ? 1 : 0;
+      if (v === 'wraith' && !dormant) O.handGlow = '#d6ffe0';
+      if (e.phase2) O.glow = '#ff7a4a';
+      drawHumanoid(ctx, e.x, e.y, e.facing, 1.95, bc, flash ? '#fff' : v === 'wraith' ? '#d7ffda' : '#ffe9c8', O);
+    }
+    // phase two: the enrage reads as a hot pulsing rim
+    if (e.phase2 && !flash) {
+      ctx.strokeStyle = `rgba(255,110,60,${0.25 + 0.2 * Math.sin(t * 9)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r + 3, 0, TAU);
+      ctx.stroke();
+    }
     if (e.shield > 0) {
       const cap = e.variant === 'replicator' ? 70 : 90;
       ctx.save();
@@ -3544,6 +3723,14 @@ function drawEnemy(ctx, e, t) {
       ctx.font = 'bold 10px monospace';
       ctx.textAlign = 'center';
       ctx.fillText(e.immuneType === 'kinetic' ? 'KINETIC-IMMUNE' : 'ENERGY-IMMUNE', e.x, e.y - e.r - 16);
+    }
+    if (e.plantT > 0) {
+      // plant tell: it roots and braces before a heavy swing
+      ctx.strokeStyle = `rgba(255,180,90,${0.25 + 0.3 * Math.sin(t * 24)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.r + 12, 0, TAU);
+      ctx.stroke();
     }
     if (e.windup > 0) {
       // charge telegraph: a lance of light on the floor along the dash line
@@ -3567,6 +3754,13 @@ function drawEnemy(ctx, e, t) {
       glowCircle(ctx, e.x, e.y, e.r + 5 + 6 * Math.sin(t * 30), 'rgba(255,120,40,0.5)', 24);
     }
     if (e.charging > 0) glowCircle(ctx, e.x, e.y, e.r + 4, 'rgba(255,120,40,0.35)', 22);
+  } else {
+    // unknown kind: a safe generic trooper, never the boss
+    O.build = BU.generic;
+    O.weaponKind = 'p90';
+    O.weaponColor = flash ? '#fff' : '#dfe9f4';
+    O.head = 3;
+    drawHumanoid(ctx, e.x, e.y, e.facing, 1.05, flash ? '#fff' : hunter ? '#ff6a4a' : '#c8d6e4', flash ? '#fff' : '#eaf4ff', O);
   }
 
   if (hunter && !idle) glowCircle(ctx, e.x, e.y, e.r + 5, 'rgba(255,90,60,0.25)', 18);
@@ -4590,7 +4784,7 @@ function renderHub(g) {
   cast.sort((a, b) => a.y - b.y);
   for (const d of cast) {
     if (!d.cr) {
-      drawPlayer(ctx, p, g.time);
+      drawPlayer(ctx, p, g.time, g);
       continue;
     }
     const col = CREW_COLORS[d.cr.role] || CREW_COLORS.tech;

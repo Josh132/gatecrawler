@@ -106,6 +106,68 @@
     api.render(STEP);
   }
 
+  // ?mob=all | ?mob=jaffa,wraith_drone — pin a line-up of enemy kinds next to
+  // the player and hold them there so the models can be inspected in isolation.
+  // extras: &variant=jaffa|wraith|replicator (boss), &phase=1 (stalker phased),
+  // &gear=1 (equip the player) so the armour plating shows.
+  const MOB = qs.get('mob');
+  if (MOB) {
+    const { Enemy } = await import('../src/entities.js');
+    const ALL = ['jaffa', 'jaffa_heavy', 'jaffa_grenadier', 'jaffa_sniper', 'wraith', 'wraith_drone',
+      'wraith_stalker', 'replicator', 'replicator_brute', 'replicator_weaver', 'scavenger', 'boss'];
+    const kinds = MOB === 'all' ? ALL : MOB.split(',');
+    for (const c of ['KeyW', 'KeyA', 'KeyS', 'KeyD']) keys.delete(c);
+    mouse.down = false;
+    if (qs.has('gear')) {
+      g.inv.equip.head = { id: 'a_helm', count: 1, rarity: 'epic' };
+      g.inv.equip.torso = { id: 'a_plate', count: 1, rarity: 'epic' };
+      g.inv.equip.legs = { id: 'a_greaves', count: 1 };
+      g.inv.equip.feet = { id: 'a_boots', count: 1 };
+      if (qs.get('gear') !== '1') g.inv.equip.weapon1 = { id: qs.get('gear'), count: 1 };
+    }
+    g.enemies.length = 0;
+    const p = g.player;
+    const slots = [];
+    kinds.forEach((k, i) => {
+      const x = p.x - 110 + (i % 4) * 74;
+      const y = p.y - 78 + ((i / 4) | 0) * 74;
+      const e = new Enemy(k, x, y, 4, { variant: qs.get('variant') || 'jaffa' });
+      e.state = 'active';
+      e._room = g.curRoom;
+      e.facing = Math.atan2(p.y - y, p.x - x);
+      const sv = qs.has('still') ? 0 : 0.7;
+      const vx = Math.cos(e.facing) * e.speed * sv;
+      const vy = Math.sin(e.facing) * e.speed * sv;
+      if (k === 'jaffa_sniper') e.aimT = 0.9;
+      if (k === 'wraith_stalker' && qs.has('phase')) e.phaseT = 0.5;
+      if (k === 'replicator_weaver') e.weaveT = 3;
+      g.enemies.push(e);
+      slots.push({ e, x, y, vx, vy, ph: e.phaseT });
+    });
+    document.getElementById('d').textContent = 'MOB ' + kinds.join(' ');
+    document.title = 'mob shot: ' + MOB;
+    (function paint() {
+      api.update(STEP);
+      for (const s of slots) {
+        s.e.x = s.x;
+        s.e.y = s.y;
+        s.e.vx = s.vx;
+        s.e.vy = s.vy;
+        s.e.state = 'active';
+        s.e.hp = s.e.maxHp;
+        s.e.alive = true;
+        s.e.phaseT = s.ph;
+        if (g.enemies.indexOf(s.e) < 0) g.enemies.push(s.e);
+      }
+      p.hp = p.maxHp;
+      p.iframe = 0.2;
+      p.x = slots.length ? p.x : p.x;
+      api.render(STEP);
+      requestAnimationFrame(paint);
+    })();
+    throw new Error('mob-shot-done');
+  }
+
   if (PANEL) {
     // stock the inventory so the panel has something to show, then open it
     for (const id of ['medkit', 'stim', 'shieldcell', 'frag', 'a_helm', 'a_plate', 'a_greaves', 'a_boots', 'w_staff', 'w_zat', 'bandage']) {

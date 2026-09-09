@@ -976,10 +976,349 @@ export const music = {
   setVolume(v) {
     mVol = Math.max(0, Math.min(1, v));
     if (mNodes && ctx) mRamp(mNodes.master.gain, (0.08 + mIntensity * 0.03) * mVol, ctx.currentTime, 0.5);
+    ambApplyVol(); // the ambient bed rides the same music-volume scalar
     saveVolPrefs();
     return mVol;
   },
   getVolume() {
     return mVol;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// per-biome ambient bed — a quiet looping environmental texture UNDER the
+// music. Its own master gain (not the sfx bus, not the music master) rides
+// mVol so the music-volume slider covers it. Each bed = a handful of filtered
+// noise + slow LFO'd drones + sparse one-shots on loose setTimeout timers.
+// set(biome) crossfades ~1.5s; the same biome is a no-op; stop() fades out.
+// ---------------------------------------------------------------------------
+
+const AMB_LEVEL = 0.55; // crossfade target for a bed's own gain (layers are quiet)
+
+let ambMaster = null;
+let ambCur = null; // active bed: { biome, gain, oscs:[], timers:[], alive }
+
+function ambApplyVol() {
+  if (ambMaster && ctx) ambMaster.gain.setTargetAtTime(mVol, ctx.currentTime, 0.1);
+}
+
+// a sustained filtered-noise layer, with an optional slow LFO on gain or cutoff
+function ambNoiseLayer(bed, dest, t, type, freq, Q, level, lfoRate, lfoDepth, lfoTarget) {
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer(2.7);
+  src.loop = true;
+  const bq = ctx.createBiquadFilter();
+  bq.type = type;
+  bq.frequency.value = freq;
+  if (Q != null) bq.Q.value = Q;
+  const g = ctx.createGain();
+  g.gain.value = level;
+  src.connect(bq).connect(g).connect(dest);
+  src.start(t);
+  bed.oscs.push(src);
+  if (lfoRate) {
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = lfoRate;
+    const d = ctx.createGain();
+    d.gain.value = lfoDepth;
+    lfo.connect(d).connect(lfoTarget === 'cutoff' ? bq.frequency : g.gain);
+    lfo.start(t);
+    bed.oscs.push(lfo);
+  }
+  return { g, bq };
+}
+
+// a sustained oscillator drone with an optional slow gain LFO
+function ambDrone(bed, dest, t, type, freq, level, lfoRate, lfoDepth) {
+  const o = ctx.createOscillator();
+  o.type = type;
+  o.frequency.value = freq;
+  const g = ctx.createGain();
+  g.gain.value = level;
+  o.connect(g).connect(dest);
+  o.start(t);
+  bed.oscs.push(o);
+  if (lfoRate) {
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = lfoRate;
+    const d = ctx.createGain();
+    d.gain.value = lfoDepth;
+    lfo.connect(d).connect(g.gain);
+    lfo.start(t);
+    bed.oscs.push(lfo);
+  }
+  return g;
+}
+
+// one-shot noise grain routed to the bed (NOT the sfx bus)
+function ambGrain(dest, t, type, f0, f1, Q, attack, decay, peak) {
+  const dur = attack + decay + 0.05;
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer(dur);
+  const bq = ctx.createBiquadFilter();
+  bq.type = type;
+  bq.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) bq.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+  if (Q != null) bq.Q.value = Q;
+  const g = ctx.createGain();
+  env(g, t, attack, decay, peak);
+  src.connect(bq).connect(g).connect(dest);
+  src.start(t);
+  src.stop(t + dur);
+}
+
+// one-shot tone grain routed to the bed
+function ambPing(dest, t, type, f0, f1, glide, attack, decay, peak) {
+  const o = ctx.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t);
+  if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + glide);
+  const g = ctx.createGain();
+  env(g, t, attack, decay, peak);
+  o.connect(g).connect(dest);
+  o.start(t);
+  o.stop(t + attack + decay + 0.05);
+}
+
+// run fn on a loose random interval for as long as the bed stays alive
+function ambEvery(bed, minS, maxS, fn) {
+  const tick = () => {
+    if (!bed.alive || !ctx) return;
+    try {
+      fn(ctx.currentTime);
+    } catch (e) {}
+    bed.timers.push(setTimeout(tick, (minS + Math.random() * (maxS - minS)) * 1000));
+  };
+  bed.timers.push(setTimeout(tick, (minS + Math.random() * (maxS - minS)) * 1000));
+}
+
+// --- the beds ----------------------------------------------------------
+function bedTemple(bed, g, t) {
+  ambNoiseLayer(bed, g, t, 'lowpass', 220, 0.5, 0.05, 0.03, 0.02, 'gain'); // stone-room air
+  ambNoiseLayer(bed, g, t, 'bandpass', 480, 0.8, 0.018, 0.05, 260, 'cutoff'); // dry wind seam
+  ambDrone(bed, g, t, 'sine', 47, 0.03, 0.05, 0.012); // sub room tone
+  ambEvery(bed, 6, 16, (tt) => {
+    // a distant drip
+    ambPing(g, tt, 'sine', 1400 + Math.random() * 900, 700, 0.05, 0.001, 0.12, 0.05);
+    ambGrain(g, tt + 0.01, 'bandpass', 2600, 1600, 8, 0.001, 0.04, 0.02);
+  });
+}
+function bedJungle(bed, g, t) {
+  ambNoiseLayer(bed, g, t, 'bandpass', 6800, 14, 0.02, 6.3, 0.012, 'gain'); // insect shimmer hi
+  ambNoiseLayer(bed, g, t, 'bandpass', 4200, 10, 0.016, 4.1, 0.01, 'gain'); // insect shimmer lo
+  ambNoiseLayer(bed, g, t, 'lowpass', 300, 0.6, 0.035, 0.04, 0.02, 'gain'); // humid air
+  ambDrone(bed, g, t, 'triangle', 52, 0.02, 0.07, 0.01); // low forest hum
+  ambEvery(bed, 3, 9, (tt) => {
+    // far bird call — a couple of chirps
+    const base = 1800 + Math.random() * 1600;
+    const n = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) {
+      ambPing(g, tt + i * 0.09, 'sine', base * (1 + Math.random() * 0.1), base * 1.4, 0.06, 0.004, 0.07, 0.03);
+    }
+  });
+  ambEvery(bed, 4, 11, (tt) => {
+    // frog croak
+    ambPing(g, tt, 'sawtooth', 150, 90, 0.12, 0.01, 0.14, 0.035);
+    ambGrain(g, tt, 'bandpass', 400, 240, 6, 0.005, 0.12, 0.02);
+  });
+  ambEvery(bed, 2.5, 7, (tt) => {
+    // wet drip
+    ambPing(g, tt, 'sine', 1600 + Math.random() * 700, 800, 0.04, 0.001, 0.09, 0.04);
+  });
+}
+function bedDesert(bed, g, t) {
+  const wind = ambNoiseLayer(bed, g, t, 'bandpass', 700, 0.6, 0.05, 0.05, 420, 'cutoff'); // broadband wind
+  ambNoiseLayer(bed, g, t, 'highpass', 5200, 0.7, 0.01, 0.09, 0.006, 'gain'); // grit hiss
+  const gust = ctx.createOscillator(); // slow gusts swell the wind
+  gust.type = 'sine';
+  gust.frequency.value = 0.06;
+  const gd = ctx.createGain();
+  gd.gain.value = 0.03;
+  gust.connect(gd).connect(wind.g.gain);
+  gust.start(t);
+  bed.oscs.push(gust);
+  ambDrone(bed, g, t, 'sine', 44, 0.018, 0.02, 0.01); // faint low bed
+  ambEvery(bed, 10, 24, (tt) => {
+    // a lonely low moan
+    ambPing(g, tt, 'sine', 120, 180, 1.4, 0.6, 1.6, 0.03);
+  });
+}
+function bedIce(bed, g, t) {
+  ambDrone(bed, g, t, 'sine', 38, 0.05, 0.02, 0.03); // glacier sub groan
+  ambDrone(bed, g, t, 'triangle', 76.3, 0.02, 0.037, 0.012); // beating overtone
+  ambNoiseLayer(bed, g, t, 'bandpass', 8200, 16, 0.012, 0.08, 0.008, 'gain'); // glassy shimmer
+  ambNoiseLayer(bed, g, t, 'bandpass', 900, 0.7, 0.02, 0.06, 300, 'cutoff'); // thin wind
+  ambEvery(bed, 8, 20, (tt) => {
+    // ice groan swell
+    ambPing(g, tt, 'sawtooth', 55, 41, 2.2, 0.8, 2.4, 0.035);
+  });
+  ambEvery(bed, 1.5, 5, (tt) => {
+    // a cluster of crackle ticks
+    const n = 1 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      ambGrain(g, tt + Math.random() * 0.25, 'highpass', 5000 + Math.random() * 3000, 4000, 0.6, 0.0005, 0.02, 0.03);
+    }
+  });
+}
+function bedFoundry(bed, g, t) {
+  ambDrone(bed, g, t, 'sawtooth', 50, 0.035, 0, 0); // mains hum
+  ambDrone(bed, g, t, 'sawtooth', 100, 0.014, 0, 0); // octave buzz
+  ambDrone(bed, g, t, 'sine', 150, 0.008, 0.11, 0.004); // 3rd-harmonic flicker
+  ambNoiseLayer(bed, g, t, 'bandpass', 2400, 6, 0.012, 0.05, 0.006, 'gain'); // metallic room tone
+  ambNoiseLayer(bed, g, t, 'lowpass', 180, 0.6, 0.03, 0.04, 0.015, 'gain'); // machine-floor rumble
+  ambEvery(bed, 5, 14, (tt) => {
+    // distant clank with a ring-out
+    ambPing(g, tt, 'square', 220 + Math.random() * 160, 90, 0.02, 0.001, 0.16, 0.04);
+    ambGrain(g, tt, 'bandpass', 1800, 900, 5, 0.001, 0.18, 0.03);
+    ambPing(g, tt + 0.005, 'triangle', 1200 + Math.random() * 600, 1200, 0, 0.002, 0.3, 0.02);
+  });
+  ambEvery(bed, 7, 18, (tt) => {
+    // steam hiss
+    ambGrain(g, tt, 'highpass', 3000, 5200, 0.7, 0.03, 0.5, 0.04);
+  });
+}
+function bedHive(bed, g, t) {
+  ambDrone(bed, g, t, 'sine', 40, 0.03, 0.09, 0.02); // low organic bed
+  ambNoiseLayer(bed, g, t, 'lowpass', 500, 0.7, 0.03, 0.13, 0.02, 'gain'); // breath-like swell
+  ambNoiseLayer(bed, g, t, 'bandpass', 1700, 3, 0.01, 0.2, 0.006, 'gain'); // wet sheen
+  ambEvery(bed, 1.6, 2.6, (tt) => {
+    // wet heartbeat-ish double pulse
+    ambPing(g, tt, 'sine', 66, 40, 0.12, 0.004, 0.14, 0.06);
+    ambPing(g, tt + 0.2, 'sine', 60, 36, 0.12, 0.004, 0.12, 0.045);
+    ambGrain(g, tt, 'lowpass', 300, 140, 3, 0.002, 0.1, 0.03);
+  });
+  ambEvery(bed, 3, 9, (tt) => {
+    // faint chittering
+    const n = 3 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < n; i++) {
+      ambGrain(g, tt + i * 0.04 + Math.random() * 0.02, 'bandpass', 3200 + Math.random() * 2600, 2800, 12, 0.001, 0.02, 0.02);
+    }
+  });
+}
+function bedAtlantis(bed, g, t) {
+  ambDrone(bed, g, t, 'sine', 110, 0.03, 0.05, 0.008); // clean tonal hum (A2)
+  ambDrone(bed, g, t, 'sine', 165, 0.016, 0.06, 0.006); // a fifth above
+  ambDrone(bed, g, t, 'triangle', 220, 0.01, 0.04, 0.004); // octave pad
+  ambNoiseLayer(bed, g, t, 'bandpass', 7000, 8, 0.006, 0.05, 0.004, 'gain'); // airy sheen
+  ambEvery(bed, 7, 18, (tt) => {
+    // a gentle chime — two notes of a bright arpeggio
+    const notes = [440, 554, 659, 880];
+    const s = Math.floor(Math.random() * 2);
+    for (let i = 0; i < 2; i++) {
+      ambPing(g, tt + i * 0.14, 'sine', notes[s + i], notes[s + i], 0, 0.004, 0.6, 0.03);
+    }
+  });
+}
+function bedCatacomb(bed, g, t) {
+  ambDrone(bed, g, t, 'sine', 36, 0.045, 0.015, 0.02); // very low drone
+  ambNoiseLayer(bed, g, t, 'lowpass', 160, 0.5, 0.03, 0.02, 0.012, 'gain'); // dead-air room tone
+  ambNoiseLayer(bed, g, t, 'bandpass', 1100, 1.5, 0.006, 0.11, 400, 'cutoff'); // faint whisper-noise
+  ambEvery(bed, 12, 30, (tt) => {
+    // rare far-off settling-stone knock + aftershock
+    ambPing(g, tt, 'sine', 90, 55, 0.08, 0.002, 0.2, 0.05);
+    ambGrain(g, tt, 'lowpass', 700, 200, 3, 0.001, 0.14, 0.035);
+    ambPing(g, tt + 0.14, 'sine', 78, 50, 0.1, 0.003, 0.16, 0.02);
+  });
+}
+function bedSgc(bed, g, t) {
+  ambDrone(bed, g, t, 'sawtooth', 120, 0.02, 0, 0); // fluorescent-ballast hum
+  ambDrone(bed, g, t, 'sine', 60, 0.014, 0, 0); // mains fundamental
+  ambNoiseLayer(bed, g, t, 'lowpass', 320, 0.6, 0.045, 0.05, 0.02, 'gain'); // HVAC air
+  ambNoiseLayer(bed, g, t, 'highpass', 4000, 0.7, 0.008, 0.12, 0.005, 'gain'); // vent hiss
+  ambEvery(bed, 10, 26, (tt) => {
+    // distant muffled PA murmur
+    const n = 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      ambPing(g, tt + i * 0.22, 'sawtooth', 180 + Math.random() * 120, 160 + Math.random() * 120, 0.18, 0.03, 0.2, 0.012);
+    }
+  });
+  ambEvery(bed, 2.5, 8, (tt) => {
+    // the odd keyboard clack
+    const n = 1 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < n; i++) {
+      ambGrain(g, tt + i * (0.06 + Math.random() * 0.05), 'bandpass', 2200 + Math.random() * 1200, 1600, 4, 0.0005, 0.015, 0.03);
+    }
+  });
+  ambEvery(bed, 15, 40, (tt) => {
+    // a distant door thunk
+    ambPing(g, tt, 'sine', 80, 48, 0.09, 0.003, 0.22, 0.045);
+    ambGrain(g, tt, 'lowpass', 500, 160, 2, 0.001, 0.16, 0.03);
+  });
+}
+
+const AMB_BEDS = {
+  temple: bedTemple,
+  jungle: bedJungle,
+  desert: bedDesert,
+  ice: bedIce,
+  foundry: bedFoundry,
+  hive: bedHive,
+  atlantis: bedAtlantis,
+  catacomb: bedCatacomb,
+  sgc: bedSgc,
+  hub: bedSgc,
+};
+
+function ambKill(bed, fadeMs) {
+  if (!bed) return;
+  bed.alive = false;
+  for (const id of bed.timers) clearTimeout(id);
+  bed.timers.length = 0;
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const f = (fadeMs || 1500) / 1000;
+  try {
+    bed.gain.gain.cancelScheduledValues(t);
+    bed.gain.gain.setValueAtTime(bed.gain.gain.value || 0.0001, t);
+    bed.gain.gain.linearRampToValueAtTime(0.0001, t + f);
+    for (const o of bed.oscs) {
+      try {
+        o.stop(t + f + 0.2);
+      } catch (e) {}
+    }
+  } catch (e) {}
+}
+
+export const ambient = {
+  // crossfade (~1.5s) to the bed for `biome`; the same biome is a no-op.
+  // 'hub' is an alias of 'sgc'; unknown biome names are ignored.
+  set(biome) {
+    if (!ctx) return;
+    const key = biome === 'hub' ? 'sgc' : biome;
+    const build = AMB_BEDS[key];
+    if (!build) return;
+    if (ambCur && ambCur.biome === key) return; // already playing this bed
+    if (!ambMaster) {
+      ambMaster = ctx.createGain();
+      ambMaster.gain.value = mVol;
+      ambMaster.connect(ctx.destination);
+    }
+    const t = ctx.currentTime;
+    const prev = ambCur;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001;
+    gain.connect(ambMaster);
+    const bed = { biome: key, gain, oscs: [], timers: [], alive: true };
+    try {
+      build(bed, gain, t);
+    } catch (e) {
+      ambKill(bed, 0);
+      return;
+    }
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.linearRampToValueAtTime(AMB_LEVEL, t + 1.5);
+    ambCur = bed;
+    if (prev) ambKill(prev, 1500);
+  },
+  // fade the current bed out
+  stop() {
+    ambKill(ambCur, 1200);
+    ambCur = null;
+  },
+  // the biome key of the bed currently playing, or null
+  current() {
+    return ambCur ? ambCur.biome : null;
   },
 };

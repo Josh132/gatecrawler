@@ -42,7 +42,7 @@ const rr = (a, b) => a + Math.random() * (b - a);
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
-const ZOOM = 1.4;
+const ZOOM = 1.18;
 
 function defaultSave() {
   return { naquadah: 0, intel: 0, tech: [], maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
@@ -1151,7 +1151,7 @@ function rollWeaponItem() {
 // `slot` lets a room cap its number of heavies/brutes.
 function pickEnemyKind(fac, R, slot) {
   if (fac === 'wraith') return R.chance(0.5) ? 'wraith_drone' : 'wraith';
-  if (fac === 'replicator') return slot.brutes < 1 && R.chance(0.2) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
+  if (fac === 'replicator') return slot.brutes < (slot.bruteCap || 1) && R.chance(0.24) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
   if (slot.heavies < 1 && R.chance(0.36)) return (slot.heavies++), 'jaffa_heavy';
   if (slot.grenadiers < 1 && R.chance(0.3)) return (slot.grenadiers++), 'jaffa_grenadier';
   return 'jaffa';
@@ -1226,7 +1226,7 @@ function populateWorld(g) {
       const boss = new Enemy('boss', c.x, c.y - 80, p.threat, { variant: fac });
       boss._room = room;
       g.enemies.push(boss);
-      const guards = 1 + Math.min(2, Math.floor(p.threat / 2));
+      const guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 2 : 0);
       for (let i = 0; i < guards; i++) {
         const q = placeXY();
         const e = new Enemy(guardKind(fac, R, slot), q.x, q.y, p.threat);
@@ -1237,8 +1237,13 @@ function populateWorld(g) {
       continue;
     }
 
-    let count = Math.min(7, 3 + Math.floor(p.threat / 2) + R.int(0, 1) + heatTier + (fac === 'replicator' ? 1 : 0));
-    if (nearGate) count = Math.max(2, count - 2); // lighter garrison by the gate
+    // Replicators come as an overwhelming tide — many weak units, more brutes
+    const swarm = fac === 'replicator';
+    if (swarm) slot.bruteCap = 2;
+    let count = swarm
+      ? Math.min(13, 6 + Math.floor(p.threat / 2) + R.int(1, 3) + heatTier * 2)
+      : Math.min(7, 3 + Math.floor(p.threat / 2) + R.int(0, 1) + heatTier);
+    if (nearGate) count = Math.max(swarm ? 4 : 2, count - (swarm ? 3 : 2)); // lighter garrison by the gate
     for (let i = 0; i < count; i++) {
       const kind = pickEnemyKind(fac, R, slot);
       const q = placeXY();
@@ -1246,6 +1251,8 @@ function populateWorld(g) {
       e._room = room;
       if (kind === 'jaffa') e.aggressive = R.chance(nearGate ? 0.1 : 0.28);
       if (kind === 'jaffa_heavy' || kind === 'replicator_brute') e.aggressive = !nearGate;
+      // a swarm presses in — replicators don't hang back and take cover
+      if (kind === 'replicator') e.aggressive = !nearGate && R.chance(0.7);
       if (nearGate) e.calmT = 3.5 + R.range(0, 2); // hold post, ignore the player by sight for a beat
       g.enemies.push(e);
     }
@@ -2701,8 +2708,13 @@ function clampCam(g) {
   const hpx = g.world.H * TILE;
   const halfW = g.view.w / 2 / ZOOM;
   const halfH = g.view.h / 2 / ZOOM;
-  g.cam.x = wpx > halfW * 2 ? clamp(g.cam.x, halfW, wpx - halfW) : wpx / 2;
-  g.cam.y = hpx > halfH * 2 ? clamp(g.cam.y, halfH, hpx - halfH) : hpx / 2;
+  // let the camera overscan the world edge by most of a half-view so the player
+  // stays near centre at the map border instead of pinned to the screen edge
+  // (the void past the wall shows, which reads fine)
+  const ovX = halfW * 0.62;
+  const ovY = halfH * 0.62;
+  g.cam.x = wpx > (halfW - ovX) * 2 ? clamp(g.cam.x, halfW - ovX, wpx - halfW + ovX) : wpx / 2;
+  g.cam.y = hpx > (halfH - ovY) * 2 ? clamp(g.cam.y, halfH - ovY, hpx - halfH + ovY) : hpx / 2;
 }
 
 // ---------------------------------------------------------------- render

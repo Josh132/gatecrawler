@@ -7381,7 +7381,125 @@ function renderStationPanel(g) {
   else if (g.station === 'infirmary') renderInfirmaryPanel(g);
   else if (g.station === 'workbench') renderWorkbenchPanel(g);
   else if (g.station === 'operations') renderOperationsPanel(g);
+  else if (g.station === 'roster') renderRosterPanel(g);
+  else if (g.station === 'base') renderBasePanel(g);
   else g.station = null;
+}
+
+// ---------------------------------------------------------------- roster
+// The recovered SG teams — one permanent passive each, freed from the holding
+// cells that show up on some worlds. Purely informational; the passive is
+// automatic (folded in fx via applyRoster).
+function renderRosterPanel(g) {
+  const { ctx } = g;
+  const owned = new Set(g.save.roster || []);
+  const fr = panelFrame(g, 'SG-1 ROSTER', owned.size + ' / ' + SG_TEAMS.length + ' teams recovered   ·   ESC to close');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#9ab';
+  ctx.font = '10px monospace';
+  wrapText(
+    ctx,
+    'Rescue SG teams from the holding cells that appear on some worlds — walk them to the gate and dial home. Each recovered team advises from the SGC as a permanent passive.',
+    fr.x + 24,
+    fr.y + 74,
+    fr.w - 48,
+    13
+  );
+  const cols = 2;
+  const cw = (fr.w - 48 - 12) / cols;
+  const chh = 84;
+  SG_TEAMS.forEach((tm, i) => {
+    const cx = fr.x + 24 + (i % cols) * (cw + 12);
+    const cy = fr.y + 104 + Math.floor(i / cols) * (chh + 10);
+    const have = owned.has(tm.id);
+    ctx.fillStyle = have ? 'rgba(45,100,150,0.34)' : 'rgba(30,34,44,0.5)';
+    ctx.fillRect(cx, cy, cw, chh);
+    ctx.strokeStyle = have ? '#6cf' : '#455';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(cx + 0.5, cy + 0.5, cw - 1, chh - 1);
+    ctx.fillStyle = have ? '#dff' : '#778';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(tm.name + '  ·  ' + tm.role, cx + 12, cy + 20);
+    ctx.font = '10px monospace';
+    if (have) {
+      ctx.fillStyle = '#8fd8a8';
+      wrapText(ctx, tm.blurb, cx + 12, cy + 38, cw - 24, 13);
+      ctx.fillStyle = '#7c9';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText('ACTIVE', cx + 12, cy + chh - 12);
+    } else {
+      ctx.fillStyle = '#667';
+      wrapText(ctx, 'MIA — recover from a Wraith holding cell.', cx + 12, cy + 38, cw - 24, 13);
+    }
+  });
+}
+
+// ---------------------------------------------------------------- base ops
+// A naquadah sink: permanent SGC upgrades bought once.
+function renderBasePanel(g) {
+  const { ctx } = g;
+  const s = g.save;
+  const fr = panelFrame(
+    g,
+    'SGC UPGRADES',
+    `naquadah ${s.naquadah | 0} · intel ${s.intel | 0} · salvage ${s.salvage | 0}   ·   permanent   ·   ESC to close`
+  );
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const owned = new Set(s.base || []);
+  const rowH = 44;
+  BASE_UPGRADES.forEach((u, i) => {
+    const rx = fr.x + 24;
+    const ry = fr.y + 70 + i * (rowH + 5);
+    const has = owned.has(u.id);
+    ctx.fillStyle = has ? 'rgba(45,110,80,0.28)' : 'rgba(20,28,40,0.7)';
+    ctx.fillRect(rx, ry, fr.w - 48, rowH);
+    ctx.strokeStyle = has ? '#5ec87a' : 'rgba(120,160,210,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx + 0.5, ry + 0.5, fr.w - 49, rowH - 1);
+    ctx.fillStyle = has ? '#cfe' : '#cfe8ff';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(u.name, rx + 12, ry + 17);
+    ctx.fillStyle = '#8ab';
+    ctx.font = '9px monospace';
+    ctx.fillText(u.blurb, rx + 12, ry + 32);
+    const c = u.cost;
+    const costStr = [c.naquadah ? c.naquadah + ' N' : '', c.intel ? c.intel + ' I' : '', c.salvage ? c.salvage + ' S' : '']
+      .filter(Boolean)
+      .join('  ·  ');
+    if (has) {
+      ctx.fillStyle = '#7c9';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('OPERATIONAL', rx + fr.w - 48 - 12, ry + rowH / 2 + 3);
+      ctx.textAlign = 'left';
+    } else {
+      const chk = canBuyBase(s, u.id);
+      ctx.fillStyle = chk.ok ? '#9cd' : '#966';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(costStr, rx + fr.w - 48 - 140, ry + rowH / 2 + 3);
+      ctx.textAlign = 'left';
+      button(
+        g,
+        'BUILD',
+        rx + fr.w - 48 - 128,
+        ry + 6,
+        116,
+        rowH - 12,
+        () => {
+          const r = buyBase(s, u.id);
+          if (!r || !r.ok) return;
+          persist(s);
+          showUnlock(g, 'SGC UPGRADED', u.name);
+          g.message('SGC upgraded — ' + u.name);
+        },
+        chk.ok
+      );
+    }
+  });
 }
 
 const TECH_BRANCHES = ['ops', 'armory', 'gate', 'xeno', 'command'];

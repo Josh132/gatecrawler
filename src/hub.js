@@ -4,6 +4,7 @@
 // renderer: same grid/rooms/gateRoom contract, no combat, no fog.
 import { TILE, WALL_H } from './worldgen.js';
 import { campaignStatus } from './campaign.js';
+import { SG_TEAMS } from './roster.js';
 
 export const HUB_W = 49; // tiles
 export const HUB_H = 28;
@@ -46,6 +47,8 @@ export const STATIONS = [
   { kind: 'research', tx: 29, ty: 21, label: 'RESEARCH', hint: 'tech tree', room: 'control' },
   { kind: 'infirmary', tx: 44, ty: 9, label: 'INFIRMARY', hint: 'restock supplies', room: 'infirm' },
   { kind: 'operations', tx: 44, ty: 17, label: 'OPERATIONS', hint: 'the Incursion — current mission', room: 'brief' },
+  { kind: 'base', tx: 21, ty: 21, label: 'BASE OPERATIONS', hint: 'upgrade the SGC', room: 'control' },
+  { kind: 'roster', tx: 8, ty: 20, label: 'SG-1 ROSTER', hint: 'recovered SG teams', room: 'trophy' },
 ];
 
 export function buildHub() {
@@ -990,6 +993,40 @@ function trophyDecor(c, r, save) {
   c.restore();
   stencil(c, 'IN MEMORIAM', nx - 2, R.y + 84, 8, '#c9a227', 0.5);
 
+  // SG team roster board along the north wall — a lit tag for every team that
+  // was brought home; the rest stay dark
+  {
+    const owned = new Set((save && save.roster) || []);
+    const n = SG_TEAMS.length;
+    const bw = Math.min(30, (R.w - 140) / n);
+    const bx0 = R.x + (R.w - (bw * n + 6 * (n - 1))) / 2;
+    stencil(c, 'SG TEAM ROSTER', R.x + R.w / 2, R.y + 14, 8, '#c9a227', 0.5);
+    for (let i = 0; i < n; i++) {
+      const bx = bx0 + i * (bw + 6);
+      const got = owned.has(SG_TEAMS[i].id);
+      box(
+        c,
+        bx,
+        R.y + 22,
+        bw,
+        26,
+        got ? 'rgba(40,72,98,0.92)' : 'rgba(16,21,29,0.9)',
+        got ? 'rgba(150,220,255,0.5)' : 'rgba(90,110,130,0.22)',
+        2
+      );
+      if (got) {
+        c.save();
+        c.fillStyle = 'rgba(185,228,255,0.85)';
+        c.font = 'bold 8px monospace';
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(SG_TEAMS[i].name.replace('SG-', ''), bx + bw / 2, R.y + 35);
+        c.restore();
+        pool(c, bx + bw / 2, R.y + 35, 22, '#8fd8ff', 0.06);
+      }
+    }
+  }
+
   for (const s of trophySpots(r)) {
     const got = trophyEarned(s.t, save);
     // pedestal
@@ -1787,6 +1824,34 @@ export function drawStation(ctx, s, t, near) {
     }
     ctx.fillStyle = near ? 'rgba(140,230,255,0.26)' : 'rgba(90,140,180,0.12)';
     ctx.fillRect(-14, -11, 28, 8 + Math.sin(t * 3 + s.tx) * 1.2);
+  } else if (s.kind === 'roster') {
+    // a board of dog-tags — the teams brought home
+    ctx.strokeRect(-20, -18, 40, 30);
+    ctx.lineWidth = 2;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 11, -18);
+      ctx.lineTo(i * 11, -9);
+      ctx.stroke();
+      ctx.strokeRect(i * 11 - 3, -9, 6, 9);
+    }
+    ctx.fillStyle = near ? 'rgba(140,230,255,0.22)' : 'rgba(90,140,180,0.10)';
+    ctx.fillRect(-18, -16, 36, 5);
+  } else if (s.kind === 'base') {
+    // a bank of server racks — the SGC's own hardware
+    for (let i = -1; i <= 1; i++) {
+      ctx.strokeRect(i * 13 - 5, -18, 10, 32);
+      ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        ctx.beginPath();
+        ctx.moveTo(i * 13 - 3, -13 + k * 7);
+        ctx.lineTo(i * 13 + 3, -13 + k * 7);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 2.5;
+    }
+    ctx.fillStyle = near ? 'rgba(140,230,255,0.2)' : 'rgba(90,140,180,0.09)';
+    ctx.fillRect(-18, 8 + Math.sin(t * 3) * 1.5, 36, 4);
   } else {
     // a research console: angled body + screen
     ctx.beginPath();

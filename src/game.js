@@ -4,7 +4,7 @@ import { sfx, music, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
 import { TAU, clamp, glowCircle } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
-import { buildWorld, bakeWorld, TILE, WALL_H, tileAt } from './worldgen.js';
+import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
@@ -2835,10 +2835,20 @@ function litAt(g, x, y) {
   return inPoly(x, y, g.visPoly);
 }
 
+// the unlit area beyond line of sight, tinted toward the current biome so a
+// temple fades to warm shadow and a hive to violet murk
+function fogRGB(g) {
+  const pal = BIOMES[(g.params && g.params.biome) || 'ruins'] || BIOMES.ruins;
+  const hex = (pal.fog || '#030409').replace('#', '');
+  const n = parseInt(hex.length === 3 ? hex.replace(/(.)/g, '$1$1') : hex, 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+}
+
 function drawFog(ctx, g, R) {
   const p = g.player;
   const poly = g.visPoly;
   if (!poly || poly.length < 6) return;
+  const rgb = fogRGB(g);
   const pad = 2600;
   ctx.save();
   ctx.beginPath();
@@ -2846,7 +2856,7 @@ function drawFog(ctx, g, R) {
   ctx.moveTo(poly[0], poly[1]);
   for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(3,4,9,0.95)';
+  ctx.fillStyle = `rgba(${rgb},0.95)`;
   ctx.fill('evenodd');
 
   ctx.beginPath();
@@ -2855,8 +2865,8 @@ function drawFog(ctx, g, R) {
   ctx.closePath();
   ctx.clip();
   const grd = ctx.createRadialGradient(p.x, p.y, R * 0.32, p.x, p.y, R * 1.02);
-  grd.addColorStop(0, 'rgba(3,4,9,0)');
-  grd.addColorStop(1, 'rgba(3,4,9,0.92)');
+  grd.addColorStop(0, `rgba(${rgb},0)`);
+  grd.addColorStop(1, `rgba(${rgb},0.92)`);
   ctx.fillStyle = grd;
   ctx.fillRect(p.x - R - 4, p.y - R - 4, R * 2 + 8, R * 2 + 8);
   ctx.restore();

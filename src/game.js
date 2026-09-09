@@ -213,6 +213,8 @@ function fx(g) {
 function researchCostMul(g) {
   return hasBase(g.save, 'researchDiscount') ? baseMag(g.save, 'researchDiscount', 1) : 1;
 }
+// TODO: apply modCostMul() to the salvage cost in renderWorkbenchPanel's
+// upgrade/install handlers — that fn is outside this change's editable regions.
 function modCostMul(g) {
   return hasBase(g.save, 'modDiscount') ? baseMag(g.save, 'modDiscount', 1) : 1;
 }
@@ -926,6 +928,18 @@ function updateHub(g, dt) {
   p.y += iy * p.speed * dt;
   ({ x: p.x, y: p.y } = circleVsGrid(w, p, p.x, p.y));
 
+  // footsteps on the SGC deck plate — hard, alternating
+  if (ix || iy) {
+    g._stepT = (g._stepT || 0) + dt;
+    if (g._stepT >= 0.34) {
+      g._stepT -= 0.34;
+      g._stepFoot = !g._stepFoot;
+      sfx.footstep(true);
+    }
+  } else {
+    g._stepT = 0;
+  }
+
   let near = null;
   let nd = 60 * 60;
   for (const s of w.stations) {
@@ -1044,6 +1058,18 @@ function updatePlay(g, dt) {
   p.ky -= p.ky * Math.min(1, 7 * dt);
 
   ({ x: p.x, y: p.y } = circleVsGrid(w, p, p.x, p.y));
+
+  // footsteps — a soft alternating tick while walking (not while dodging/stunned)
+  if ((ix || iy) && p.dodge <= 0 && p.stun <= 0) {
+    g._stepT = (g._stepT || 0) + dt;
+    if (g._stepT >= 0.32) {
+      g._stepT -= 0.32;
+      g._stepFoot = !g._stepFoot;
+      sfx.footstep(!!g._stepFoot);
+    }
+  } else {
+    g._stepT = 0;
+  }
 
   // hotbar consumables / quick-heal / weapon swap / grenade
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
@@ -7692,9 +7718,11 @@ function renderResearchPanel(g) {
     } else {
       ctx.fillStyle = locked ? '#667' : '#9cd';
       const c = n.cost;
-      let s = `${c.naquadah} N`;
+      const rcm = researchCostMul(g); // Extra Research Staff base upgrade
+      let s = `${Math.round((c.naquadah || 0) * rcm)} N`;
       if (c.intel) s += '  ·  ' + c.intel + ' I';
       if (c.salvage) s += '  ·  ' + c.salvage + ' S';
+      if (rcm < 1) s += '  (-' + Math.round((1 - rcm) * 100) + '%)';
       ctx.fillText(s, rc.x + 7, rc.y + 30);
     }
     if (ok) {
@@ -7705,7 +7733,7 @@ function renderResearchPanel(g) {
         h: cardH,
         fn: () => {
           if (!canResearch(g.save, n.id)) return;
-          g.save.naquadah -= n.cost.naquadah || 0;
+          g.save.naquadah -= Math.round((n.cost.naquadah || 0) * researchCostMul(g));
           g.save.intel = (g.save.intel || 0) - (n.cost.intel || 0);
           g.save.salvage = (g.save.salvage || 0) - (n.cost.salvage || 0);
           g.save.tech = [...(g.save.tech || []), n.id];
@@ -7714,6 +7742,7 @@ function renderResearchPanel(g) {
           g.player.hp = Math.min(g.player.maxHp, g.player.hp);
           persist(g.save);
           g.message('Researched: ' + n.name);
+          showUnlock(g, 'RESEARCHED', n.name);
         },
       });
     }
@@ -7923,6 +7952,7 @@ function renderOperationsPanel(g) {
         const e = fx(g);
         g.player.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
         g.message('Operation complete — ' + (sum.join(', ') || 'logged'));
+        showUnlock(g, 'OPERATION COMPLETE', op.name);
       }, true);
     } else {
       ctx.fillStyle = '#678';

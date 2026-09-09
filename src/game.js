@@ -1100,16 +1100,16 @@ function updatePlay(g, dt) {
   p.cool -= dt;
   if (p.reloadT > 0) {
     p.reloadT -= dt;
-    if (p.reloadT <= 0) finishReload(p);
+    if (p.reloadT <= 0) finishReload(g, p);
   }
   const wid = activeWeaponId(g.inv);
   const wp = WEAPONS[wid];
   const hasMag = wp.mag != null;
   if (wp.ammoMax !== Infinity && p.ammo[wid] == null) p.ammo[wid] = wp.ammoMax; // first pickup grants a full reserve
-  if (hasMag && p.mag[wid] == null) p.mag[wid] = Math.min(wp.mag, p.ammo[wid] || 0);
+  if (hasMag && p.mag[wid] == null) p.mag[wid] = Math.min(magCap(g, wid), p.ammo[wid] || 0);
 
   // manual reload (R)
-  if (hasMag && keyHit(g, 'reload', 'KeyR') && p.reloadT <= 0 && (p.mag[wid] || 0) < wp.mag && (p.ammo[wid] || 0) > 0) {
+  if (hasMag && keyHit(g, 'reload', 'KeyR') && p.reloadT <= 0 && (p.mag[wid] || 0) < magCap(g, wid) && (p.ammo[wid] || 0) > 0) {
     startReload(g, p, wid);
   }
 
@@ -2390,14 +2390,14 @@ function startReload(g, p, wid) {
   sfx.reloadStart();
 }
 
-function finishReload(p) {
+function finishReload(g, p) {
   const wid = p.reloadWid;
   p.reloading = false;
   p.reloadT = 0;
   const wp = wid && WEAPONS[wid];
   if (!wp || wp.mag == null) return;
   const cur = p.mag[wid] || 0;
-  const take = Math.max(0, Math.min(wp.mag - cur, p.ammo[wid] || 0));
+  const take = Math.max(0, Math.min(magCap(g, wid) - cur, p.ammo[wid] || 0));
   p.mag[wid] = cur + take;
   p.ammo[wid] = (p.ammo[wid] || 0) - take;
   if (take > 0) {
@@ -2522,6 +2522,12 @@ function armourWeight(inv) {
 function wsFor(g, wid) {
   const st = (g.save.weapons && g.save.weapons[wid]) || { level: 1, xp: 0, mods: [] };
   return weaponStats(wid, st, fx(g).weaponDmgMul || 1);
+}
+// magazine capacity after the ext_mag / drum mods
+function magCap(g, wid) {
+  const wp = WEAPONS[wid];
+  if (!wp || wp.mag == null) return 0;
+  return Math.max(1, Math.round(wp.mag * (wsFor(g, wid).magMul || 1)));
 }
 
 // per-weapon muzzle character: flash [radius, colour, life], spark count,
@@ -6252,7 +6258,7 @@ function renderHUD(g) {
   const wLineY = by - (p.shieldMax > 0 ? 16 : 8);
   let ammoStr;
   if (wp.ammoMax === Infinity) ammoStr = '∞';
-  else if (wp.mag != null) ammoStr = `${Math.ceil(p.mag[wid] != null ? p.mag[wid] : wp.mag)} / ${p.ammo[wid] || 0}`;
+  else if (wp.mag != null) ammoStr = `${Math.ceil(p.mag[wid] != null ? p.mag[wid] : magCap(g, wid))} / ${p.ammo[wid] || 0}`;
   else ammoStr = `${p.ammo[wid] || 0}`;
   ctx.fillText(
     `${witem ? witem.name : wp.name}  ${ammoStr}${g.inv.equip.weapon2 ? '   [Q]' : ''}`,

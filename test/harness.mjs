@@ -936,6 +936,16 @@ section('weapons: shotgun/burst/launcher/beam fire, consume mag, reload from res
   assert(p.mag.beam < beamMag0, `weapons: beam drained its cell while held (${beamMag0.toFixed(1)} -> ${p.mag.beam.toFixed(1)})`);
   assert(!!g.player.beam && typeof g.player.beam === 'object', 'weapons: beam exposes render state');
 
+  // --- an ext_mag mod actually enlarges the magazine
+  g.save.weapons = g.save.weapons || {};
+  g.save.weapons.shotgun = { level: 5, xp: 99999, mods: ['ext_mag'] };
+  equip('shotgun');
+  delete p.mag.shotgun;
+  p.ammo.shotgun = WEAPONS.shotgun.ammoMax;
+  tick(gApi, g);
+  assert(p.mag.shotgun > WEAPONS.shotgun.mag, `weapons: ext_mag raises shotgun capacity (${WEAPONS.shotgun.mag} -> ${p.mag.shotgun})`);
+  g.save.weapons.shotgun = { level: 1, xp: 0, mods: [] };
+
   // --- restore a clean slate for the sections that follow
   g.enemies.length = 0;
   g.bullets.length = 0;

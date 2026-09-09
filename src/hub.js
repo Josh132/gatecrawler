@@ -318,13 +318,13 @@ function chair(c, x, y, ang, s) {
   c.save();
   c.translate(x, y);
   c.rotate(ang);
-  c.fillStyle = 'rgba(28,34,44,0.95)';
-  c.strokeStyle = 'rgba(130,160,190,0.35)';
+  c.fillStyle = 'rgba(44,54,68,0.95)';
+  c.strokeStyle = 'rgba(150,180,210,0.45)';
   c.lineWidth = 1.2;
   rr(c, -6 * s, -6 * s, 12 * s, 12 * s, 3);
   c.fill();
   c.stroke();
-  c.fillStyle = 'rgba(50,62,78,0.95)';
+  c.fillStyle = 'rgba(74,90,110,0.95)';
   rr(c, -7 * s, -9.5 * s, 14 * s, 5 * s, 2);
   c.fill();
   c.stroke();
@@ -335,7 +335,7 @@ function chair(c, x, y, ang, s) {
 // Everything that never changes is painted once into an offscreen canvas the
 // size of the world; renderHub blits it over the baked walls each frame.
 
-export function buildHubDecor(world) {
+export function buildHubDecor(world, save) {
   const off = WALL_H + 6;
   const cv = canv(world.W * TILE, world.H * TILE + off);
   cv.offsetY = off;
@@ -347,7 +347,7 @@ export function buildHubDecor(world) {
   embarkDecor(c, room('embark'), world);
   controlDecor(c, room('control'), world);
   readyDecor(c, room('ready'));
-  trophyDecor(c, room('trophy'));
+  trophyDecor(c, room('trophy'), save);
   infirmDecor(c, room('infirm'));
   briefDecor(c, room('brief'));
   return cv;
@@ -462,9 +462,42 @@ function embarkDecor(c, r, world) {
   }
   c.restore();
 
+  // painted keep-clear boundary around the ramp
+  c.save();
+  c.strokeStyle = 'rgba(232,163,60,0.22)';
+  c.lineWidth = 3;
+  c.setLineDash([22, 14]);
+  c.beginPath();
+  c.moveTo(gc.x - bw - 40, R.y + 16);
+  c.lineTo(gc.x - bw - 40, bot + 34);
+  c.lineTo(gc.x + bw + 40, bot + 34);
+  c.lineTo(gc.x + bw + 40, R.y + 16);
+  c.stroke();
+  c.setLineDash([]);
+  c.restore();
+  stencil(c, 'KEEP CLEAR', gc.x - bw - 40, bot + 50, 9, '#c9a227', 0.35);
+
   // floor grating either side of the ramp base
   grate(c, R.x + 18, bot - 44, 96, 74);
   grate(c, R.x + R.w - 114, bot - 44, 96, 74);
+
+  // ceiling cameras and a tannoy, watching the room
+  for (const [cx2, cy2, a] of [[R.x + 26, R.y + 26, 0.7], [R.x + R.w - 26, R.y + 26, TAU / 2 - 0.7]]) {
+    c.save();
+    c.translate(cx2, cy2);
+    c.rotate(a);
+    c.fillStyle = 'rgba(30,38,48,0.95)';
+    rr(c, -9, -6, 18, 12, 3);
+    c.fill();
+    c.strokeStyle = 'rgba(150,185,220,0.45)';
+    c.lineWidth = 1.2;
+    c.stroke();
+    c.fillStyle = 'rgba(140,220,255,0.5)';
+    c.beginPath();
+    c.arc(8, 0, 2.4, 0, TAU);
+    c.fill();
+    c.restore();
+  }
 
   // SGC emblem painted on the floor at the foot of the ramp
   emblem(c, gc.x, bot + 66, 44);
@@ -655,11 +688,12 @@ function controlDecor(c, r, world) {
   c.restore();
 
   // gate light spilling through the glass onto the control-room floor
-  const spill = c.createLinearGradient(0, R.y, 0, R.y + 96);
-  spill.addColorStop(0, 'rgba(110,190,255,0.14)');
-  spill.addColorStop(1, 'rgba(110,190,255,0)');
+  const spill = c.createLinearGradient(0, R.y - 10, 0, R.y + 130);
+  spill.addColorStop(0, 'rgba(120,195,255,0.22)');
+  spill.addColorStop(0.45, 'rgba(120,195,255,0.07)');
+  spill.addColorStop(1, 'rgba(120,195,255,0)');
   c.fillStyle = spill;
-  c.fillRect(R.x + 22, R.y, R.w - 44, 96);
+  c.fillRect(R.x + 18, R.y - 10, R.w - 36, 140);
 
   // safety railing along the window ledge
   c.save();
@@ -717,6 +751,18 @@ function controlDecor(c, r, world) {
     c.stroke();
   }
   c.restore();
+
+  // filing bank and a printer against the south-west wall
+  for (let i = 0; i < 3; i++) {
+    box(c, R.x + 60 + i * 40, R.y + R.h - 92, 34, 44, 'rgba(24,30,40,0.95)', 'rgba(120,160,200,0.3)', 2);
+    c.fillStyle = 'rgba(180,210,235,0.14)';
+    c.fillRect(R.x + 66 + i * 40, R.y + R.h - 78, 22, 2);
+    c.fillRect(R.x + 66 + i * 40, R.y + R.h - 66, 22, 2);
+  }
+  box(c, R.x + R.w - 128, R.y + R.h - 92, 60, 40, 'rgba(26,32,42,0.95)', 'rgba(120,160,200,0.3)', 3);
+  c.fillStyle = 'rgba(230,240,250,0.16)';
+  c.fillRect(R.x + R.w - 118, R.y + R.h - 60, 40, 8);
+  stencil(c, 'LOGS', R.x + R.w - 98, R.y + R.h - 100, 8, '#7fa8c4', 0.3);
 
   // status board on the south wall — the live layer writes on it
   const bx = R.x + R.w / 2 - 170;
@@ -836,14 +882,21 @@ function readyDecor(c, r) {
 // ---- 4. memorabilia / trophy hall ---------------------------------------
 // each case is a pedestal with a lit vitrine; TROPHIES drives both the static
 // bake and the live "case reacts as you pass" pass.
+// `need` is the deepest threat the campaign has to have reached before the
+// case is filled — an empty mount is a promise, and the hall fills up as the
+// player pushes further out.
 export const TROPHIES = [
-  { key: 'hand', name: 'GOA’ULD HAND DEVICE', tint: '#e8a33c' },
-  { key: 'helm', name: 'JAFFA SERPENT HELM', tint: '#c9a227' },
-  { key: 'dart', name: 'WRAITH DART FRAGMENT', tint: '#9dff6a' },
-  { key: 'repl', name: 'REPLICATOR BLOCK', tint: '#cfe8ff' },
-  { key: 'zat', name: 'ZAT’NIK’TEL', tint: '#7fe8e0' },
-  { key: 'staff', name: 'STAFF WEAPON', tint: '#ff8a3c' },
+  { key: 'zat', name: 'ZAT’NIK’TEL', tint: '#7fe8e0', need: 0 },
+  { key: 'staff', name: 'STAFF WEAPON', tint: '#ff8a3c', need: 1 },
+  { key: 'helm', name: 'JAFFA SERPENT HELM', tint: '#c9a227', need: 2 },
+  { key: 'hand', name: 'GOA’ULD HAND DEVICE', tint: '#e8a33c', need: 4 },
+  { key: 'dart', name: 'WRAITH DART FRAGMENT', tint: '#9dff6a', need: 6 },
+  { key: 'repl', name: 'REPLICATOR BLOCK', tint: '#cfe8ff', need: 8 },
 ];
+
+export function trophyEarned(t, save) {
+  return (save && save.deepestThreat ? save.deepestThreat : 0) >= t.need;
+}
 
 // case anchors, filled in by trophyDecor and reused by the live pass
 export function trophySpots(r) {
@@ -854,21 +907,31 @@ export function trophySpots(r) {
   return out;
 }
 
-function trophyDecor(c, r) {
+function trophyDecor(c, r, save) {
   const R = r.rectPx;
   c.fillStyle = 'rgba(30,36,48,0.28)';
   c.fillRect(R.x, R.y, R.w, R.h);
   // a carpet runner down the middle of the hall
   const cy0 = R.y + 92;
   const ch = R.h - 268;
-  c.fillStyle = 'rgba(56,34,28,0.4)';
-  c.fillRect(R.x + 52, cy0, R.w - 104, ch);
-  c.strokeStyle = 'rgba(140,96,60,0.25)';
-  c.lineWidth = 5;
-  c.strokeRect(R.x + 56, cy0 + 4, R.w - 112, ch - 8);
-  c.strokeStyle = 'rgba(201,162,39,0.14)';
+  c.fillStyle = 'rgba(50,30,26,0.42)';
+  c.fillRect(R.x + 58, cy0, R.w - 156, ch);
+  c.strokeStyle = 'rgba(126,84,54,0.22)';
+  c.lineWidth = 6;
+  c.strokeRect(R.x + 62, cy0 + 4, R.w - 164, ch - 8);
+  c.strokeStyle = 'rgba(201,162,39,0.12)';
   c.lineWidth = 1.2;
-  c.strokeRect(R.x + 64, cy0 + 12, R.w - 128, ch - 24);
+  c.strokeRect(R.x + 70, cy0 + 12, R.w - 180, ch - 24);
+  c.save();
+  c.strokeStyle = 'rgba(150,110,80,0.10)';
+  c.lineWidth = 1;
+  for (let y = cy0 + 20; y < cy0 + ch - 12; y += 9) {
+    c.beginPath();
+    c.moveTo(R.x + 72, y);
+    c.lineTo(R.x + R.w - 100, y);
+    c.stroke();
+  }
+  c.restore();
 
   // a scale model of the gate on a plinth, centre of the hall
   const mx = R.x + R.w / 2;
@@ -910,33 +973,54 @@ function trophyDecor(c, r) {
   stencil(c, 'IN MEMORIAM', nx - 2, R.y + 84, 8, '#c9a227', 0.5);
 
   for (const s of trophySpots(r)) {
+    const got = trophyEarned(s.t, save);
     // pedestal
-    box(c, s.x - 30, s.y - 20, 60, 42, 'rgba(16,21,29,0.95)', 'rgba(140,175,210,0.4)', 3);
-    c.save();
-    c.globalAlpha = 0.9;
-    drawRelic(c, s.t.key, s.x, s.y - 2, s.t.tint);
-    c.restore();
+    box(c, s.x - 30, s.y - 20, 60, 42, 'rgba(16,21,29,0.95)', got ? 'rgba(140,175,210,0.4)' : 'rgba(90,110,130,0.22)', 3);
+    if (got) {
+      c.save();
+      c.globalAlpha = 0.9;
+      drawRelic(c, s.t.key, s.x, s.y - 2, s.t.tint);
+      c.restore();
+    } else {
+      // an empty mount waiting on a deeper sortie
+      c.save();
+      c.strokeStyle = 'rgba(140,170,200,0.18)';
+      c.lineWidth = 1.2;
+      c.setLineDash([4, 4]);
+      c.strokeRect(s.x - 13, s.y - 11, 26, 20);
+      c.setLineDash([]);
+      c.restore();
+    }
     // vitrine glass
-    c.strokeStyle = 'rgba(190,225,255,0.16)';
+    c.strokeStyle = got ? 'rgba(190,225,255,0.16)' : 'rgba(190,225,255,0.07)';
     c.lineWidth = 1;
     c.strokeRect(s.x - 26, s.y - 17, 52, 36);
-    stencil(c, s.t.name, s.x, s.y + 30, 7.5, '#9fc4e0', 0.4);
-    pool(c, s.x, s.y - 4, 46, s.t.tint, 0.07);
-  }
-
-  // framed mission photographs along the west wall
-  for (let i = 0; i < 4; i++) {
-    const y = R.y + 116 + i * 52;
-    box(c, R.x + 8, y, 24, 34, 'rgba(18,14,10,0.95)', 'rgba(201,162,39,0.4)', 1);
-    c.fillStyle = 'rgba(140,180,210,0.13)';
-    c.fillRect(R.x + 12, y + 4, 16, 26);
-    c.fillStyle = 'rgba(190,220,245,0.3)';
-    for (let k = 0; k < 3; k++) {
-      c.beginPath();
-      c.arc(R.x + 16 + k * 5, y + 20, 1.6, 0, TAU);
-      c.fill();
+    if (got) {
+      stencil(c, s.t.name, s.x, s.y + 30, 7.5, '#9fc4e0', 0.4);
+      pool(c, s.x, s.y - 4, 46, s.t.tint, 0.07);
+    } else {
+      stencil(c, 'THREAT ' + s.t.need + ' PENDING', s.x, s.y + 30, 7, '#5a86a8', 0.32);
     }
   }
+
+  // framed mission photographs along the west wall — a little gallery
+  for (let i = 0; i < 4; i++) {
+    const y = R.y + 112 + i * 54;
+    box(c, R.x + 6, y, 34, 40, 'rgba(20,16,12,0.95)', 'rgba(201,162,39,0.45)', 1);
+    c.fillStyle = 'rgba(226,236,246,0.10)';
+    c.fillRect(R.x + 10, y + 4, 26, 32);
+    // a team lined up in front of something
+    c.fillStyle = 'rgba(150,190,220,0.2)';
+    c.fillRect(R.x + 10, y + 4, 26, 13);
+    c.fillStyle = 'rgba(210,235,255,0.35)';
+    for (let k = 0; k < 4; k++) {
+      c.beginPath();
+      c.arc(R.x + 15 + k * 5.5, y + 24, 1.8, 0, TAU);
+      c.fill();
+      c.fillRect(R.x + 13.6 + k * 5.5, y + 26, 2.8, 8);
+    }
+  }
+  stencil(c, 'MISSION RECORD', R.x + 24, R.y + 100, 7, '#9fc4e0', 0.4);
   // the campaign plaque — the live pass writes the numbers onto it
   const px = R.x + R.w / 2;
   const py = R.y + R.h - 46;
@@ -1386,6 +1470,7 @@ export function drawHubLive(ctx, world, t, p, save) {
   const tR = room('trophy');
   ctx.save();
   for (const s of trophySpots(tR)) {
+    if (!trophyEarned(s.t, save)) continue;
     const d = Math.hypot(s.x - p.x, s.y - p.y);
     const near = Math.max(0, 1 - d / 150);
     if (near <= 0.01) continue;

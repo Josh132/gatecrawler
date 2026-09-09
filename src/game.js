@@ -306,7 +306,7 @@ function enterHub(g) {
   const w = buildHub();
   g.world = w;
   g.worldCanvas = bakeWorld(w);
-  g._hubDecor = buildHubDecor(w); // static dressing, baked once per visit
+  g._hubDecor = buildHubDecor(w, g.save); // static dressing, baked once per visit
   g._crew = makeCrew(w);
   g._hubRoom = null;
   g.flow = makeFlowField(w.grid, w.W, w.H);

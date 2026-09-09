@@ -291,6 +291,10 @@ export function createGame(canvas) {
     buttons: [],
     mapNodes: [],
     deadInfo: null,
+    debrief: null, // built by dialHome / onDeath, consumed by renderDebrief
+    runStats: null,
+    floats: [], // {x,y,vy,t,txt,color,size} damage / reward ticks
+    unlockCard: null, // {title,sub,t} sliding card, top-centre
     visPoly: null,
     visEnabled: true,
     fps: 0,
@@ -446,6 +450,20 @@ function launchRun(g, addr) {
   g._seenKinds = new Set(); // bestiary: kinds that have gone active this run
   g._runRoomsCleared = 0; // sectors cleared this run (for surviveRun objective)
   g._escortSafe = false;
+
+  // per-run tally — folded into the debrief on dialHome / onDeath. counters only.
+  g.runStats = {
+    kills: {}, killsTotal: 0, bosses: 0, dmgTaken: 0, shots: 0, hits: 0, crits: 0,
+    streak: 0, bestStreak: 0,
+    naqStart: g.save.naquadah, intelStart: g.save.intel || 0, salvStart: g.save.salvage || 0,
+    t0: g.time, itemsFound: 0, wpnXp: {}, newBestiary: [], deepestThreat: 0, special: [],
+  };
+  // snapshot the active op so the debrief can show before -> after per objective
+  try { g._opSnapshot = operationProgress(g.save); } catch (err) { g._opSnapshot = null; }
+  g.debrief = null;
+  g.floats = g.floats || [];
+  g.floats.length = 0;
+
   const hop = e.startHop || 0;
   startWorld(g, addr || g.save.lastAddress || HOME, hop);
 }
@@ -567,6 +585,7 @@ function dialHome(g) {
         if (!g._events) g._events = [];
         g._events.push({ t: 'rescue' });
         g.message(cap.name + ' — extracted');
+        if (g.runStats) g.runStats.special.push(cap.name + ' extracted to the SGC');
       }
     }
   }
@@ -575,8 +594,12 @@ function dialHome(g) {
   flushEvents(g);
   g.runNaq = 0;
   g.runIntel = 0;
-  enterHub(g);
-  g.message('Returned to SGC. Naquadah & intel banked.');
+  // hold at the debrief instead of dropping straight into the hub.
+  // NOTE: the shared post-run state string stays 'dead' (save + test-harness
+  // compatibility — the harness only knows menu/play/gatemap/dead); the debrief
+  // reads outcome off g.debrief, and renderDead delegates to renderDebrief.
+  buildDebrief(g, 'EXTRACTED');
+  g.state = 'dead';
 }
 
 function onDeath(g, abandon) {
@@ -603,6 +626,9 @@ function onDeath(g, abandon) {
   g.inv.grid = g.inv.grid.map(() => null);
   saveInv(g);
   g.deadInfo = { naq: keptN, intel: g.runIntel, depth: g.hop, addr: g.params ? g.params.address : '', lost };
+  // KIA keeps the 'dead' state string (save / harness compatibility) but renders
+  // the full debrief; renderDead delegates to renderDebrief when g.debrief is set.
+  buildDebrief(g, 'KIA');
   g.state = 'dead';
 }
 
@@ -677,7 +703,8 @@ function update(g, dt) {
       enterHub(g);
     }
   } else if (g.state === 'dead') {
-    if (pressed('Enter')) enterHub(g);
+    // covers both the KIA screen and the EXTRACTED debrief (see dialHome note)
+    if (pressed('Enter')) debriefContinue(g);
   } else if (g.state === 'menu') {
     if (pressed('Enter')) enterHub(g);
   }
@@ -1290,13 +1317,36 @@ function updatePlay(g, dt) {
   g.shake -= g.shake * Math.min(1, 5 * dt);
   if (g.shake < 0.2) g.shake = 0;
 
-  // audio: ambient bed tracks the threat, plus a low-HP heartbeat
-  const fighting = g.enemies.some((e) => e.alive && e.state === 'active' && !e.hunter);
-  const intensity = Math.min(1, g.heat / 3.5 + (fighting ? 0.35 : 0) + (g.dhdActive === false && g.curRoom === w.dhdRoom ? 0.4 : 0));
+  updateFloats(g, dt); // rising damage / reward ticks
+
+  // audio: ambient bed tracks the threat, plus a low-HP heartbeat.
+  // inputs: heat, whether we're actively fighting, nearby active enemy count,
+  // a live boss (floors intensity), and standing on an un-dialled DHD.
+  let fighting = false;
+  let bossAlive = false;
+  let nearActive = 0;
+  for (const e of g.enemies) {
+    if (!e.alive) continue;
+    if (e.kind === 'boss' || e.kind === 'nexus') bossAlive = true;
+    if (e.state === 'active' && !e.hunter) {
+      fighting = true;
+      const dx = e.x - p.x, dy = e.y - p.y;
+      if (dx * dx + dy * dy < 560 * 560) nearActive++;
+    }
+  }
+  let musTarget =
+    g.heat / 3.5 +
+    (fighting ? 0.2 : 0) +
+    Math.min(0.4, nearActive * 0.09) +
+    (g.dhdActive === false && g.curRoom === w.dhdRoom ? 0.35 : 0);
+  if (bossAlive) musTarget = Math.max(musTarget, 0.7);
+  musTarget = Math.min(1, musTarget);
+  // smooth toward the target every frame so it never jumps
+  g._musInt = g._musInt == null ? musTarget : g._musInt + (musTarget - g._musInt) * Math.min(1, 2.2 * dt);
   g._musIntT = (g._musIntT || 0) - dt;
   if (g._musIntT <= 0) {
     g._musIntT = 0.5;
-    if (music && music.setIntensity) music.setIntensity(intensity);
+    if (music && music.setIntensity) music.setIntensity(g._musInt);
   }
   const hpFrac = p.hp / p.maxHp;
   g._lowHpT = (g._lowHpT || 0) - dt;
@@ -2439,6 +2489,16 @@ function hitEnemy(g, e, b) {
   } else {
     e.hp -= dmg;
   }
+  // debrief tally + floating damage number (player bullets only). no crit flag
+  // exists on the bullet, so a heavy connect just reads bigger + gold.
+  if (b.from === 'player') {
+    if (g.runStats) g.runStats.hits++;
+    const big = dmg >= 34;
+    pushFloat(
+      g, e.x + rr(-4, 4), e.y - e.r - 4, String(Math.max(1, Math.round(dmg))),
+      big ? '#ffd24a' : dmg < 6 ? '#ff8a7a' : '#ffffff', big ? 15 : dmg < 6 ? 9 : 11
+    );
+  }
   if (e.kind === 'wraith') e.regenT = 0;
   if (e.state === 'idle' || e.state === 'dormant') {
     const wasIdle = e.state === 'idle';
@@ -2489,6 +2549,10 @@ function damagePlayer(g, amount, vx, vy) {
     if (p.shield <= 0 && sfx.shieldBreak) sfx.shieldBreak();
   }
   p.hp -= dmg;
+  if (g.runStats && dmg > 0) {
+    g.runStats.dmgTaken += dmg;
+    g.runStats.streak = 0;
+  }
   p.flash = 0.12;
   p.iframe = Math.max(p.iframe, 0.25);
   addShake(g, 5, vx, vy);
@@ -2568,7 +2632,33 @@ function killEnemy(g, e) {
 
   e.alive = false;
   sfx.death();
+  // debrief tally: snapshot bestiary + active-weapon mastery around recordKill
+  let _wk = null, _lvl0 = 0, _kill0 = 0;
+  if (g.runStats) {
+    _wk = activeWeaponId(g.inv);
+    try { _lvl0 = (g.save.weapons[_wk] || {}).level || 1; } catch (err) { _lvl0 = 1; }
+    _kill0 = (g.save.bestiary && g.save.bestiary[e.kind] && g.save.bestiary[e.kind].killed) || 0;
+  }
   recordKill(g, e); // campaign events + weapon mastery xp + bestiary
+  if (g.runStats) {
+    const rs = g.runStats;
+    rs.kills[e.kind] = (rs.kills[e.kind] || 0) + 1;
+    rs.killsTotal++;
+    if (e.kind === 'boss' || e.kind === 'nexus') rs.bosses++;
+    rs.streak++;
+    if (rs.streak > rs.bestStreak) rs.bestStreak = rs.streak;
+    const th = (g.params && g.params.threat) || 0;
+    if (th > rs.deepestThreat) rs.deepestThreat = th;
+    if (_kill0 === 0) rs.newBestiary.push(kindLabel(e.kind));
+    try {
+      const lvl1 = (g.save.weapons[_wk] || {}).level || 1;
+      if (lvl1 > _lvl0) {
+        const wn = (ITEMS[weaponItemId(g.inv)] || {}).name || _wk;
+        showUnlock(g, 'WEAPON MASTERY  L' + lvl1, wn);
+        rs.special.push(wn + ' reached mastery L' + lvl1);
+      }
+    } catch (err) { /* odd save.weapons shape */ }
+  }
   const dead = e.kind === 'boss';
   const elite = e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
   burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') ? '#b6f0ff' : '#ffb347');
@@ -2583,11 +2673,15 @@ function killEnemy(g, e) {
   // forward pressure is rewarded — a kill tops you up a little and refunds dodge
   const pl = g.player;
   if (pl.alive) {
-    pl.hp = Math.min(pl.maxHp, pl.hp + (dead ? 22 : elite ? 6 : 3));
+    const hpGain = dead ? 22 : elite ? 6 : 3;
+    const room = pl.maxHp - pl.hp;
+    pl.hp = Math.min(pl.maxHp, pl.hp + hpGain);
     pl.dodgeCd = Math.max(0, pl.dodgeCd - (dead ? 0.8 : 0.2));
     g.killStreak += 1;
     g.killStreakT = 2.6;
     if (elite || dead) sfx.crit();
+    if (room > 0) pushFloat(g, pl.x + 10, pl.y - 18, '+' + Math.min(hpGain, room | 0 || hpGain) + 'HP', '#7ef77e', 11);
+    if (dead) pushFloat(g, pl.x - 10, pl.y - 30, '+DODGE', '#7fe8ff', 11);
   }
   const mult = worldMods(g).naqMul;
   // gear drops roll a rarity tier off world threat; the boss dips into a
@@ -2681,6 +2775,7 @@ function collectPickup(g, pk) {
     if (left > 0) pk.item.count = left;
     else {
       pk.alive = false;
+      if (g.runStats) g.runStats.itemsFound += pk.item.count || 1;
       const rar = pk.item.rarity ? normRarity(pk.item.rarity) : 'common';
       const nm = rar !== 'common' ? rarityAffixName(pk.item.id, rar) : def ? def.name : pk.item.id;
       g.message('Picked up ' + nm + (pk.item.count > 1 ? ' ×' + pk.item.count : ''));
@@ -4110,6 +4205,7 @@ function render(g, dt) {
     if (g.panelOpen) renderPanel(g);
     if (g.state === 'dead') renderDead(g);
   }
+  drawUnlockCard(g, dt); // sliding reward card — above everything but postfx
   if (g.paused) renderPause(g);
 
   // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
@@ -4309,7 +4405,9 @@ function renderPlay(g, dim) {
   if (!g.world) return;
   // directional shake: kick along the hit vector + a little omni jitter.
   // clamp the render read so a stacked firefight can't turn to mush.
-  const sh = (g.shake > 22 ? 22 : g.shake) * ((g.save && g.save.settings && g.save.settings.shake != null) ? g.save.settings.shake : 1);
+  const sh = (g.shake > 22 ? 22 : g.shake)
+    * ((g.save && g.save.settings && g.save.settings.shake != null) ? g.save.settings.shake : 1)
+    * (reduceFlash(g) ? 0.5 : 1); // accessibility: halve shake with reduceFlash
   const jit = (Math.random() - 0.5) * sh * 0.4;
   const kick = sh * (0.35 + 0.45 * Math.random());
   const shx = -(g.shakeX || 0) * kick + jit;
@@ -4374,6 +4472,8 @@ function renderPlay(g, dim) {
   if (g.player.beam && g.player.beam.on) drawBeam(ctx, g.player.beam, g.time);
   ctx.globalCompositeOperation = 'source-over';
 
+  if (!dim) drawFloatText(g); // world-space damage / reward ticks
+
   if (g.dhdActive) {
     const c = g.world.dhdRoom.centerPx;
     const p = g.player;
@@ -4400,6 +4500,7 @@ function renderPlay(g, dim) {
     ctx.fillRect(0, 0, view.w, view.h);
   } else {
     renderHUD(g);
+    drawBossBar(g);
     renderHotbar(g);
     renderMessages(g);
     if (g.vendorOpen) renderVendorPanel(g);
@@ -7444,7 +7545,345 @@ function renderGateMap(g) {
   }
 }
 
+// nicer names for the debrief bestiary / kill breakdown; falls back to prettify
+const KIND_LABEL = {
+  jaffa: 'Jaffa Warrior', jaffa_heavy: 'Jaffa Heavy', jaffa_grenadier: 'Jaffa Grenadier',
+  wraith: 'Wraith', wraith_drone: 'Wraith Drone', replicator: 'Replicator',
+  replicator_brute: 'Replicator Brute', stalker: 'Stalker', weaver: 'Weaver',
+  sniper: 'Sniper', scavenger: 'Scavenger', boss: 'Boss', nexus: 'Incursion Nexus',
+};
+function kindLabel(k) {
+  if (KIND_LABEL[k]) return KIND_LABEL[k];
+  return String(k || '?').split('_').map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+}
+function fmtMMSS(s) {
+  s = Math.max(0, s | 0);
+  return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// ---- floating combat text --------------------------------------------------
+function reduceFlash(g) {
+  return !!(g.save && g.save.settings && g.save.settings.reduceFlash);
+}
+// push a rising, fading tick at world (x,y). suppressed entirely by reduceFlash.
+function pushFloat(g, x, y, txt, color, size) {
+  if (!g.floats || reduceFlash(g)) return;
+  if (g.floats.length > 40) g.floats.shift();
+  g.floats.push({ x, y, vy: -34, t: 0.75, txt, color: color || '#fff', size: size || 11 });
+}
+function updateFloats(g, dt) {
+  const f = g.floats;
+  if (!f || !f.length) return;
+  for (let i = f.length - 1; i >= 0; i--) {
+    const o = f[i];
+    o.t -= dt;
+    o.y += o.vy * dt;
+    o.vy += 26 * dt; // ease the rise
+    if (o.t <= 0) f.splice(i, 1);
+  }
+}
+// world-space draw from renderPlay's UI layer (inside the camera transform)
+function drawFloatText(g) {
+  const f = g.floats;
+  if (!f || !f.length) return;
+  const { ctx } = g;
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < f.length; i++) {
+    const o = f[i];
+    ctx.globalAlpha = clamp(o.t / 0.4, 0, 1);
+    ctx.fillStyle = o.color;
+    ctx.font = 'bold ' + o.size + 'px monospace';
+    ctx.fillText(o.txt, o.x, o.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  textReset(ctx);
+}
+
+// ---- boss / nexus health bar ---------------------------------------------
+function drawBossBar(g) {
+  if (!g.world || g.hub) return;
+  let e = null;
+  for (const en of g.enemies) {
+    if (en.alive && (en.kind === 'boss' || en.kind === 'nexus') && en.state !== 'idle') { e = en; break; }
+  }
+  if (!e) return;
+  const { ctx, view } = g;
+  const nexus = e.kind === 'nexus';
+  const v = e.variant || (g.params && (g.params.faction || g.params.primary)) || 'jaffa';
+  const name = nexus ? 'THE INCURSION NEXUS' : (BOSS_NAME[v] || 'BOSS').toUpperCase();
+  const sub = nexus ? 'ASSIMILATION CORE' : (BOSS_SUB[v] || '').toUpperCase();
+  const tint = nexus ? '#8fe4ff' : (BOSS_TINT[v] || '#ffb347');
+  const w = Math.min(560, view.w - 120);
+  const x = (view.w - w) / 2;
+  const y = 54;
+  const hf = clamp(e.hp / (e.maxHp || 1), 0, 1);
+  ctx.save();
+  textReset(ctx);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(6,8,12,0.66)';
+  ctx.fillRect(x - 6, y - 16, w + 12, 34);
+  const segs = 24;
+  const sw = w / segs;
+  for (let i = 0; i < segs; i++) {
+    ctx.fillStyle = i / segs < hf ? tint : 'rgba(255,255,255,0.10)';
+    ctx.fillRect(x + i * sw + 1, y, sw - 2, 8);
+  }
+  ctx.strokeStyle = hexA(tint, 0.7);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, 8);
+  if (e.shield > 0) {
+    const smax = nexus ? 240 : (v === 'jaffa' ? 90 : 70);
+    ctx.fillStyle = 'rgba(125,211,252,0.85)';
+    ctx.fillRect(x, y - 3, w * clamp(e.shield / smax, 0, 1), 3);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText(name, view.w / 2, y - 4);
+  if (sub) {
+    ctx.fillStyle = hexA(tint, 0.85);
+    ctx.font = '9px monospace';
+    ctx.fillText(sub, view.w / 2, y + 17);
+  }
+  const phases = nexus ? 3 : 2;
+  const cur = nexus ? (e.phase || 1) : (e.phase2 ? 2 : 1);
+  for (let i = 0; i < phases; i++) {
+    ctx.fillStyle = i < cur ? tint : 'rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.arc(x + w + 10 + i * 9, y + 4, 3, 0, TAU);
+    ctx.fill();
+  }
+  if ((nexus || v === 'replicator') && e.immuneType && (e.shield > 0 || !nexus)) {
+    ctx.fillStyle = e.immuneType === 'kinetic' ? '#ff9678' : '#96c8ff';
+    ctx.font = '9px monospace';
+    ctx.fillText(e.immuneType === 'kinetic' ? 'KINETIC-IMMUNE' : 'ENERGY-IMMUNE', view.w / 2, y + 28);
+  }
+  ctx.restore();
+  textReset(ctx);
+}
+
+// ---- unlock card --------------------------------------------------------
+// TODO wire from hub: campaign-reward claim (renderOperationsPanel) and tech
+// research (renderResearchPanel) sit outside this file's editable regions —
+// call showUnlock() from those handlers once they gain a hook.
+function showUnlock(g, title, sub) {
+  g.unlockCard = { title, sub: sub || '', t: 3.0 };
+}
+function drawUnlockCard(g, dt) {
+  const c = g.unlockCard;
+  if (!c) return;
+  c.t -= dt || 0;
+  if (c.t <= 0) { g.unlockCard = null; return; }
+  const { ctx, view } = g;
+  const inP = clamp((3.0 - c.t) / 0.3, 0, 1);
+  const a = Math.min(inP, clamp(c.t / 0.4, 0, 1));
+  const cw = 320, ch = 46;
+  const cx0 = (view.w - cw) / 2;
+  const cy0 = 84 - (1 - inP) * 20;
+  ctx.save();
+  textReset(ctx);
+  ctx.globalAlpha = a;
+  ctx.fillStyle = 'rgba(8,12,20,0.92)';
+  ctx.fillRect(cx0, cy0, cw, ch);
+  ctx.strokeStyle = '#ffd24a';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx0 + 0.5, cy0 + 0.5, cw - 1, ch - 1);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd24a';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText(c.title, view.w / 2, cy0 + 19);
+  if (c.sub) {
+    ctx.fillStyle = '#cde';
+    ctx.font = '10px monospace';
+    ctx.fillText(c.sub, view.w / 2, cy0 + 35);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  textReset(ctx);
+}
+
+// ---- run debrief ---------------------------------------------------------
+function buildDebrief(g, outcome) {
+  const rs = g.runStats || {
+    kills: {}, killsTotal: 0, bosses: 0, dmgTaken: 0, hits: 0, bestStreak: 0,
+    naqStart: g.save.naquadah, intelStart: g.save.intel || 0, salvStart: g.save.salvage || 0,
+    t0: g.time, itemsFound: 0, newBestiary: [], deepestThreat: 0, special: [],
+  };
+  const topKinds = Object.keys(rs.kills)
+    .sort((a, b) => rs.kills[b] - rs.kills[a])
+    .slice(0, 3)
+    .map((k) => ({ name: kindLabel(k), n: rs.kills[k] }));
+
+  let opNow = null;
+  try { opNow = operationProgress(g.save); } catch (err) { opNow = null; }
+  const snap = g._opSnapshot;
+  const opDeltas = [];
+  let opJustCompleted = false;
+  if (opNow && opNow.op) {
+    for (const o of opNow.objectives) {
+      const s0 = snap && snap.objectives ? snap.objectives.find((x) => x.id === o.id) : null;
+      opDeltas.push({ label: objectiveLabel(o), before: s0 ? s0.have : 0, after: o.have, need: o.need, done: o.done });
+    }
+    opJustCompleted = !!opNow.allDone && !(snap && snap.allDone);
+  }
+
+  const depth = rs.deepestThreat || (g.params && g.params.threat) || (g.deadInfo && g.deadInfo.depth) || 0;
+  g.debrief = {
+    outcome,
+    addr: (g.params && g.params.address) || (g.deadInfo && g.deadInfo.addr) || '',
+    threat: depth,
+    time: Math.max(0, g.time - rs.t0),
+    killsTotal: rs.killsTotal,
+    topKinds,
+    bosses: rs.bosses,
+    dmgTaken: Math.round(rs.dmgTaken),
+    hits: rs.hits,
+    bestStreak: rs.bestStreak,
+    naqGain: g.save.naquadah - rs.naqStart,
+    intelGain: (g.save.intel || 0) - rs.intelStart,
+    salvGain: (g.save.salvage || 0) - rs.salvStart,
+    itemsFound: rs.itemsFound,
+    bankedBefore: rs.naqStart,
+    bankedAfter: g.save.naquadah,
+    opName: opNow && opNow.op ? (opNow.op.name || opNow.op.title || opNow.op.id) : null,
+    opDeltas,
+    opJustCompleted,
+    newBestiary: (rs.newBestiary || []).slice(0, 8),
+    special: (rs.special || []).slice(0, 6),
+    lost: g.deadInfo ? g.deadInfo.lost : 0,
+  };
+}
+
+function debriefContinue(g) {
+  g.debrief = null;
+  enterHub(g);
+}
+
+function renderDebrief(g) {
+  const { ctx, view } = g;
+  const d = g.debrief;
+  if (!d) return renderDead(g);
+  textReset(ctx);
+  ctx.fillStyle = 'rgba(6,8,14,0.86)';
+  ctx.fillRect(0, 0, view.w, view.h);
+
+  const kia = d.outcome === 'KIA';
+  const w = Math.min(900, view.w - 60);
+  const h = Math.min(612, view.h - 60);
+  const x = (view.w - w) / 2;
+  const y = (view.h - h) / 2;
+  ctx.fillStyle = 'rgba(10,14,22,0.97)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = kia ? 'rgba(232,86,77,0.6)' : 'rgba(94,200,106,0.55)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  const pad = 28;
+  const ix = x + pad;
+  const iw = w - pad * 2;
+  let hy = y + 46;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = kia ? '#e8564d' : '#5ec86a';
+  ctx.shadowBlur = 14;
+  ctx.shadowColor = kia ? '#900' : '#063';
+  ctx.font = 'bold 30px monospace';
+  ctx.fillText(kia ? 'K I A' : 'EXTRACTED', ix, hy);
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#9cf';
+  ctx.font = '12px monospace';
+  ctx.fillText(d.addr || '—', x + w - pad, hy - 14);
+  ctx.fillStyle = '#8ab';
+  ctx.fillText('deepest threat ' + d.threat + '     run time ' + fmtMMSS(d.time), x + w - pad, hy + 4);
+  ctx.textAlign = 'left';
+  hy += 22;
+
+  if (d.opJustCompleted) {
+    ctx.fillStyle = 'rgba(94,200,106,0.16)';
+    ctx.fillRect(ix, hy, iw, 24);
+    ctx.fillStyle = '#7fe0a0';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('OPERATION ' + String(d.opName || '').toUpperCase() + ' — OBJECTIVES MET  ·  CLAIM AT THE SGC', ix + 8, hy + 16);
+    hy += 34;
+  } else {
+    hy += 8;
+  }
+
+  const colGap = 22;
+  const colW = (iw - colGap * 2) / 3;
+  const colX = [ix, ix + colW + colGap, ix + (colW + colGap) * 2];
+  const colTop = hy;
+  const lh = 16;
+
+  const heading = (cx0, txt) => {
+    ctx.fillStyle = '#9cf';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText(txt, cx0, colTop);
+  };
+  const rows = (cx0, list) => {
+    let ry = colTop + 22;
+    const maxY = y + h - 66;
+    ctx.font = '11px monospace';
+    for (const ln of list) {
+      for (const seg of wrapLines(ctx, ln.t, colW)) {
+        if (ry > maxY) return ry;
+        ctx.fillStyle = ln.c || '#cde';
+        ctx.fillText(seg, cx0, ry);
+        ry += lh;
+      }
+    }
+    return ry;
+  };
+
+  heading(colX[0], 'COMBAT');
+  const combat = [{ t: 'Kills  ' + d.killsTotal }];
+  for (const k of d.topKinds) combat.push({ t: '  ' + k.name + ' x' + k.n, c: '#9ab' });
+  combat.push({ t: 'Bosses down  ' + d.bosses });
+  combat.push({ t: 'Damage taken  ' + d.dmgTaken });
+  combat.push({ t: 'Shots on target  ' + d.hits });
+  combat.push({ t: 'Best kill streak  ' + d.bestStreak });
+  rows(colX[0], combat);
+
+  heading(colX[1], 'RECOVERED');
+  const rec = [
+    { t: 'Naquadah  +' + d.naqGain, c: '#8ef' },
+    { t: 'Intel  +' + d.intelGain, c: '#b6f0ff' },
+  ];
+  if (d.salvGain) rec.push({ t: 'Salvage  +' + d.salvGain, c: '#dca' });
+  rec.push({ t: 'Items carried out  ' + d.itemsFound });
+  if (kia && d.lost) rec.push({ t: 'Backpack lost  ' + d.lost + ' items', c: '#e88' });
+  rec.push({ t: 'Banked naquadah', c: '#9ab' });
+  rec.push({ t: '  ' + d.bankedBefore + '  ->  ' + d.bankedAfter, c: '#8ef' });
+  rows(colX[1], rec);
+
+  heading(colX[2], 'THE INCURSION');
+  const inc = [];
+  if (d.opName) inc.push({ t: d.opName, c: '#9cf' });
+  if (d.opDeltas.length) {
+    for (const o of d.opDeltas) {
+      inc.push({ t: (o.done ? '[x] ' : '[ ] ') + o.label, c: o.done ? '#7fe0a0' : '#cde' });
+      inc.push({ t: '     ' + o.before + ' -> ' + o.after + ' / ' + o.need, c: '#9ab' });
+    }
+  } else {
+    inc.push({ t: 'No active operation.', c: '#9ab' });
+  }
+  if (d.opJustCompleted) inc.push({ t: 'Claim the reward at the SGC Operations desk.', c: '#7fe0a0' });
+  if (d.newBestiary.length) {
+    inc.push({ t: 'New in the codex:', c: '#cda' });
+    inc.push({ t: '  ' + d.newBestiary.join(', '), c: '#9ab' });
+  }
+  for (const s of d.special) inc.push({ t: '- ' + s, c: '#bda' });
+  rows(colX[2], inc);
+
+  const bw = 300;
+  button(g, 'CONTINUE   (Enter)', view.w / 2 - bw / 2, y + h - 52, bw, 38, () => debriefContinue(g));
+  textReset(ctx);
+}
+
 function renderDead(g) {
+  if (g.debrief) return renderDebrief(g);
   const { ctx, view } = g;
   ctx.fillStyle = 'rgba(10,4,8,0.75)';
   ctx.fillRect(0, 0, view.w, view.h);

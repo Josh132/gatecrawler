@@ -1354,12 +1354,19 @@ function explode(g, gr) {
   for (let i = 0; i < 10; i++) {
     g.particles.push(new Particle(gr.x, gr.y, rr(-260, 260), rr(-260, 260), rr(0.2, 0.5), '#ffd27a', rr(2, 4)));
   }
+  // white core pop over the warm bloom + a scorched blast ring
+  addFlash(g, gr.x, gr.y, gr.radius * 2.4, '#ffffff', 0.08);
   scorch(g, gr.x, gr.y, gr.radius * 0.6);
   for (let i = 0; i < 5; i++) {
     const a = rr(0, TAU);
     scorch(g, gr.x + Math.cos(a) * gr.radius * 0.5, gr.y + Math.sin(a) * gr.radius * 0.5, rr(6, 12));
   }
-  addShake(g, 14, rr(-1, 1), rr(-1, 1));
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * TAU;
+    scorch(g, gr.x + Math.cos(a) * gr.radius * 0.82, gr.y + Math.sin(a) * gr.radius * 0.82, rr(5, 9));
+  }
+  addShake(g, 18, rr(-1, 1), rr(-1, 1));
+  g.hitstop = Math.max(g.hitstop, 1);
   sfx.explosion();
   for (const e of g.enemies) {
     if (!e.alive) continue;
@@ -1437,11 +1444,21 @@ function fireBeam(g, p, wp, dt) {
     if (held && !blocked && dry && p.reloadT <= 0 && (p.ammo[wid] || 0) > 0) startReload(g, p, wid);
     return;
   }
-  if (!p.beam.on) sfx.beam(true);
   const dx = Math.cos(p.aim);
   const dy = Math.sin(p.aim);
   const ox = p.x + dx * 16;
   const oy = p.y + dy * 16;
+  if (!p.beam.on) {
+    // thin cyan spit as the emitter spins up
+    sfx.beam(true);
+    addFlash(g, ox, oy, MUZZLE.beam.fr, MUZZLE.beam.fc, MUZZLE.beam.fl);
+    for (let i = 0; i < 2; i++) {
+      const a = p.aim + rr(-0.22, 0.22);
+      g.particles.push(new Particle(ox, oy, Math.cos(a) * rr(80, 220), Math.sin(a) * rr(80, 220), rr(0.08, 0.2), MUZZLE.beam.fc, rr(1.4, 2.6)));
+    }
+    p.kx -= dx * 40;
+    p.ky -= dy * 40;
+  }
   const range = wp.range || 460;
   let hx = ox + dx * range;
   let hy = oy + dy * range;
@@ -1505,6 +1522,18 @@ function activeWeaponRarityMul(g) {
   return rarityMul(st);
 }
 
+// per-weapon muzzle character: flash [radius, colour, life], spark count,
+// backward recoil into p.kx/p.ky, camera shake, and ejected shell count.
+const MUZZLE = {
+  p90: { fr: 60, fc: '#fff3c8', fl: 0.05, sparks: 2, recoil: 14, shake: 1.1, shells: 1 },
+  staff: { fr: 150, fc: '#ffb04a', fl: 0.1, sparks: 5, recoil: 150, shake: 5.5, shells: 0 },
+  zat: { fr: 92, fc: '#7dd3fc', fl: 0.08, sparks: 4, recoil: 70, shake: 2.4, shells: 0 },
+  shotgun: { fr: 116, fc: '#ffe0a0', fl: 0.09, sparks: 8, recoil: 150, shake: 5.5, shells: 3 },
+  burst: { fr: 66, fc: '#e8f0ff', fl: 0.05, sparks: 2, recoil: 26, shake: 1.4, shells: 1 },
+  launcher: { fr: 90, fc: '#c98a4a', fl: 0.09, sparks: 3, recoil: 150, shake: 4.5, shells: 1 },
+  beam: { fr: 74, fc: '#8ff4ff', fl: 0.06, sparks: 2, recoil: 22, shake: 1, shells: 0 },
+};
+
 function fireWeapon(g, p, wp, wid) {
   const muzzle = 18;
   const scatter = wp.pellets > 3;
@@ -1534,28 +1563,27 @@ function fireWeapon(g, p, wp, wid) {
       )
     );
   }
-  const nFlash = scatter ? 10 : 5;
-  for (let i = 0; i < nFlash; i++) {
-    const a = p.aim + rr(-(scatter ? 0.55 : 0.4), scatter ? 0.55 : 0.4);
-    g.particles.push(
-      new Particle(
-        p.x + Math.cos(p.aim) * muzzle,
-        p.y + Math.sin(p.aim) * muzzle,
-        Math.cos(a) * rr(60, scatter ? 300 : 220),
-        Math.sin(a) * rr(60, scatter ? 300 : 220),
-        rr(0.1, 0.25),
-        wp.color,
-        rr(1.5, 3)
-      )
-    );
+  const mz = MUZZLE[wid] || (wp.energy ? MUZZLE.staff : MUZZLE.p90);
+  const ca = Math.cos(p.aim);
+  const sa = Math.sin(p.aim);
+  // prefer a muzzle point stashed by the figure rig, else the computed tip
+  const mx = (p._muzzle && p._muzzle.x) || p.x + ca * muzzle;
+  const my = (p._muzzle && p._muzzle.y) || p.y + sa * muzzle;
+  const spread = scatter ? 0.55 : 0.32;
+  for (let i = 0; i < mz.sparks; i++) {
+    const a = p.aim + rr(-spread, spread);
+    const s = rr(70, scatter ? 320 : 230);
+    g.particles.push(new Particle(mx, my, Math.cos(a) * s, Math.sin(a) * s, rr(0.08, 0.22), i & 1 ? mz.fc : wp.color, rr(1.4, 3)));
   }
-  addFlash(g, p.x + Math.cos(p.aim) * muzzle, p.y + Math.sin(p.aim) * muzzle, wp.energy ? 130 : 82, wp.color, 0.07);
-  const recoil = wp.energy ? 120 : scatter ? 90 : 18;
-  addShake(g, wp.energy ? 4 : scatter ? 3 : 1.3, Math.cos(p.aim), Math.sin(p.aim));
-  p.kx -= Math.cos(p.aim) * recoil;
-  p.ky -= Math.sin(p.aim) * recoil;
-  if (!wp.energy) ejectCasing(g, p.x, p.y, p.aim);
+  addFlash(g, mx, my, mz.fr, mz.fc, mz.fl);
+  // recoil: shove the player backward along -aim + a sharp camera kick
+  p.kx -= ca * mz.recoil;
+  p.ky -= sa * mz.recoil;
+  addShake(g, mz.shake, ca, sa);
+  for (let i = 0; i < mz.shells; i++) ejectCasing(g, p.x, p.y, p.aim);
   sfx.fire(wid || (wp.energy ? 'staff' : 'p90'));
+  // dry-tail rattle on the last round of a burst
+  if (wid === 'burst' && p.burstN === 1 && sfx.p90Tail) sfx.p90Tail();
 }
 
 function normAngle(a) {
@@ -1686,15 +1714,23 @@ function hitEnemy(g, e, b) {
   e.ky += (b.vy / bl) * b.knockback;
   if (b.stun) e.stun = Math.max(e.stun, b.stun);
   spark(g, b.x, b.y, b.color);
+  // biome-tinted debris on any solid connect — a P90 chip stays quiet
+  if (dmg >= 6) {
+    const bi = biomeDust(g, b.x, b.y, dmg >= 20 ? 3 : 2, 95);
+    if (bi.hot && dmg >= 10 && Math.random() < 0.4) scorch(g, b.x, b.y, rr(2, 4));
+  }
   // only meaningful hits leave a mark on the floor — no mud from a P90 stream
   if (dmg >= 8 && Math.random() < 0.5) scorch(g, b.x, b.y, rr(2, 3.5));
   if (dmg >= 20) splat(g, b.x, b.y, factionSplatColor(e.kind), 1);
 
   // tactile weight on a solid connect that doesn't kill
   sfx.impact(dmg >= 24);
-  if (e.hp > 0 && dmg >= 16) {
-    g.hitstop = Math.max(g.hitstop, 1);
-    addShake(g, 3, b.vx, b.vy);
+  if (e.hp > 0 && dmg >= 12) {
+    // hit-stop scales with weight; elites soak a touch harder
+    const elite = e.kind === 'boss' || e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
+    const wt = dmg >= 40 ? 3 : dmg >= 24 ? 2 : dmg >= 16 ? 1 : 0;
+    if (wt) g.hitstop = Math.max(g.hitstop, elite ? Math.min(3, wt + 1) : wt);
+    addShake(g, dmg >= 24 ? 4 : 3, b.vx, b.vy);
     if (dmg >= 34) sfx.crit();
   }
   if (e.hp <= 0) killEnemy(g, e);
@@ -1722,9 +1758,13 @@ function damagePlayer(g, amount, vx, vy) {
   p.kx += (vx / l) * 140;
   p.ky += (vy / l) * 140;
   sfx.hit();
+  // a solid connect washes the floor red; a genuinely heavy one also stops the frame
+  if (dmg >= 12) addFlash(g, p.x, p.y, 96, '#ff5a5a', 0.09);
+  if (dmg >= 28) g.hitstop = Math.max(g.hitstop, 1);
   for (let i = 0; i < 8; i++) {
     g.particles.push(new Particle(p.x, p.y, rr(-120, 120), rr(-120, 120), 0.3, dr > 0 ? '#8cf' : '#f66', 2));
   }
+  biomeDust(g, p.x, p.y, 3, 110);
 }
 
 const BOSS_NAME = { jaffa: 'Serpent Guard Prime', wraith: 'The Wraith Queen', replicator: 'Replicator Carrier' };
@@ -1755,10 +1795,13 @@ function killEnemy(g, e) {
   const dead = e.kind === 'boss';
   const elite = e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
   burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') ? '#b6f0ff' : '#ffb347');
+  // radial kick from the corpse toward the player + biome debris fan
   addShake(g, dead ? 16 : 3, e.x - g.player.x, e.y - g.player.y);
-  g.hitstop = Math.max(g.hitstop, dead ? 6 : elite ? 3 : 2);
+  g.hitstop = Math.max(g.hitstop, dead ? 8 : elite ? 4 : 3);
   scorch(g, e.x, e.y, dead ? 34 : e.r + 6);
   splat(g, e.x, e.y, factionSplatColor(e.kind), dead ? 8 : 4);
+  const kbi = biomeDust(g, e.x, e.y, dead ? 10 : 4, dead ? 200 : 150);
+  if (kbi.hot) scorch(g, e.x + rr(-6, 6), e.y + rr(-6, 6), rr(4, 8));
 
   // forward pressure is rewarded — a kill tops you up a little and refunds dodge
   const pl = g.player;
@@ -2701,6 +2744,32 @@ function factionSplatColor(kind) {
   return 'rgba(255,150,90,0.28)'; // jaffa
 }
 
+// per-biome impact debris: mote colour, floor-mark rgba, hot = throws sparks
+// + a scorch. keyed by g.params.biome; ruins is the fallback.
+const BIOME_IMPACT = {
+  ruins: { spark: '#9fb8cc', mark: 'rgba(58,68,82,0.30)', hot: false },
+  temple: { spark: '#d8b98a', mark: 'rgba(120,92,54,0.32)', hot: false },
+  jungle: { spark: '#7c5a36', mark: 'rgba(36,30,18,0.36)', hot: false },
+  desert: { spark: '#e8d0a0', mark: 'rgba(150,120,74,0.28)', hot: false },
+  ice: { spark: '#dff4ff', mark: 'rgba(182,222,242,0.24)', hot: false },
+  foundry: { spark: '#ffb066', mark: 'rgba(8,6,5,0.42)', hot: true },
+  hive: { spark: '#9dff6a', mark: 'rgba(120,240,150,0.26)', hot: false },
+  atlantis: { spark: '#cfe8ff', mark: 'rgba(92,142,182,0.26)', hot: false },
+  catacomb: { spark: '#a8a08a', mark: 'rgba(40,44,36,0.32)', hot: false },
+};
+function biomeImpact(g) {
+  return BIOME_IMPACT[(g.params && g.params.biome) || 'ruins'] || BIOME_IMPACT.ruins;
+}
+// a few biome-tinted motes at an impact point; returns the palette entry so
+// callers can add a scorch on hot biomes. keep n small — this is a hot path.
+function biomeDust(g, x, y, n, spd) {
+  const bi = biomeImpact(g);
+  for (let i = 0; i < n; i++) {
+    g.particles.push(new Particle(x, y, rr(-spd, spd), rr(-spd, spd), rr(0.12, 0.3), bi.spark, rr(1.3, 2.7)));
+  }
+  return bi;
+}
+
 // ---------------------------------------------------------------- camera
 
 function clampCam(g) {
@@ -2935,11 +3004,13 @@ function drawFog(ctx, g, R) {
 function renderPlay(g, dim) {
   const { ctx, view } = g;
   if (!g.world) return;
-  // directional shake: kick along the hit vector + a little omni jitter
-  const jit = (Math.random() - 0.5) * g.shake * 0.45;
-  const kick = g.shake * (0.4 + 0.5 * Math.random());
+  // directional shake: kick along the hit vector + a little omni jitter.
+  // clamp the render read so a stacked firefight can't turn to mush.
+  const sh = g.shake > 22 ? 22 : g.shake;
+  const jit = (Math.random() - 0.5) * sh * 0.4;
+  const kick = sh * (0.35 + 0.45 * Math.random());
   const shx = -(g.shakeX || 0) * kick + jit;
-  const shy = -(g.shakeY || 0) * kick + (Math.random() - 0.5) * g.shake * 0.45;
+  const shy = -(g.shakeY || 0) * kick + (Math.random() - 0.5) * sh * 0.4;
   ctx.save();
   ctx.translate(view.w / 2 + shx, view.h / 2 + shy);
   ctx.scale(ZOOM, ZOOM);
@@ -3800,32 +3871,58 @@ function drawEnemy(ctx, e, t) {
 }
 
 function drawBullet(ctx, b) {
-  // threat tiering: the harder a shot hits, the brighter/fatter it reads
-  const heavy = b.from === 'enemy' && b.dmg >= 12;
+  // threat tiering: player bolts read as crisp tracers, heavy enemy fire
+  // carries a danger ring, boss-grade bolts burn hottest
+  const mine = b.from === 'player';
+  const heavy = !mine && b.dmg >= 12;
+  const boss = !mine && b.dmg >= 18;
   const big = b.dmg >= 24;
+  const kinetic = !b.energy;
   // rounds fly at chest height: the sprite rides up, the shadow stays down
   const z = b.z == null ? 8 : b.z;
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
-  drawShadow(ctx, b.x, b.y, b.r * 1.1, z, 0.45);
+  drawShadow(ctx, b.x, b.y, b.r * 1.1, z, mine ? 0.3 : 0.45);
   ctx.restore();
   ctx.save();
   ctx.translate(0, -z);
-  ctx.strokeStyle = b.color;
-  ctx.lineWidth = b.r * (heavy ? 1.4 : 1);
   ctx.lineCap = 'round';
-  ctx.shadowBlur = heavy ? 18 : big ? 14 : 10;
+  const t0 = b.trail[0] || b;
+  // faint travel streak under the core so fast bolts leave a wake
+  if (b.trail.length > 1) {
+    ctx.globalAlpha = mine ? 0.16 : 0.22;
+    ctx.strokeStyle = b.color;
+    ctx.lineWidth = b.r * (mine ? 2.2 : 3.2);
+    ctx.beginPath();
+    ctx.moveTo(t0.x, t0.y);
+    for (const p of b.trail) ctx.lineTo(p.x, p.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // core tracer — thin + low-glow for player kinetics, fat + hot for threats
+  ctx.strokeStyle = b.color;
+  ctx.lineWidth = b.r * (heavy ? 1.4 : mine ? 0.9 : 1);
+  ctx.shadowBlur = boss ? 20 : heavy ? 16 : big ? 14 : mine && kinetic ? 6 : 10;
   ctx.shadowColor = b.color;
   ctx.beginPath();
-  const t0 = b.trail[0] || b;
   ctx.moveTo(t0.x, t0.y);
   for (const p of b.trail) ctx.lineTo(p.x, p.y);
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
   ctx.fillStyle = '#fff';
   ctx.beginPath();
-  ctx.arc(b.x, b.y, b.r * (heavy ? 0.95 : 0.7), 0, TAU);
+  ctx.arc(b.x, b.y, b.r * (heavy ? 0.95 : mine ? 0.62 : 0.7), 0, TAU);
   ctx.fill();
+  if (boss) {
+    // hot bloom around boss-grade fire
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r * 1.7, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   if (heavy) {
     // pulsing danger ring on incoming heavy fire
     ctx.strokeStyle = b.color;

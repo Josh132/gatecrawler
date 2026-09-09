@@ -1050,12 +1050,12 @@ section('stress: 90s idle in a fresh world + input spam');
 section('tech: tree shape, effects fold, research gating');
 {
   const { TECH, techEffects, canResearch, nodeById, researchCost } = tech;
-  const BRANCHES = ['ops', 'armory', 'gate'];
+  const BRANCHES = ['ops', 'armory', 'gate', 'xeno', 'command'];
 
   // -- per-node structural checks
   for (const n of TECH) {
     assert(BRANCHES.includes(n.branch), `tech ${n.id}: branch valid (${n.branch})`);
-    assert(Number.isInteger(n.tier) && n.tier >= 0 && n.tier <= 3, `tech ${n.id}: tier 0-3 (${n.tier})`);
+    assert(Number.isInteger(n.tier) && n.tier >= 0 && n.tier <= 5, `tech ${n.id}: tier 0-5 (${n.tier})`);
     assert(typeof n.cost.naquadah === 'number' && n.cost.naquadah > 0, `tech ${n.id}: cost.naquadah > 0 (${n.cost.naquadah})`);
     if (n.cost.intel !== undefined) assert(n.cost.intel > 0, `tech ${n.id}: cost.intel > 0 when present (${n.cost.intel})`);
     assert(Array.isArray(n.requires), `tech ${n.id}: requires is an array`);
@@ -1067,7 +1067,7 @@ section('tech: tree shape, effects fold, research gating');
   }
   assert(nodeById('does_not_exist') === null, 'tech: nodeById of a bogus id is null');
   assert(researchCost('does_not_exist') === null, 'tech: researchCost of a bogus id is null');
-  assert(TECH.length >= 16 && TECH.length <= 24, `tech: ~16-20 nodes (${TECH.length})`);
+  assert(TECH.length >= 55 && TECH.length <= 80, `tech: ~55-70 nodes (${TECH.length})`);
   for (const b of BRANCHES) assert(TECH.some((n) => n.branch === b && n.tier === 0), `tech: branch ${b} has a tier-0 entry`);
 
   // -- no cycles (DFS with a colour map)
@@ -1094,6 +1094,12 @@ section('tech: tree shape, effects fold, research gating');
     freeRevive: false, weaponSlots: 2, reloadMul: 1, grenadeCap: 4, weaponDmgMul: 1, weaponModSlots: 0,
     unlockedWeapons: [], dialCostMul: 1, mapLookahead: 0, startHop: 0, heatMul: 1,
     naquadahMul: 1, intelMul: 1, deathKeepFrac: 0.5,
+    moveSpeedMul: 1, dodgeDistMul: 1, iframeMul: 1, pickupRadiusMul: 1,
+    shieldRegenMul: 1, shieldMaxBonus: 0,
+    grenadeDmgMul: 1, grenadeRadiusMul: 1, critChance: 0, critMul: 2, armorPierceMul: 1,
+    startSalvage: 0, salvageMul: 1, xpMul: 1, bestiaryDmgMul: 1,
+    reviveHpFrac: 0.5, startConsumable: null, startModSlots: 0, mapFullReveal: false,
+    supportAirdrop: false, supportStrike: false, enemyAccuracyMul: 1, staffChargeUnlock: false,
   };
   const deepEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   assert(deepEq(techEffects([]), DEFAULTS), 'tech: techEffects([]) equals the documented defaults');

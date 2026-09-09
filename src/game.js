@@ -6,7 +6,7 @@ import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
-import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid, DataCore, VaultDoor, Captive, Vendor } from './entities.js';
+import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, Trap, circleVsGrid, DataCore, VaultDoor, Captive, Vendor } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import {
   buildHub,
@@ -468,6 +468,7 @@ function startWorld(g, addr, hop) {
   g.grenades = [];
   g.blocks = [];
   g.hazards = [];
+  g.traps = [];
   g.flashes = [];
   g.decals = [];
   g.pickups = [];
@@ -864,7 +865,7 @@ function updatePlay(g, dt) {
     iy /= l;
   }
 
-  const spd = p.speed * (stim ? 1.35 : 1);
+  const spd = p.speed * (stim ? 1.35 : 1) * (p._slow || 1);
   if (p.dodge > 0) {
     p.x += p.ddx * 470 * dt;
     p.y += p.ddy * 470 * dt;
@@ -1039,30 +1040,81 @@ function updatePlay(g, dt) {
     if (g.killStreakT <= 0) g.killStreak = 0;
   }
 
-  // lingering plasma hazards from grenadier shells
+  // area hazards: grenadier plasma pools + the per-biome field hazards.
+  // p._slow is rebuilt here every frame; player/enemy movement reads it next tick.
+  p._slow = 1;
   for (const hz of g.hazards) {
-    hz.life -= dt;
     hz.phase += dt * 6;
-    if (hz.life <= 0) {
-      hz.alive = false;
-      continue;
-    }
-    if (hz.from === 'enemy') {
-      hz.tick -= dt;
-      const pd = Math.hypot(p.x - hz.x, p.y - hz.y);
-      if (pd < hz.r && p.iframe <= 0 && p.dodge <= 0 && hz.tick <= 0) {
-        hz.tick = 0.2;
-        damagePlayer(g, hz.dps * 0.2, p.x - hz.x, p.y - hz.y);
+    if (!hz.everlasting) {
+      hz.life -= dt;
+      if (hz.life <= 0) {
+        hz.alive = false;
+        continue;
       }
     }
-    if (Math.random() < 0.5) {
+    const pd = Math.hypot(p.x - hz.x, p.y - hz.y);
+    const inside = pd < hz.r;
+    const safe = p.iframe <= 0 && p.dodge <= 0;
+    const k = hz.kind;
+    if (k === 'spore') {
+      if (inside) {
+        p._slow = Math.min(p._slow, hz.slow);
+        hz.tick -= dt;
+        if (hz.tick <= 0 && safe) {
+          hz.tick = 0.25;
+          damagePlayer(g, 1.4, p.x - hz.x, p.y - hz.y);
+        }
+      }
+    } else if (k === 'quicksand') {
+      if (inside) p._slow = Math.min(p._slow, hz.slow);
+    } else if (k === 'steam') {
+      hz.cycleT -= dt;
+      if (hz.cycleT <= 0) {
+        hz.on = !hz.on;
+        hz.cycleT = hz.on ? hz.onT : hz.offT;
+      }
+      if (hz.on && inside && safe) {
+        hz.tick -= dt;
+        if (hz.tick <= 0) {
+          hz.tick = 0.25;
+          damagePlayer(g, 4, p.x - hz.x, p.y - hz.y);
+        }
+      }
+    } else if (k === 'thin-ice') {
+      if (inside) {
+        hz.standT += dt;
+        if (hz.standT > 0.8 && !hz.broken) {
+          hz.broken = true;
+          p.stun = Math.max(p.stun, 0.34);
+          addShake(g, 8, 0, 1);
+          if (sfx.hit) sfx.hit();
+          hz.alive = false;
+        }
+      } else {
+        hz.standT = Math.max(0, hz.standT - dt * 0.5);
+      }
+    } else {
+      // plasma (legacy grenadier fire) — unchanged
+      if (hz.from === 'enemy') {
+        hz.tick -= dt;
+        if (inside && safe && hz.tick <= 0) {
+          hz.tick = 0.2;
+          damagePlayer(g, hz.dps * 0.2, p.x - hz.x, p.y - hz.y);
+        }
+      }
+    }
+    if (Math.random() < 0.4) {
       const a = rr(0, TAU);
       const d = Math.sqrt(Math.random()) * hz.r;
+      const col =
+        k === 'spore' ? '#8fe06a' : k === 'steam' ? (hz.on ? '#e8eef2' : '#5a6470') :
+        k === 'thin-ice' ? '#bfe8ff' : k === 'quicksand' ? '#c9a86a' : '#ff9a3c';
       g.particles.push(
-        new Particle(hz.x + Math.cos(a) * d, hz.y + Math.sin(a) * d, rr(-8, 8), rr(-30, -8), rr(0.3, 0.7), '#ff9a3c', rr(1.5, 3))
+        new Particle(hz.x + Math.cos(a) * d, hz.y + Math.sin(a) * d, rr(-8, 8), rr(-30, -8), rr(0.3, 0.7), col, rr(1.5, 3))
       );
     }
   }
+  updateTraps(g, dt);
 
   // reassembly debris from Replicator brutes
   for (const bl of g.blocks) {
@@ -1096,6 +1148,9 @@ function updatePlay(g, dt) {
     }
   }
 
+  // squad coordination: rebuilt once per frame, drives per-enemy modifiers
+  updateSquads(g, dt);
+
   // enemies
   for (const e of g.enemies) {
     if (!e.alive) continue;
@@ -1120,11 +1175,17 @@ function updatePlay(g, dt) {
     if (e.kind === 'jaffa') updateJaffa(g, e, dt);
     else if (e.kind === 'jaffa_heavy') updateJaffaHeavy(g, e, dt);
     else if (e.kind === 'jaffa_grenadier') updateGrenadier(g, e, dt);
+    else if (e.kind === 'jaffa_sniper') updateSniper(g, e, dt);
     else if (e.kind === 'wraith') updateWraith(g, e, dt);
     else if (e.kind === 'wraith_drone') updateWraithDrone(g, e, dt);
+    else if (e.kind === 'wraith_stalker') updateStalker(g, e, dt);
     else if (e.kind === 'replicator') updateReplicator(g, e, dt);
     else if (e.kind === 'replicator_brute') updateReplicator(g, e, dt, true);
-    else updateBoss(g, e, dt);
+    else if (e.kind === 'replicator_weaver') updateWeaver(g, e, dt);
+    else if (e.kind === 'scavenger') updateScavenger(g, e, dt);
+    else if (e.kind === 'nexus') updateBoss(g, e, dt);
+    else if (e.kind === 'boss') updateBoss(g, e, dt);
+    // else: unknown kind — no-op (no fall-through into the boss AI)
     e.x += e.kx * dt;
     e.y += e.ky * dt;
     e.kx -= e.kx * Math.min(1, 8 * dt);
@@ -1172,6 +1233,7 @@ function updatePlay(g, dt) {
   g.grenades = g.grenades.filter((x) => x.alive);
   g.blocks = g.blocks.filter((x) => x.alive);
   g.hazards = g.hazards.filter((x) => x.alive);
+  g.traps = g.traps.filter((x) => x.alive);
   g.pickups = g.pickups.filter((x) => x.alive);
   g.particles = g.particles.filter((x) => x.alive);
   for (const f of g.flashes) f.t -= dt;
@@ -1297,8 +1359,16 @@ function rollWeaponItem() {
 // faction rosters — factions never mix within a world.
 // `slot` lets a room cap its number of heavies/brutes.
 function pickEnemyKind(fac, R, slot) {
-  if (fac === 'wraith') return R.chance(0.5) ? 'wraith_drone' : 'wraith';
-  if (fac === 'replicator') return slot.brutes < (slot.bruteCap || 1) && R.chance(0.24) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
+  if (fac === 'wraith') {
+    if (slot.stalkers < 1 && R.chance(0.25)) return (slot.stalkers++), 'wraith_stalker';
+    return R.chance(0.5) ? 'wraith_drone' : 'wraith';
+  }
+  if (fac === 'replicator') {
+    if (slot.weavers < 1 && R.chance(0.2)) return (slot.weavers++), 'replicator_weaver';
+    return slot.brutes < (slot.bruteCap || 1) && R.chance(0.24) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
+  }
+  // jaffa: a lone lane-holding sniper turns up in ~1 room in 3
+  if (slot.snipers < 1 && R.chance(0.36)) return (slot.snipers++), 'jaffa_sniper';
   if (slot.heavies < 1 && R.chance(0.36)) return (slot.heavies++), 'jaffa_heavy';
   if (slot.grenadiers < 1 && R.chance(0.3)) return (slot.grenadiers++), 'jaffa_grenadier';
   return 'jaffa';
@@ -1366,7 +1436,7 @@ function populateWorld(g) {
 
     const fac = p.faction || p.primary;
     const heatTier = Math.min(3, Math.floor(g.heat));
-    const slot = { heavies: 0, brutes: 0, grenadiers: 0 };
+    const slot = { heavies: 0, brutes: 0, grenadiers: 0, snipers: 0, weavers: 0, stalkers: 0 };
 
     // special set-piece room (tagged in worldgen). Places its own occupants +
     // set-piece and skips the normal fill / scatter.
@@ -1411,6 +1481,18 @@ function populateWorld(g) {
       g.enemies.push(e);
     }
 
+    // ambient scavenger — additive, never room-bound so it can't gate a clear
+    if (!nearGate && R.chance(0.08)) {
+      const q = placeXY();
+      const sc = new Enemy('scavenger', q.x, q.y, p.threat);
+      sc._room = null;
+      g.enemies.push(sc);
+    }
+
+    // per-biome field hazards / traps — deterministic off this room's R.
+    // ~45% of non-gate rooms get one, hive/foundry/ice can get a second.
+    placeHazards(g, room, R, rect, nearGate, placeXY);
+
     // scatter supplies: a medical item in most rooms, sometimes an extra
     if (R.chance(0.62)) {
       const q = placeXY();
@@ -1436,6 +1518,61 @@ function populateWorld(g) {
       const q = placeXY();
       g.pickups.push(new Pickup('intel', q.x, q.y, 3 + R.int(0, 3)));
     }
+  }
+}
+
+// per-biome field hazards, seeded off the room's own RNG so a world is stable.
+// temple/jungle -> dart traps; ice -> thin ice; foundry -> steam vents;
+// hive/jungle -> spore clouds; desert -> quicksand. Non-plasma hazards are
+// everlasting (Hazard defaults handle that) and do modest, telegraphed damage.
+function placeHazards(g, room, R, rect, nearGate, placeXY) {
+  if (nearGate || !R.chance(0.45)) return;
+  const biome = g.params.biome;
+  const spore = () => {
+    const q = placeXY();
+    g.hazards.push(new Hazard(q.x, q.y, 52 + R.range(0, 12), 999, 6, 'world', 'spore', { everlasting: true }));
+  };
+  const dart = () => {
+    const c = room.centerPx;
+    const m = 12;
+    const side = R.int(0, 3);
+    let tx;
+    let ty;
+    let dir;
+    if (side === 0) { tx = rect.x + m; ty = c.y; dir = 0; }
+    else if (side === 1) { tx = rect.x + rect.w - m; ty = c.y; dir = Math.PI; }
+    else if (side === 2) { tx = c.x; ty = rect.y + m; dir = Math.PI / 2; }
+    else { tx = c.x; ty = rect.y + rect.h - m; dir = -Math.PI / 2; }
+    if (tileAt(g.world, tx + Math.cos(dir) * 24, ty + Math.sin(dir) * 24) === 1) return;
+    g.traps.push(new Trap(tx, ty, dir, { dmg: 18, fireCd: 2.2, range: 340, triggerR: 24 }));
+  };
+  if (biome === 'temple') dart();
+  else if (biome === 'ice') {
+    const q = placeXY();
+    g.hazards.push(new Hazard(q.x, q.y, 46, 999, 0, 'world', 'thin-ice', { everlasting: true }));
+  } else if (biome === 'foundry') {
+    const q = placeXY();
+    g.hazards.push(new Hazard(q.x, q.y, 40, 999, 0, 'world', 'steam', { everlasting: true, cycleT: R.range(0, 1.8), onT: 1.1, offT: 1.8, on: R.chance(0.5) }));
+  } else if (biome === 'hive') spore();
+  else if (biome === 'desert') {
+    const q = placeXY();
+    g.hazards.push(new Hazard(q.x, q.y, 54 + R.range(0, 10), 999, 0, 'world', 'quicksand', { everlasting: true }));
+  } else if (biome === 'jungle') {
+    if (R.chance(0.5)) dart();
+    else spore();
+  } else return;
+
+  // bigger enclosed biomes can carry a second hazard
+  if ((biome === 'hive' || biome === 'foundry' || biome === 'ice') && R.chance(0.3)) {
+    const q = placeXY();
+    const kind = biome === 'hive' ? 'spore' : biome === 'foundry' ? 'steam' : 'thin-ice';
+    g.hazards.push(
+      new Hazard(q.x, q.y, kind === 'spore' ? 44 : 38, 999, kind === 'spore' ? 6 : 0, 'world', kind, {
+        everlasting: true,
+        cycleT: R.range(0, 1.8),
+        on: R.chance(0.5),
+      })
+    );
   }
 }
 
@@ -2786,6 +2923,10 @@ function updateJaffa(g, e, dt) {
   e.scanT -= dt;
   const losNow = !lineBlocked(g, e.x, e.y, p.x, p.y);
 
+  // squad: a routed unit stops pushing and fights from cover
+  if (e.regroup) e.aggressive = false;
+  const sqFlank = e.squadRole === 'flanker' && !e.regroup && dist > 150 && dist < 460 ? e.flankDir : 0;
+
   // aggressive guards: press the attack, strafe in a firing band, no turtling
   if (e.aggressive) {
     const [afx, afy] = g.flow.dir(
@@ -2803,6 +2944,10 @@ function updateJaffa(g, e, dt) {
     } else {
       mx = (-dy / dist) * 0.7 + afx * 0.3;
       my = (dx / dist) * 0.7 + afy * 0.3;
+    }
+    if (sqFlank) {
+      mx += (-dy / dist) * sqFlank * 0.6;
+      my += (dx / dist) * sqFlank * 0.6;
     }
     const ml = Math.hypot(mx, my) || 1;
     e.x += (mx / ml) * e.speed * dt;
@@ -2915,6 +3060,16 @@ function updateJaffa(g, e, dt) {
     }
   }
 
+  // squad: flankers arc off-axis before closing; a routed unit gives ground
+  if (sqFlank) {
+    mvx += (-dy / dist) * sqFlank * 0.7;
+    mvy += (dx / dist) * sqFlank * 0.7;
+  }
+  if (e.regroup && dist < 240) {
+    mvx -= (dx / dist) * 0.8;
+    mvy -= (dy / dist) * 0.8;
+  }
+
   const l = Math.hypot(mvx, mvy);
   if (l > 0.01) {
     e.x += (mvx / l) * e.speed * dt;
@@ -2953,6 +3108,14 @@ function updateWraith(g, e, dt) {
   const wob = Math.sin(e.wobble) * 0.55;
   let mvx = fx + -fy * wob;
   let mvy = fy + fx * wob;
+  // squad: flankers peel off-axis; a routed unit backs off
+  if (e.squadRole === 'flanker' && !e.regroup && dist > 140) {
+    mvx += (-dy / dist) * e.flankDir * 0.6;
+    mvy += (dx / dist) * e.flankDir * 0.6;
+  } else if (e.regroup && dist < 220) {
+    mvx -= (dx / dist) * 0.7;
+    mvy -= (dy / dist) * 0.7;
+  }
   const l = Math.hypot(mvx, mvy) || 1;
   mvx /= l;
   mvy /= l;
@@ -3158,6 +3321,483 @@ function updateGrenadier(g, e, dt) {
     g.grenades.push(gr);
     e.cool = 2.5 + Math.random() * 0.8;
     enemyShotSound(g, e, 'jaffa');
+  }
+}
+
+// ---------------------------------------------------------------- new enemy kinds
+
+// small fx when a stalker blinks in / out
+function blinkFx(g, x, y) {
+  burst(g, x, y, 9, '#9fffe0');
+  addFlash(g, x, y, 70, '#7fe0c8', 0.12);
+}
+
+// covering fire toward the squad's last-known player position (no perfect LOS)
+function suppressBurst(g, e) {
+  const tx = e.lastSeenX || g.player.x;
+  const ty = e.lastSeenY || g.player.y;
+  const base = Math.atan2(ty - e.y, tx - e.x);
+  const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const a = base + (Math.random() - 0.5) * 0.4;
+    g.bullets.push(
+      new Bullet(e.x + Math.cos(a) * 20, e.y + Math.sin(a) * 20, Math.cos(a) * 320, Math.sin(a) * 320, 6, 'enemy', {
+        color: '#ffc27a', energy: true, r: 3, knockback: 60, life: 1.9,
+      })
+    );
+  }
+  addFlash(g, e.x + Math.cos(base) * 20, e.y + Math.sin(base) * 20, 80, '#ffc27a', 0.07);
+  enemyShotSound(g, e, 'jaffa');
+}
+
+// grenadier flush lob straight at a point (used by updateSquads)
+function lobGrenade(g, e, tx, ty) {
+  const nx = tx - e.x;
+  const ny = ty - e.y;
+  const d = Math.hypot(nx, ny) || 1;
+  const gr = new Grenade(e.x + (nx / d) * 20, e.y + (ny / d) * 20, (nx / d) * 330, (ny / d) * 330, 12, 78, 'enemy');
+  gr.fuse = 0.9;
+  gr.hazard = 46;
+  g.grenades.push(gr);
+  enemyShotSound(g, e, 'jaffa');
+}
+
+// fragile long-range lane-holder. anchors on holdX/holdY, charges a heavy
+// telegraphed bolt, slides to a fresh hold when LOS breaks. never flanks.
+function updateSniper(g, e, dt) {
+  const p = g.player;
+  if (e.stun > 0) {
+    e.stun -= dt;
+    return;
+  }
+  if (e.state === 'idle' && idleTick(g, e, dt, 460)) return;
+  if (e.state === 'dormant') {
+    dormantTick(g, e, dt);
+    return;
+  }
+  if (checkLeash(g, e, dt)) {
+    dormantTick(g, e, dt);
+    return;
+  }
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  e.facing = Math.atan2(dy, dx);
+  e.cool -= dt;
+  const los = !lineBlocked(g, e.x, e.y, p.x, p.y);
+
+  // LOS lost mid-hold: pick a fresh nearby anchor that re-opens the lane
+  if (!los && e.aimT <= 0) {
+    e._reHold = (e._reHold || 0) - dt;
+    if (e._reHold <= 0) {
+      e._reHold = 0.7;
+      for (let i = 0; i < 12; i++) {
+        const a = Math.random() * TAU;
+        const rad = 40 + Math.random() * 100;
+        const hx = e.x + Math.cos(a) * rad;
+        const hy = e.y + Math.sin(a) * rad;
+        if (tileAt(g.world, hx, hy) === 0 && !lineBlocked(g, hx, hy, p.x, p.y)) {
+          e.holdX = hx;
+          e.holdY = hy;
+          break;
+        }
+      }
+    }
+  }
+
+  // drift back onto the anchor — barely moves, and freezes while charging
+  const hx = e.holdX - e.x;
+  const hy = e.holdY - e.y;
+  const hd = Math.hypot(hx, hy);
+  if (hd > 6) {
+    const sp = e.speed * (e.aimT > 0 ? 0.12 : 0.55);
+    e.x += (hx / hd) * sp * dt;
+    e.y += (hy / hd) * sp * dt;
+  }
+
+  if (e.aimT > 0) {
+    e.aimT -= dt;
+    e.facing = Math.atan2(p.y - e.y, p.x - e.x); // track through the tell
+    if (e.aimT <= 0) {
+      const a = e.facing;
+      g.bullets.push(
+        new Bullet(e.x + Math.cos(a) * 18, e.y + Math.sin(a) * 18, Math.cos(a) * 540, Math.sin(a) * 540, 20, 'enemy', {
+          color: '#ff5a3c', energy: true, r: 5, knockback: 170, life: 2.4,
+        })
+      );
+      addFlash(g, e.x + Math.cos(a) * 18, e.y + Math.sin(a) * 18, 130, '#ff7a3c', 0.13);
+      enemyShotSound(g, e, 'jaffa');
+      e.cool = 1.7 + Math.random() * 0.9;
+    }
+    return;
+  }
+
+  if (los && e.cool <= 0 && dist > 120 && dist < 660) {
+    e.aimT = e.aimDur || 1.4;
+    if (sfx.incoming) sfx.incoming();
+  }
+}
+
+// phase-blink flanker. while phaseT>0 it is intangible (_untarget) and slips to
+// a flank; otherwise it rushes, melees, and blinks straight after the hit.
+function updateStalker(g, e, dt) {
+  const p = g.player;
+  if (e.stun > 0) {
+    e.stun -= dt;
+    return;
+  }
+  if (e.state === 'idle' && idleTick(g, e, dt, 340)) return;
+  if (e.state === 'dormant') {
+    dormantTick(g, e, dt);
+    return;
+  }
+  if (checkLeash(g, e, dt)) {
+    dormantTick(g, e, dt);
+    return;
+  }
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  e.facing = Math.atan2(dy, dx);
+  e.wobble += dt * 8;
+  e.cool -= dt;
+  e.regenT += dt;
+
+  if (e.phaseT > 0) {
+    e.phaseT -= dt;
+    e._untarget = true;
+    const side = e.flankDir || (e.wobble % 2 < 1 ? 1 : -1);
+    let mvx = (-dy / dist) * side * 1.1 + (dx / dist) * 0.3;
+    let mvy = (dx / dist) * side * 1.1 + (dy / dist) * 0.3;
+    const l = Math.hypot(mvx, mvy) || 1;
+    e.x += (mvx / l) * e.speed * dt;
+    e.y += (mvy / l) * e.speed * dt;
+    if (e.phaseT <= 0) {
+      e._untarget = false;
+      blinkFx(g, e.x, e.y);
+    }
+    return;
+  }
+  e._untarget = false;
+
+  e.phaseCd -= dt;
+  if (e.phaseCd <= 0 && dist > 44) {
+    e.phaseT = e.phaseDur || 0.7;
+    e.nextPhase = 4 + Math.random() * 3;
+    e.phaseCd = e.nextPhase;
+    blinkFx(g, e.x, e.y);
+  }
+
+  const [fx, fy] = flowDir(g, e);
+  let mvx = dist > 180 ? fx : dx / dist;
+  let mvy = dist > 180 ? fy : dy / dist;
+  if (fx === 0 && fy === 0) {
+    mvx = dx / dist;
+    mvy = dy / dist;
+  }
+  const l = Math.hypot(mvx, mvy) || 1;
+  e.x += (mvx / l) * e.speed * dt;
+  e.y += (mvy / l) * e.speed * dt;
+
+  if (dist < e.r + p.r + 6 && e.cool <= 0) {
+    damagePlayer(g, 14, dx, dy);
+    p.stun = Math.max(p.stun, 0.12);
+    e.cool = 0.9;
+    e.phaseCd = Math.min(e.phaseCd, 0.05); // blink out right after the hit
+  }
+}
+
+// support replicator: keeps its distance and, on cooldown, extrudes a short
+// wall of Blocks across the player's sightline. retreats while on cooldown.
+function updateWeaver(g, e, dt) {
+  const p = g.player;
+  if (e.stun > 0) {
+    e.stun -= dt;
+    return;
+  }
+  if (e.state === 'idle' && idleTick(g, e, dt, 300)) return;
+  if (e.state === 'dormant') {
+    dormantTick(g, e, dt);
+    return;
+  }
+  if (checkLeash(g, e, dt)) {
+    dormantTick(g, e, dt);
+    return;
+  }
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  e.facing = Math.atan2(dy, dx);
+  e.wobble += dt * 10;
+  e.weaveCd -= dt;
+  const [fx, fy] = flowDir(g, e);
+  const want = 200;
+  const onCd = e.weaveCd > 0;
+
+  if (e.weaveT > 0) {
+    // planted through the wind-up, then spits the wall
+    e.weaveT -= dt;
+    if (e.weaveT <= 0) {
+      const nx = -dy / dist;
+      const ny = dx / dist;
+      const mx = (e.x + p.x) / 2;
+      const my = (e.y + p.y) / 2;
+      for (let i = -1; i <= 1; i++) {
+        const bx = mx + nx * i * 140;
+        const by = my + ny * i * 140;
+        if (tileAt(g.world, bx, by) === 1) continue;
+        const bl = new Block(bx, by, g.params.threat, e._room);
+        bl.vx = 0;
+        bl.vy = 0;
+        bl.mergeT = 2.2 + Math.random() * 0.6; // short-lived; spaced so they never re-merge
+        g.blocks.push(bl);
+      }
+      e.weaveCd = (e.weaveLife || 4.5) + 3;
+      spark(g, e.x, e.y, '#9fe8ff');
+    }
+    return;
+  }
+
+  let mvx;
+  let mvy;
+  if (dist > want + 40 && !onCd) {
+    mvx = fx || dx / dist;
+    mvy = fy || dy / dist;
+  } else if (dist < want - 40 || onCd) {
+    mvx = -dx / dist;
+    mvy = -dy / dist;
+  } else {
+    mvx = -dy / dist;
+    mvy = dx / dist;
+  }
+  const l = Math.hypot(mvx, mvy) || 1;
+  e.x += (mvx / l) * e.speed * dt;
+  e.y += (mvy / l) * e.speed * dt;
+
+  if (e.weaveCd <= 0 && dist < 460 && !lineBlocked(g, e.x, e.y, p.x, p.y)) {
+    e.weaveT = 0.6;
+  }
+}
+
+// ambient neutral critter. wanders until the player is close, then bolts around
+// walls at full tilt. never shoots, never alerts, despawns once well clear so it
+// can never gate a sector clear.
+function updateScavenger(g, e, dt) {
+  const p = g.player;
+  e.neutral = true;
+  e.state = 'idle'; // a stray hit can flip this; keep it inert
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  if (dist > 600) {
+    e.alive = false;
+    return;
+  }
+  if (e.stun > 0) {
+    e.stun -= dt;
+    return;
+  }
+  e.wobble += dt * (dist < 180 ? 18 : 6);
+  if (dist < 180) {
+    e.facing = Math.atan2(-dy, -dx);
+    const nx = e.x - (dx / dist) * e.speed * dt;
+    const ny = e.y - (dy / dist) * e.speed * dt;
+    ({ x: e.x, y: e.y } = circleVsGrid(g.world, e, nx, ny));
+  } else {
+    e.wanderT -= dt;
+    if (e.wanderT <= 0) {
+      e.wanderT = 1.6 + Math.random() * 2.4;
+      for (let i = 0; i < 8; i++) {
+        const wx = e.anchorX + rr(-40, 40);
+        const wy = e.anchorY + rr(-40, 40);
+        if (tileAt(g.world, wx, wy) === 0) {
+          e.wanderX = wx;
+          e.wanderY = wy;
+          break;
+        }
+      }
+    }
+    const tx = e.wanderX - e.x;
+    const ty = e.wanderY - e.y;
+    const td = Math.hypot(tx, ty);
+    if (td > 4) {
+      e.facing = Math.atan2(ty, tx);
+      e.x += (tx / td) * e.speed * 0.3 * dt;
+      e.y += (ty / td) * e.speed * 0.3 * dt;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- squad AI
+// Rebuilt once per frame: group active, non-neutral jaffa + wraith by their
+// room into squads (cap 4) and set per-enemy modifier fields the individual AI
+// fns already read (squadRole / flankDir / regroup / lastSeen* / suppressT).
+function updateSquads(g, dt) {
+  const p = g.player;
+  const map = g._squadMap || (g._squadMap = new Map());
+  map.clear();
+  for (const e of g.enemies) {
+    if (!e.alive || e.neutral || e.hunter || e.state !== 'active' || !e._room) continue;
+    const k = e.kind;
+    if (k[0] !== 'j' && k[0] !== 'w') continue; // jaffa* / wraith* only
+    let arr = map.get(e._room);
+    if (!arr) map.set(e._room, (arr = []));
+    if (arr.length < 4) {
+      arr.push(e);
+      e.squad = e._room;
+    }
+  }
+
+  // shared "player has gone static" detector for grenade flushes
+  const pmoved = Math.hypot(p.x - (g._sqPX != null ? g._sqPX : p.x), p.y - (g._sqPY != null ? g._sqPY : p.y));
+  g._sqPX = p.x;
+  g._sqPY = p.y;
+  g._sqStuckT = pmoved < 0.7 ? (g._sqStuckT || 0) + dt : 0;
+  const stuck = g._sqStuckT > 1.4;
+
+  for (const [room, arr] of map) {
+    room._sqPeak = Math.max(room._sqPeak || 0, arr.length);
+
+    // who currently has a clean line to the player
+    let seer = null;
+    for (const e of arr) {
+      if (!lineBlocked(g, e.x, e.y, p.x, p.y)) {
+        seer = e;
+        break;
+      }
+    }
+
+    // contact share: broadcast the sighting, wake idlers (throttled)
+    room._sqShareT = Math.max(0, (room._sqShareT || 0) - dt);
+    if (seer && room._sqShareT <= 0) {
+      room._sqShareT = 0.5;
+      for (const e of arr) {
+        e.lastSeenX = p.x;
+        e.lastSeenY = p.y;
+      }
+      for (const o of g.enemies) {
+        if (o.alive && o.state === 'idle' && o._room === room) {
+          o.alertT = Math.max(o.alertT, 0.3 + Math.random() * 0.5);
+        }
+      }
+    }
+
+    // lone survivor of a real squad falls back and fights defensive
+    if (arr.length === 1) {
+      arr[0].regroup = room._sqPeak >= 2;
+      if (arr[0].regroup) arr[0].squadRole = 'support';
+      else arr[0].squadRole = null;
+      arr[0].flankDir = 0;
+      continue;
+    }
+
+    // roles: a heavy anchors, else the unit nearest the player; two flankers
+    // arc round; grenadier / sniper / weaver hang back as support
+    let anchor = null;
+    let aBest = Infinity;
+    for (const e of arr) {
+      if (e.kind === 'jaffa_heavy') {
+        anchor = e;
+        break;
+      }
+      const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (d < aBest) {
+        aBest = d;
+        anchor = e;
+      }
+    }
+    let flankers = 0;
+    let fdir = 1;
+    for (const e of arr) {
+      e.regroup = false;
+      if (e === anchor) {
+        e.squadRole = 'anchor';
+        e.flankDir = 0;
+        continue;
+      }
+      if (e.kind === 'jaffa_grenadier' || e.kind === 'jaffa_sniper') {
+        e.squadRole = 'support';
+        e.flankDir = 0;
+        continue;
+      }
+      if (flankers < 2) {
+        e.squadRole = 'flanker';
+        e.flankDir = fdir;
+        fdir = -fdir;
+        flankers++;
+      } else {
+        e.squadRole = 'support';
+        e.flankDir = 0;
+      }
+    }
+
+    // anchor lays down suppression toward the last sighting when nobody has a
+    // clean shot — gated so it's covering fire, not a firehose
+    anchor.suppressT = Math.max(0, (anchor.suppressT || 0) - dt);
+    if (
+      !seer &&
+      anchor.kind[0] === 'j' &&
+      anchor.suppressT <= 0 &&
+      (anchor.lastSeenX || anchor.lastSeenY) &&
+      !lineBlocked(g, anchor.x, anchor.y, anchor.lastSeenX, anchor.lastSeenY)
+    ) {
+      anchor.suppressT = 1.8 + Math.random() * 0.9;
+      suppressBurst(g, anchor);
+    }
+
+    // grenade flush when the player has planted somewhere
+    if (stuck && seer) {
+      for (const e of arr) {
+        if (e.kind === 'jaffa_grenadier' && (e._flushCd || 0) <= 0) {
+          lobGrenade(g, e, p.x, p.y);
+          e._flushCd = 4;
+          e.cool = Math.max(e.cool, 2.4);
+        }
+      }
+    }
+    for (const e of arr) if (e._flushCd > 0) e._flushCd -= dt;
+  }
+}
+
+// ---------------------------------------------------------------- traps
+function updateTraps(g, dt) {
+  const p = g.player;
+  for (const tp of g.traps) {
+    if (!tp.alive) continue;
+    tp.tick += dt;
+    if (tp._fx > 0) tp._fx -= dt;
+    if (tp.cd > 0) {
+      tp.cd -= dt;
+      if (tp.cd <= 0) tp.armed = true;
+      continue;
+    }
+    if (!tp.armed) continue;
+    const fx = Math.cos(tp.dir);
+    const fy = Math.sin(tp.dir);
+    const dx = p.x - tp.x;
+    const dy = p.y - tp.y;
+    const along = dx * fx + dy * fy;
+    if (along < 10 || along > tp.range) continue;
+    if (Math.abs(dx * -fy + dy * fx) > tp.triggerR) continue;
+    // wall between the trap and the player shields them
+    let clear = true;
+    for (let d = 12; d < along; d += 10) {
+      if (tileAt(g.world, tp.x + fx * d, tp.y + fy * d) === 1) {
+        clear = false;
+        break;
+      }
+    }
+    if (!clear) continue;
+    g.bullets.push(
+      new Bullet(tp.x + fx * 12, tp.y + fy * 12, fx * 520, fy * 520, tp.dmg, 'enemy', {
+        color: '#ffe6a0', r: 3, knockback: 70, life: tp.range / 520 + 0.3,
+      })
+    );
+    addFlash(g, tp.x + fx * 12, tp.y + fy * 12, 64, '#ffe6a0', 0.09);
+    if (sfx.enemyFire) sfx.enemyFire('jaffa');
+    tp.armed = false;
+    tp.cd = tp.fireCd;
+    tp._fx = 0.22;
   }
 }
 
@@ -3684,6 +4324,7 @@ function renderPlay(g, dim) {
   drawDecals(ctx, g, dim);
   if (g.world.dhdRoom && g.world.dhdRoom.everSeen) drawArenaFloor(ctx, g);
   for (const hz of g.hazards) drawHazard(ctx, hz, g.time);
+  for (const tp of g.traps) drawTrap(ctx, tp, g.time);
 
   const R = worldMods(g).visionR;
   g.visPoly = dim ? null : computeVisPoly(g, R);
@@ -4636,6 +5277,8 @@ function drawDecals(ctx, g, dim) {
 }
 
 function drawHazard(ctx, hz, t) {
+  const k = hz.kind;
+  if (k === 'spore' || k === 'steam' || k === 'thin-ice' || k === 'quicksand') return drawFieldHazard(ctx, hz, t);
   const f = clamp(hz.life / hz.maxLife, 0, 1);
   const wob = 1 + Math.sin(hz.phase) * 0.06;
   ctx.save();
@@ -4655,6 +5298,104 @@ function drawHazard(ctx, hz, t) {
   ctx.arc(hz.x, hz.y, hz.r * wob, 0, TAU);
   ctx.stroke();
   ctx.restore();
+}
+
+// per-biome field hazards: spore cloud / steam vent / thin ice / quicksand
+function drawFieldHazard(ctx, hz, t) {
+  const wob = 1 + Math.sin(hz.phase) * 0.05;
+  const r = hz.r * wob;
+  ctx.save();
+  if (hz.kind === 'spore') {
+    ctx.globalCompositeOperation = 'lighter';
+    const grd = ctx.createRadialGradient(hz.x, hz.y, r * 0.15, hz.x, hz.y, r);
+    grd.addColorStop(0, 'rgba(150,230,110,0.26)');
+    grd.addColorStop(0.65, 'rgba(110,190,90,0.16)');
+    grd.addColorStop(1, 'rgba(90,160,80,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, r, 0, TAU);
+    ctx.fill();
+  } else if (hz.kind === 'steam') {
+    const a = hz.on ? 0.32 : 0.08;
+    ctx.globalCompositeOperation = 'lighter';
+    const grd = ctx.createRadialGradient(hz.x, hz.y, r * 0.1, hz.x, hz.y, r * (hz.on ? 1 : 0.5));
+    grd.addColorStop(0, `rgba(235,240,245,${a})`);
+    grd.addColorStop(1, 'rgba(200,210,220,0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, r * (hz.on ? 1 : 0.5), 0, TAU);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = hz.on ? 'rgba(255,210,150,0.5)' : 'rgba(150,160,170,0.35)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, hz.r * 0.5, 0, TAU); // the grate
+    ctx.stroke();
+  } else if (hz.kind === 'thin-ice') {
+    const s = clamp(hz.standT / 0.8, 0, 1);
+    ctx.fillStyle = `rgba(150,220,255,${0.1 + 0.14 * s})`;
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, hz.r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(210,245,255,${0.4 + 0.5 * s})`;
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 5; i++) {
+      const a = hz.phase * 0.2 + i * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(hz.x, hz.y);
+      ctx.lineTo(hz.x + Math.cos(a) * hz.r * (0.4 + 0.6 * s), hz.y + Math.sin(a) * hz.r * (0.4 + 0.6 * s));
+      ctx.stroke();
+    }
+  } else {
+    // quicksand
+    ctx.fillStyle = 'rgba(120,95,55,0.4)';
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, hz.r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(90,70,45,0.55)';
+    ctx.lineWidth = 2;
+    for (let i = 1; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.arc(hz.x, hz.y, hz.r * (i / 3.5) * (1 + Math.sin(hz.phase + i) * 0.05), 0, TAU);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// wall-mounted dart trap: fixture + faint aim line while armed + puff on fire
+function drawTrap(ctx, tp, t) {
+  const fx = Math.cos(tp.dir);
+  const fy = Math.sin(tp.dir);
+  ctx.save();
+  ctx.translate(tp.x, tp.y);
+  ctx.rotate(tp.dir);
+  ctx.fillStyle = '#5a5048';
+  ctx.fillRect(-5, -6, 8, 12);
+  ctx.fillStyle = tp.armed ? '#2a2420' : '#1a1614';
+  ctx.fillRect(2, -3, 4, 6);
+  ctx.restore();
+  if (tp.armed && tp.cd <= 0) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,220,140,0.12)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(tp.x + fx * 8, tp.y + fy * 8);
+    ctx.lineTo(tp.x + fx * tp.range, tp.y + fy * tp.range);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (tp._fx > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = clamp(tp._fx / 0.22, 0, 1);
+    ctx.fillStyle = '#ffe6a0';
+    ctx.beginPath();
+    ctx.arc(tp.x + fx * 12, tp.y + fy * 12, 6, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 function drawBeam(ctx, bm, t) {

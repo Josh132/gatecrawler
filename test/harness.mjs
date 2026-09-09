@@ -1347,6 +1347,77 @@ section('rarity: tiers scale item stats, loot is tagged, scrap pays out');
   assert(icons.RARITY_COLOR.legendary && icons.RARITY_LABEL.legendary === 'LEGENDARY', 'rarity: legendary colour + label are defined');
 }
 
+section('finale: nexus is shielded until its pylons fall, then dies through 3 phases');
+{
+  const { Enemy, NexusPylon } = await import('../src/entities.js');
+  g.skipHub = true;
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  assert(g.state === 'play', 'finale: run started');
+  const p = g.player;
+  p.iframe = 1e6;
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+  g.pylons.length = 0;
+  g._events = [];
+
+  const c = g.curRoom.centerPx;
+  const nx = new Enemy('nexus', c.x, c.y - 40, 10);
+  nx.state = 'active';
+  nx._room = g.curRoom;
+  g.enemies.push(nx);
+  for (let i = 0; i < 3; i++) {
+    const py = new NexusPylon(c.x + (i - 1) * 40, c.y + 40);
+    py._room = g.curRoom;
+    g.pylons.push(py);
+  }
+  const hp0 = nx.hp;
+
+  const shot = (tx, ty, dmg) =>
+    g.bullets.push({ x: tx, y: ty, vx: 1, vy: 0, dmg, from: 'player', r: 3, life: 1, stun: 0,
+      knockback: 0, energy: false, trail: [], alive: true, color: '#fff' });
+
+  // hammer the core while the pylons stand — shield eats all of it
+  for (let f = 0; f < 30; f++) {
+    shot(nx.x, nx.y, 200);
+    tick(gApi, g);
+    checkInvariants(g, 'finale-shielded');
+  }
+  assert(Math.abs(nx.hp - hp0) < 1e-6, `finale: nexus takes no core damage while shielded (${hp0} -> ${nx.hp | 0})`);
+  assert(nx.shieldUp === true, 'finale: nexus reports shieldUp while pylons live');
+
+  // drop the three pylons
+  for (const py of g.pylons) {
+    for (let k = 0; k < 20 && py.alive; k++) {
+      shot(py.x, py.y, 40);
+      tick(gApi, g);
+    }
+    assert(!py.alive, 'finale: a pylon dies under fire');
+  }
+  for (let f = 0; f < 3; f++) tick(gApi, g);
+  assert(nx.shieldUp === false, 'finale: shield drops once every pylon is down');
+
+  // now bring it down — feed damage and run the fight out
+  let died = false;
+  for (let f = 0; f < 60 * 20 && !died; f++) {
+    if (nx.alive) shot(nx.x, nx.y, 40);
+    if (!tick(gApi, g)) break;
+    checkInvariants(g, 'finale-fight');
+    died = !nx.alive;
+  }
+  assert(died, 'finale: the nexus can be killed once exposed');
+  assert(nx.phase >= 2, `finale: the fight escalated past phase 1 (reached ${nx.phase})`);
+  assert(
+    g._events.some((e) => e.t === 'bossKill' && e.faction === 'nexus'),
+    'finale: killing the nexus emits a nexus bossKill event for the campaign'
+  );
+  g.pylons.length = 0;
+  g.enemies.length = 0;
+  g.bullets.length = 0;
+  p.iframe = 0;
+}
+
 // ---------------------------------------------------------------- report
 console.log('\n----------------------------------------');
 console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}`);

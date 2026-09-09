@@ -6,7 +6,7 @@ import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
-import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, Trap, circleVsGrid, DataCore, VaultDoor, Captive, Vendor } from './entities.js';
+import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, Trap, circleVsGrid, DataCore, VaultDoor, Captive, Vendor, NexusPylon } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import {
   buildHub,
@@ -468,6 +468,7 @@ function enterHub(g) {
   g.flow = makeFlowField(w.grid, w.W, w.H);
   g.params = { address: 'SGC', threat: 0, faction: 'sgc', primary: 'sgc', mods: [], hop: 0, seedStr: 'sgc' };
   g.enemies = [];
+  g.pylons = [];
   g.bullets = [];
   g.grenades = [];
   g.blocks = [];
@@ -586,6 +587,7 @@ function startWorld(g, addr, hop) {
   if (sfx.wormholeOpen) sfx.wormholeOpen();
   g.flow = makeFlowField(g.world.grid, g.world.W, g.world.H);
   g.enemies = [];
+  g.pylons = [];
   g.bullets = [];
   g.grenades = [];
   g.blocks = [];
@@ -1375,7 +1377,7 @@ function updatePlay(g, dt) {
     else if (e.kind === 'replicator_brute') updateReplicator(g, e, dt, true);
     else if (e.kind === 'replicator_weaver') updateWeaver(g, e, dt);
     else if (e.kind === 'scavenger') updateScavenger(g, e, dt);
-    else if (e.kind === 'nexus') updateBoss(g, e, dt);
+    else if (e.kind === 'nexus') updateNexus(g, e, dt);
     else if (e.kind === 'boss') updateBoss(g, e, dt);
     // else: unknown kind — no-op (no fall-through into the boss AI)
     e.x += e.kx * dt;
@@ -1384,6 +1386,17 @@ function updatePlay(g, dt) {
     e.ky -= e.ky * Math.min(1, 8 * dt);
     ({ x: e.x, y: e.y } = circleVsGrid(w, e, e.x, e.y));
     keepOutOfGateRoom(g, e);
+  }
+
+  // nexus shield pylons — spin, decay their hit-flash, cull the dead
+  if (g.pylons && g.pylons.length) {
+    for (const py of g.pylons) {
+      if (!py.alive) continue;
+      py.phase += dt * 1.6;
+      if (py.flash > 0) py.flash -= dt * 3;
+      if (Math.random() < 0.4 * dt) g.particles.push(new Particle(py.x, py.y - 8, rr(-12, 12), rr(-30, -8), rr(0.3, 0.7), '#8fe4ff', rr(1.5, 3)));
+    }
+    if (g.pylons.some((py) => !py.alive)) g.pylons = g.pylons.filter((py) => py.alive);
   }
 
   // cap how many enemies from other rooms can pile onto the player at once —
@@ -1662,9 +1675,25 @@ function populateWorld(g) {
 
     if (room.kind === 'dhd') {
       const c = room.centerPx;
-      const boss = new Enemy('boss', c.x, c.y - 80, p.threat, { variant: fac });
+      const isFinale = g.params.address === FINALE_ADDRESS;
+      const boss = new Enemy(isFinale ? 'nexus' : 'boss', c.x, c.y - 80, p.threat, isFinale ? {} : { variant: fac });
       boss._room = room;
       g.enemies.push(boss);
+      if (isFinale) {
+        // three shield pylons ringing the core — down them to open a damage window
+        for (let i = 0; i < 3; i++) {
+          const a = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+          let px = c.x + Math.cos(a) * 150;
+          let py = c.y - 80 + Math.sin(a) * 120;
+          if (tileAt(g.world, px, py) !== 0) {
+            px = c.x + Math.cos(a) * 90;
+            py = c.y - 80 + Math.sin(a) * 80;
+          }
+          const py2 = new NexusPylon(px, py);
+          py2._room = room;
+          g.pylons.push(py2);
+        }
+      }
       const guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 2 : 0);
       for (let i = 0; i < guards; i++) {
         const q = placeXY();
@@ -2725,6 +2754,32 @@ function updateBullet(g, b, dt) {
           }
         }
       }
+      if (g.pylons) {
+        for (const py of g.pylons) {
+          if (!py.alive) continue;
+          const rad = py.r + b.r + 3;
+          if ((b.x - py.x) ** 2 + (b.y - py.y) ** 2 <= rad * rad) {
+            py.hp -= b.dmg;
+            py.flash = 1;
+            spark(g, b.x, b.y, '#8fe4ff');
+            if (py.hp <= 0) {
+              py.alive = false;
+              burst(g, py.x, py.y, 22, '#8fe4ff');
+              addShake(g, 8, 0, 1);
+              const left = g.pylons.filter((q) => q.alive).length;
+              g.message(left ? `Shield pylon down — ${left} to go` : 'NEXUS SHIELD COLLAPSES — HIT THE CORE');
+            }
+            if (b.pierce > 0) {
+              b.pierce--;
+              (b._hit || (b._hit = new Set())).add(py);
+            } else {
+              b.alive = false;
+              if (b.explode) bulletExplode(g, b);
+              return;
+            }
+          }
+        }
+      }
       for (const bl of g.blocks) {
         if (!bl.alive) continue;
         const rad = bl.r + b.r;
@@ -2796,6 +2851,13 @@ function hitEnemy(g, e, b) {
     return;
   }
 
+  // Nexus: fully shielded while its pylons stand, and shrugs the rotating type
+  if (e.kind === 'nexus' && e.shieldUp) {
+    spark(g, b.x, b.y, '#8fe4ff');
+    e.flash = 0.05;
+    if (b.from === 'player') pushFloat(g, e.x + rr(-6, 6), e.y - e.r - 4, 'SHIELDED', '#8fe4ff', 9);
+    return;
+  }
   if (e.kind === 'boss' && e.shield > 0) {
     e.shield -= dmg;
     e.shieldT = 0;
@@ -2977,9 +3039,19 @@ function killEnemy(g, e) {
       }
     } catch (err) { /* odd save.weapons shape */ }
   }
-  const dead = e.kind === 'boss';
+  const dead = e.kind === 'boss' || e.kind === 'nexus';
   const elite = e.kind === 'jaffa_heavy' || e.kind === 'replicator_brute' || e.hunter;
-  burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') ? '#b6f0ff' : '#ffb347');
+  if (e.kind === 'nexus') {
+    for (let i = 0; i < 5; i++) {
+      const a = rr(0, TAU);
+      explode(g, { x: e.x + Math.cos(a) * rr(0, 60), y: e.y + Math.sin(a) * rr(0, 60), dmg: 0, radius: 70, from: 'enemy' });
+    }
+    addFlash(g, e.x, e.y, 260, '#8fe4ff', 0.5);
+    addShake(g, 30, 0, 1);
+    g.hitstop = Math.max(g.hitstop, 14);
+    g.message('THE INCURSION NEXUS IS BROKEN');
+  }
+  burst(g, e.x, e.y, dead ? 44 : 14, e.kind.startsWith('wraith') ? '#9df7a0' : e.kind.startsWith('replicator') || e.kind === 'nexus' ? '#b6f0ff' : '#ffb347');
   // radial kick from the corpse toward the player + biome debris fan
   addShake(g, dead ? 16 : 3, e.x - g.player.x, e.y - g.player.y);
   g.hitstop = Math.max(g.hitstop, dead ? 8 : elite ? 4 : 3);
@@ -4214,6 +4286,120 @@ function updateTraps(g, dt) {
   }
 }
 
+// campaign finale. three phases. shielded + damage-immune while its pylons
+// stand, so the player clears the ring first; then a straight escalation —
+// aimed beam bursts, a rotating sweep beam from phase 2, replicator adds at
+// phase 3. see entities.js (kind === 'nexus') for the field layout.
+function nexusBeam(g, e, ang, dmg, speed) {
+  g.bullets.push(
+    new Bullet(e.x + Math.cos(ang) * 30, e.y + Math.sin(ang) * 30, Math.cos(ang) * speed, Math.sin(ang) * speed, dmg, 'enemy', {
+      color: '#8fe4ff', energy: true, r: 7, knockback: 120, life: 2.4,
+    })
+  );
+}
+function updateNexus(g, e, dt) {
+  const p = g.player;
+  if (e.state === 'idle' && idleTick(g, e, dt, 420)) return;
+  const dx = p.x - e.x;
+  const dy = p.y - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  e.facing = Math.atan2(dy, dx);
+  const live = g.pylons ? g.pylons.filter((py) => py.alive).length : 0;
+  e.shieldUp = live > 0;
+  e.shield = e.shieldUp ? (240 * live) / 3 : 0; // drives the boss-bar shield pip
+
+  if (e.shieldUp) {
+    // rotate the shrugged-off damage type so the player has to swap weapons
+    e.immuneCycleT += dt;
+    if (e.immuneCycleT > 2.6) {
+      e.immuneCycleT = 0;
+      e.immuneType = e.immuneType === 'kinetic' ? 'energy' : 'kinetic';
+      g.message('Nexus shield rephases — ' + e.immuneType + ' fire deflects');
+    }
+    // hold near its spawn, turning to face the player, and lob the odd beam
+    e.x += (e._room.centerPx.x - e.x) * 0.6 * dt;
+    e.y += (e._room.centerPx.y - 80 - e.y) * 0.6 * dt;
+    e.beamT -= dt;
+    if (e.beamT <= 0) {
+      e.beamT = 2.4;
+      for (let i = -1; i <= 1; i++) nexusBeam(g, e, e.facing + i * 0.12, 12, 360);
+      enemyShotSound(g, e, 'boss');
+    }
+    return;
+  }
+
+  // shield is down for good — escalate by HP fraction
+  const frac = e.hp / e.maxHp;
+  if (e.phase < 2 && frac < e.phaseAt[0]) {
+    e.phase = 2;
+    burst(g, e.x, e.y, 34, '#8fe4ff');
+    addShake(g, 16, 0, 1);
+    sfx.bossSting('replicator');
+    g.message('THE INCURSION NEXUS — SECOND STAGE');
+  }
+  if (e.phase < 3 && frac < e.phaseAt[1]) {
+    e.phase = 3;
+    e.enraged = true;
+    burst(g, e.x, e.y, 40, '#b6f0ff');
+    addShake(g, 20, 0, 1);
+    sfx.bossSting('replicator');
+    g.message('THE INCURSION NEXUS — FINAL STAGE');
+  }
+  const rush = e.enraged ? 1.35 : 1;
+
+  // rotating sweep beam (phase 2+): a line of beams that arcs across the room
+  if (e.phase >= 2) {
+    if (!e.sweep && (e.sweepT -= dt) <= 0) {
+      e.sweep = { ang: e.facing - 0.9, t: 0 };
+      g.message('Sweep beam charging');
+    }
+    if (e.sweep) {
+      e.sweep.ang += dt * 1.5 * rush;
+      e.sweep.t += dt;
+      for (let s = 34; s < 460; s += 46) {
+        g.particles.push(new Particle(e.x + Math.cos(e.sweep.ang) * s, e.y + Math.sin(e.sweep.ang) * s, 0, 0, 0.12, '#8fe4ff', 3));
+      }
+      if (Math.random() < 12 * dt) nexusBeam(g, e, e.sweep.ang, 14, 420);
+      if (e.sweep.t > 1.8) {
+        e.sweep = null;
+        e.sweepT = e.enraged ? 4.5 : 7;
+      }
+    }
+  }
+
+  // phase 3: periodic replicator adds
+  if (e.phase >= 3 && (e.spawnT -= dt) <= 0) {
+    e.spawnT = 5;
+    for (let i = 0; i < 2; i++) {
+      const r = new Enemy('replicator', e.x + rr(-30, 30), e.y + rr(-30, 30), g.params.threat);
+      r._room = e._room;
+      r.state = 'active';
+      r.mode = 'advance';
+      g.enemies.push(r);
+    }
+    burst(g, e.x, e.y, 16, '#b6f0ff');
+  }
+
+  // close the gap, then hold at mid range and fire aimed bursts
+  const [ffx, ffy] = flowDir(g, e);
+  let mvx = ffx;
+  let mvy = ffy;
+  if (dist < 220) {
+    mvx = -dx / dist;
+    mvy = -dy / dist;
+  }
+  e.x += mvx * e.speed * rush * dt;
+  e.y += mvy * e.speed * rush * dt;
+
+  if ((e.beamT -= dt) <= 0) {
+    e.beamT = (e.enraged ? 1.1 : 1.8);
+    const n = e.phase >= 3 ? 5 : 3;
+    for (let i = 0; i < n; i++) nexusBeam(g, e, e.facing + (i - (n - 1) / 2) * 0.14, 15, 400);
+    enemyShotSound(g, e, 'boss');
+  }
+  if (dist < e.r + p.r + 6) damagePlayer(g, 18, dx, dy);
+}
+
 function updateBoss(g, e, dt) {
   const p = g.player;
   if (e.state === 'idle' && idleTick(g, e, dt, 360)) return;
@@ -4769,6 +4955,7 @@ function renderPlay(g, dim) {
     if (lit(pk.x, pk.y)) sorted.push({ y: pk.y, k: 'pickup', o: pk });
   for (const gr of g.grenades) sorted.push({ y: gr.y, k: 'grenade', o: gr });
   for (const bl of g.blocks) if (lit(bl.x, bl.y)) sorted.push({ y: bl.y, k: 'block', o: bl });
+  if (g.pylons) for (const py of g.pylons) if (py.alive && lit(py.x, py.y)) sorted.push({ y: py.y + 14, k: 'pylon', o: py });
   for (const e of g.enemies) if (lit(e.x, e.y)) sorted.push({ y: e.y + e.r * 0.6, k: 'enemy', o: e });
   sorted.push({ y: g.player.y + g.player.r * 0.6, k: 'player', o: g.player });
   sorted.sort((a, b) => a.y - b.y);
@@ -4776,6 +4963,7 @@ function renderPlay(g, dim) {
     if (d.k === 'pickup') drawPickup(ctx, d.o, (d.o.x - g.player.x) ** 2 + (d.o.y - g.player.y) ** 2 < 80 * 80);
     else if (d.k === 'grenade') drawGrenade(ctx, d.o);
     else if (d.k === 'block') drawBlock(ctx, d.o);
+    else if (d.k === 'pylon') drawPylon(ctx, d.o, g.time);
     else if (d.k === 'enemy') drawEnemy(ctx, d.o, g.time);
     else drawPlayer(ctx, d.o, g.time, g);
   }
@@ -5256,6 +5444,49 @@ function drawBlock(ctx, bl) {
   ctx.strokeStyle = hot ? '#eaffff' : 'rgba(160,230,255,0.6)';
   ctx.lineWidth = 1;
   ctx.strokeRect(-bl.r * 0.55, -bl.r * 0.55, bl.r * 1.1, bl.r * 1.1);
+  ctx.restore();
+}
+
+// nexus shield pylon — a spinning tri-prong emitter with a hit-flash
+function drawPylon(ctx, py, t) {
+  drawShadow(ctx, py.x, py.y + 4, 12, 0, 0.6);
+  ctx.save();
+  ctx.translate(py.x, py.y);
+  // base
+  ctx.fillStyle = '#1b2a3a';
+  ctx.strokeStyle = '#4d7fa0';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(0, 0, 12, 0, TAU);
+  ctx.fill();
+  ctx.stroke();
+  ctx.rotate(py.phase);
+  ctx.strokeStyle = py.flash > 0 ? '#ffffff' : '#8fe4ff';
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = '#8fe4ff';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    const a = (i * TAU) / 3;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * 5, Math.sin(a) * 5);
+    ctx.lineTo(Math.cos(a) * 16, Math.sin(a) * 16);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.rotate(-py.phase);
+  // core glow pulses with charge state
+  const pulse = 0.5 + 0.5 * Math.sin(t * 6 + py.phase);
+  ctx.fillStyle = `rgba(143,228,255,${0.4 + 0.4 * pulse})`;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4 + pulse * 2, 0, TAU);
+  ctx.fill();
+  // hp ring
+  const f = Math.max(0, py.hp / py.maxHp);
+  ctx.strokeStyle = '#8fe4ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, 18, -Math.PI / 2, -Math.PI / 2 + f * TAU);
+  ctx.stroke();
   ctx.restore();
 }
 

@@ -130,6 +130,11 @@ function fireStaff(t) {
   toneVoice(t, 'square', 430, 80, 0.25, 0.003, 0.28, 0.2, 0.07);
   noiseVoice(t, 0.12, 'lowpass', 900, 480, null, 0.001, 0.1, 0.12, 0.03);
   toneVoice(t, 'sine', 74, 42, 0.18, 0.005, 0.16, 0.13, 0.05);
+  // meatier low-end thump under the discharge
+  toneVoice(t, 'sine', 46, 28, 0.14, 0.004, 0.24, 0.24, 0.07);
+  // longer trailing plasma tail — decaying saw + a slow noise hiss
+  toneVoice(t + 0.05, 'sawtooth', 190, 58, 0.5, 0.02, 0.52, 0.06, 0.08);
+  noiseVoice(t + 0.05, 0.5, 'lowpass', 620, 150, null, 0.02, 0.46, 0.05, 0.07);
 }
 function fireZat(t) {
   // quick electric zap: high fizz sweeping down + a short squared pitch drop
@@ -141,6 +146,14 @@ function fireShotgun(t) {
   noiseVoice(t, 0.28, 'lowpass', 2200, 320, null, 0.001, 0.24, 0.22, 0.05);
   toneVoice(t, 'sine', 95, 40, 0.16, 0.002, 0.2, 0.24, 0.06);
   noiseVoice(t, 0.06, 'bandpass', 1400, 1400, 1.0, 0.001, 0.05, 0.12, 0.03);
+  // stage 1: a sharp high crack transient sitting on top of the boom
+  noiseVoice(t, 0.02, 'highpass', 3600, 3600, 0.7, 0.0005, 0.02, 0.16, 0.01);
+  // stage 2: pump-action shell rack — back then forward
+  const tr = t + 0.22;
+  noiseVoice(tr, 0.05, 'bandpass', 2200, 2000, 3, 0.001, 0.045, 0.1, 0.02);
+  toneVoice(tr, 'square', 210, 150, 0.02, 0.001, 0.03, 0.05, 0.02);
+  noiseVoice(tr + 0.1, 0.05, 'bandpass', 1700, 1500, 2.5, 0.001, 0.045, 0.13, 0.02);
+  toneVoice(tr + 0.1, 'square', 190, 110, 0.02, 0.001, 0.03, 0.06, 0.02);
 }
 function fireBurst(t) {
   // tight snappy rifle crack — brighter/cleaner than p90, very short

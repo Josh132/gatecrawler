@@ -41,6 +41,11 @@
       api.update(STEP);
       g.pmouse = { x: g.view.w / 2, y: g.view.h / 2 };
       api.render(STEP);
+    } else if (qs.has('room')) {
+      // frame one named hub room (kind from src/hub.js ROOMS) — no panel
+      const rm = g.world.rooms.find((r) => r.kind === qs.get('room'));
+      if (rm) { g.player.x = rm.centerPx.x; g.player.y = rm.centerPx.y; }
+      for (let f = 0; f < 30; f++) { api.update(STEP); api.render(STEP); }
     } else {
       // just walk the player a bit off the ramp for a nicer framing
       g.player.y += 40;

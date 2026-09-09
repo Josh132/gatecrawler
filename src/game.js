@@ -8,7 +8,17 @@ import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.
 import { makeFlowField } from './pathfind.js';
 import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, circleVsGrid } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
-import { buildHub, drawStation } from './hub.js';
+import {
+  buildHub,
+  buildHubDecor,
+  drawStation,
+  drawHubLive,
+  drawDialer,
+  makeCrew,
+  updateCrew,
+  roomAt,
+  CREW_COLORS,
+} from './hub.js';
 import { createPostFX } from './postfx.js';
 import {
   createInventory,
@@ -296,6 +306,9 @@ function enterHub(g) {
   const w = buildHub();
   g.world = w;
   g.worldCanvas = bakeWorld(w);
+  g._hubDecor = buildHubDecor(w); // static dressing, baked once per visit
+  g._crew = makeCrew(w);
+  g._hubRoom = null;
   g.flow = makeFlowField(w.grid, w.W, w.H);
   g.params = { address: 'SGC', threat: 0, faction: 'sgc', primary: 'sgc', mods: [], hop: 0, seedStr: 'sgc' };
   g.enemies = [];
@@ -331,11 +344,12 @@ function enterHub(g) {
 
   g.cam.x = p.x;
   g.cam.y = p.y;
-  g.curRoom = w.rooms[0];
+  g.curRoom = roomAt(w, p.x, p.y) || w.rooms[0];
+  g._hubRoom = g.curRoom;
   g.state = 'hub';
   g.log = [];
   persist(g.save);
-  g.message('Stargate Command — SG-1');
+  g.message('Stargate Command — Level 28');
 }
 
 function launchRun(g, addr) {
@@ -640,18 +654,29 @@ function updateHub(g, dt) {
     }
   }
   g._nearStation = near;
+  // two ways to dial: step onto the gate ramp, or work the control-room console
   g._atGate = (w.gateCenter.x - p.x) ** 2 + (w.gateCenter.y - p.y) ** 2 < 62 * 62;
+  g._atDialer = !!w.dialer && (w.dialer.x - p.x) ** 2 + (w.dialer.y - p.y) ** 2 < 54 * 54;
 
   if (pressed('KeyE')) {
     if (near) {
       if (near.kind === 'armory') g.panelOpen = true;
       else g.station = near.kind;
-    } else if (g._atGate) {
+    } else if (g._atGate || g._atDialer) {
       g.launching = true;
       buildGateMap(g);
       g.state = 'gatemap';
     }
   }
+
+  // a soft "you are entering…" toast as the player crosses a doorway
+  const rNow = roomAt(w, p.x, p.y);
+  if (rNow && rNow !== g._hubRoom) {
+    g._hubRoom = rNow;
+    g.curRoom = rNow;
+    g.message(rNow.name);
+  }
+  if (g._crew) updateCrew(g._crew, dt);
 
   g.cam.x += (p.x - g.cam.x) * Math.min(1, 6 * dt);
   g.cam.y += (p.y - g.cam.y) * Math.min(1, 6 * dt);
@@ -4503,6 +4528,8 @@ function renderMenu(g) {
 function renderHub(g) {
   const { ctx, view } = g;
   if (!g.world) return;
+  const w = g.world;
+  const p = g.player;
   ctx.save();
   ctx.translate(view.w / 2, view.h / 2);
   ctx.scale(ZOOM, ZOOM);
@@ -4511,76 +4538,16 @@ function renderHub(g) {
   ctx.drawImage(g.worldCanvas, 0, -woff);
   // no fog down here, so the lit wall layer goes straight on
   if (g.worldCanvas.walls) ctx.drawImage(g.worldCanvas.walls, 0, -woff);
+  // every static fitting of the base — one blit
+  if (g._hubDecor) ctx.drawImage(g._hubDecor, 0, -(g._hubDecor.offsetY || 0));
 
-  const gc = g.world.gateCenter;
-  const rp = g.world.rectPx || g.world.rooms[0].rectPx;
-
-  // room floor sheen so it doesn't read as void
-  ctx.fillStyle = 'rgba(24,30,42,0.5)';
-  ctx.fillRect(rp.x, rp.y, rp.w, rp.h);
-
-  // blast door on the south wall
-  ctx.fillStyle = 'rgba(30,26,22,0.9)';
-  ctx.fillRect(gc.x - 70, rp.y + rp.h - 6, 140, 10);
-  ctx.strokeStyle = 'rgba(255,180,90,0.25)';
-  ctx.lineWidth = 2;
-  for (let i = -3; i <= 3; i++) {
-    ctx.beginPath();
-    ctx.moveTo(gc.x + i * 20, rp.y + rp.h - 6);
-    ctx.lineTo(gc.x + i * 20, rp.y + rp.h + 4);
-    ctx.stroke();
-  }
-
-  // ramp with hazard striping + rails
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(gc.x - 58, gc.y + 6, 116, 78);
-  ctx.clip();
-  ctx.strokeStyle = 'rgba(255,180,90,0.16)';
-  ctx.lineWidth = 8;
-  for (let i = -8; i < 16; i++) {
-    ctx.beginPath();
-    ctx.moveTo(gc.x - 70 + i * 14, gc.y + 90);
-    ctx.lineTo(gc.x - 70 + i * 14 + 40, gc.y);
-    ctx.stroke();
-  }
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(255,180,90,0.35)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(gc.x - 58, gc.y + 6, 116, 78);
-  ctx.strokeStyle = 'rgba(150,190,230,0.35)';
-  ctx.beginPath();
-  ctx.moveTo(gc.x - 58, gc.y + 84);
-  ctx.lineTo(gc.x - 58, gc.y + 20);
-  ctx.moveTo(gc.x + 58, gc.y + 84);
-  ctx.lineTo(gc.x + 58, gc.y + 20);
-  ctx.stroke();
+  const gc = w.gateCenter;
   drawGate(ctx, gc, g.time);
+  // the animated layer: screens, klaxon, shimmer, trophy cases, plaque
+  drawHubLive(ctx, w, g.time, p, g.save);
+  if (w.dialer) drawDialer(ctx, w.dialer, g.time, g._atDialer);
 
-  // personnel wandering the floor for life
-  if (!g._crew) {
-    g._crew = [];
-    for (let i = 0; i < 4; i++) {
-      g._crew.push({
-        x: rp.x + 60 + Math.random() * (rp.w - 120),
-        y: rp.y + rp.h * 0.55 + Math.random() * (rp.h * 0.3),
-        a: Math.random() * TAU,
-        t: Math.random() * 3,
-      });
-    }
-  }
-  for (const cr of g._crew) {
-    cr.t -= 1 / 60;
-    if (cr.t <= 0) {
-      cr.t = 2 + Math.random() * 4;
-      cr.a = Math.random() * TAU;
-    }
-    cr.x = clamp(cr.x + Math.cos(cr.a) * 12 / 60, rp.x + 30, rp.x + rp.w - 30);
-    cr.y = clamp(cr.y + Math.sin(cr.a) * 12 / 60, rp.y + rp.h * 0.4, rp.y + rp.h - 30);
-    drawHumanoid(ctx, cr.x, cr.y, cr.a, 0.8, 'rgba(120,150,180,0.55)', 'rgba(150,180,210,0.6)', { weapon: false, blur: 4 });
-  }
-
-  for (const s of g.world.stations) drawStation(ctx, s, g.time, g._nearStation === s);
+  for (const s of w.stations) drawStation(ctx, s, g.time, g._nearStation === s);
 
   ctx.globalCompositeOperation = 'lighter';
   for (const pt of g.particles) {
@@ -4593,13 +4560,35 @@ function renderHub(g) {
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 
-  drawPlayer(ctx, g.player, g.time);
+  // personnel + player in one y-sorted pass so nobody stands on anyone
+  const cast = [];
+  if (g._crew) for (const cr of g._crew) cast.push({ y: cr.y, cr });
+  cast.push({ y: p.y, cr: null });
+  cast.sort((a, b) => a.y - b.y);
+  for (const d of cast) {
+    if (!d.cr) {
+      drawPlayer(ctx, p, g.time);
+      continue;
+    }
+    const col = CREW_COLORS[d.cr.role] || CREW_COLORS.tech;
+    drawHumanoid(ctx, d.cr.x, d.cr.y, d.cr.a, 0.82, col[0], col[1], {
+      weapon: d.cr.role === 'marine',
+      weaponLen: 10,
+      weaponColor: 'rgba(200,220,240,0.7)',
+      blur: 4,
+    });
+  }
 
+  ctx.textAlign = 'center';
   if (g._atGate) {
     ctx.fillStyle = '#8ef';
     ctx.font = 'bold 12px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('E  ·  DIAL OUT', gc.x, gc.y + 96);
+    ctx.fillText('E  ·  DIAL OUT', gc.x, gc.y + 104);
+  }
+  if (g._atDialer) {
+    ctx.fillStyle = '#8ef';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('E  ·  DIAL THE GATE', w.dialer.x, w.dialer.y + 42);
   }
   ctx.restore();
 
@@ -4616,7 +4605,12 @@ function renderHub(g) {
     48
   );
   ctx.fillStyle = '#567';
-  ctx.fillText('walk to a station and press E   ·   step into the gate to deploy   ·   TAB gear   ·   Q heal', 20, 66);
+  ctx.fillText(
+    (g._hubRoom ? g._hubRoom.name.toLowerCase() + '   ·   ' : '') +
+      'E at a station   ·   dial from the gate or the control room   ·   TAB gear   ·   Q heal',
+    20,
+    66
+  );
 
   renderMessages(g);
   if (!g.station) drawCrosshair(g);

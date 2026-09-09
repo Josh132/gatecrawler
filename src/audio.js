@@ -1269,8 +1269,10 @@ function bedSgc(bed, g, t) {
 
 const AMB_BEDS = {
   temple: bedTemple,
+  pyramid: bedTemple, // gilded stone hall — same dry stone air as the temple
   jungle: bedJungle,
   desert: bedDesert,
+  savannah: bedDesert, // open dry grassland — reuse the wind bed
   ice: bedIce,
   foundry: bedFoundry,
   hive: bedHive,

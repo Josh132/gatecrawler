@@ -1148,7 +1148,7 @@ function updatePlay(g, dt) {
         fireWeapon(g, p, wp, wid);
         if (hasMag) p.mag[wid]--;
         else if (wp.ammoMax !== Infinity) p.ammo[wid]--;
-        p.cool = wp.fireRate * coolMul;
+        p.cool = (wp.fireRate * coolMul) / (wsFor(g, wid).fireRateMul || 1);
         if (wp.burst > 1) {
           p.burstWid = wid;
           p.burstN = wp.burst - 1;
@@ -2333,7 +2333,7 @@ function explode(g, gr) {
 function startReload(g, p, wid) {
   const wp = WEAPONS[wid];
   if (!wp || wp.mag == null) return;
-  p.reloadT = (wp.reload || 1.1) * (fx(g).reloadMul || 1);
+  p.reloadT = (wp.reload || 1.1) * (fx(g).reloadMul || 1) * (wsFor(g, wid).reloadMul || 1);
   p.reloadDur = p.reloadT;
   p.reloading = true;
   p.reloadWid = wid;
@@ -2427,16 +2427,19 @@ function fireBeam(g, p, wp, dt) {
   p.beamTick -= dt;
   if (target && p.beamTick <= 0) {
     p.beamTick = 0.09;
+    const bws = wsFor(g, wid);
     hitEnemy(g, target, {
       x: hx,
       y: hy,
       vx: dx,
       vy: dy,
-      dmg: (wp.dps || 40) * 0.09 * (fx(g).weaponDmgMul || 1) * activeWeaponRarityMul(g),
+      dmg: (wp.dps || 40) * 0.09 * bws.damageMul * activeWeaponRarityMul(g),
       energy: true,
       knockback: 0,
       stun: 0,
       color: wp.color,
+      _ap: bws.armorPierce || 0,
+      _onHit: bws.onHit && bws.onHit.length ? bws.onHit : null,
     });
   }
   g.shake = Math.min(14, g.shake + 0.5);
@@ -2456,6 +2459,12 @@ function activeWeaponRarityMul(g) {
   return rarityMul(st);
 }
 
+// folded mastery-level + installed-mod modifiers for a weapon key
+function wsFor(g, wid) {
+  const st = (g.save.weapons && g.save.weapons[wid]) || { level: 1, xp: 0, mods: [] };
+  return weaponStats(wid, st, fx(g).weaponDmgMul || 1);
+}
+
 // per-weapon muzzle character: flash [radius, colour, life], spark count,
 // backward recoil into p.kx/p.ky, camera shake, and ejected shell count.
 const MUZZLE = {
@@ -2471,31 +2480,37 @@ const MUZZLE = {
 function fireWeapon(g, p, wp, wid) {
   const muzzle = 18;
   const scatter = wp.pellets > 3;
-  const dmgMul = (fx(g).weaponDmgMul || 1) * activeWeaponRarityMul(g);
+  const ws = wsFor(g, wid);
+  // ws.damageMul already folds the tech weaponDmgMul (passed as techMul)
+  const dmgMul = ws.damageMul * activeWeaponRarityMul(g);
+  const sprMul = ws.spreadMul || 1;
   for (let i = 0; i < wp.pellets; i++) {
-    const a = p.aim + (Math.random() - 0.5) * wp.spread;
-    g.bullets.push(
-      new Bullet(
-        p.x + Math.cos(a) * muzzle,
-        p.y + Math.sin(a) * muzzle,
-        Math.cos(a) * wp.speed,
-        Math.sin(a) * wp.speed,
-        wp.damage * dmgMul,
-        'player',
-        {
-          color: wp.color,
-          knockback: wp.knockback,
-          energy: wp.energy,
-          stun: wp.stun || 0,
-          r: wp.blastRadius ? 6 : wp.energy ? 5 : 3,
-          life: wp.blastRadius ? 2.6 : scatter ? 0.6 : 2.2,
-          explode: !!wp.blastRadius,
-          blastDmg: wp.blastDmg || 0,
-          blastRadius: wp.blastRadius || 0,
-          clearShots: !!wp.clearShots,
-        }
-      )
+    const a = p.aim + (Math.random() - 0.5) * wp.spread * sprMul;
+    const b = new Bullet(
+      p.x + Math.cos(a) * muzzle,
+      p.y + Math.sin(a) * muzzle,
+      Math.cos(a) * wp.speed * (ws.speedMul || 1),
+      Math.sin(a) * wp.speed * (ws.speedMul || 1),
+      wp.damage * dmgMul,
+      'player',
+      {
+        color: wp.color,
+        knockback: wp.knockback,
+        energy: wp.energy,
+        stun: (wp.stun || 0) * (ws.stunMul || 1),
+        r: wp.blastRadius ? 6 : wp.energy ? 5 : 3,
+        life: (wp.blastRadius ? 2.6 : scatter ? 0.6 : 2.2) * (ws.rangeMul || 1),
+        explode: !!wp.blastRadius,
+        blastDmg: wp.blastDmg || 0,
+        blastRadius: wp.blastRadius || 0,
+        clearShots: !!wp.clearShots,
+      }
     );
+    b.pierce = ws.pierce || 0;
+    b.ricochet = ws.ricochet || 0;
+    b._ap = ws.armorPierce || 0;
+    b._onHit = ws.onHit && ws.onHit.length ? ws.onHit : null;
+    g.bullets.push(b);
   }
   const mz = MUZZLE[wid] || (wp.energy ? MUZZLE.staff : MUZZLE.p90);
   const ca = Math.cos(p.aim);
@@ -2540,6 +2555,16 @@ function updateBullet(g, b, dt) {
     b.x += (b.vx * dt) / sub;
     b.y += (b.vy * dt) / sub;
     if (tileAt(g.world, b.x, b.y) === 1) {
+      // ricochet mod: bounce off the wall once per charge instead of dying
+      if (b.ricochet > 0 && b.from === 'player' && !b.explode) {
+        b.ricochet--;
+        b.x -= (b.vx * dt) / sub;
+        b.y -= (b.vy * dt) / sub;
+        if (tileAt(g.world, b.x + (b.vx * dt) / sub, b.y) === 1) b.vx = -b.vx;
+        else b.vy = -b.vy;
+        spark(g, b.x, b.y, b.color);
+        continue;
+      }
       b.alive = false;
       if (b.explode) bulletExplode(g, b);
       else {
@@ -2552,12 +2577,18 @@ function updateBullet(g, b, dt) {
       // enemy hitboxes are slightly generous — no phantom misses on edge hits
       for (const e of g.enemies) {
         if (!e.alive) continue;
-        const rad = (e.kind === 'boss' ? e.r * 1.32 : e.r * 1.15) + b.r;
+        if (b._hit && b._hit.has(e)) continue;
+        const rad = (e.kind === 'boss' || e.kind === 'nexus' ? e.r * 1.32 : e.r * 1.15) + b.r;
         if ((b.x - e.x) ** 2 + (b.y - e.y) ** 2 <= rad * rad) {
           hitEnemy(g, e, b);
-          b.alive = false;
-          if (b.explode) bulletExplode(g, b);
-          return;
+          if (b.pierce > 0) {
+            b.pierce--;
+            (b._hit || (b._hit = new Set())).add(e);
+          } else {
+            b.alive = false;
+            if (b.explode) bulletExplode(g, b);
+            return;
+          }
         }
       }
       for (const bl of g.blocks) {
@@ -2602,13 +2633,20 @@ function hitEnemy(g, e, b) {
   let dmg = b.dmg;
   const dtype = b.energy ? 'energy' : 'kinetic';
 
+  const ap = b._ap || 0; // armour-piercing mod: cuts into the frontal shrug-off
   // Jaffa (both) shrug off shots to the front — a real cut, not a brick wall
   if (e.kind === 'jaffa' || e.kind === 'jaffa_heavy') {
     const ang = Math.atan2(b.y - e.y, b.x - e.x);
     if (Math.abs(normAngle(ang - e.facing)) < (e.kind === 'jaffa_heavy' ? 1.0 : 0.9)) {
-      dmg *= e.kind === 'jaffa_heavy' ? 0.5 : 0.55;
+      const cut = (e.kind === 'jaffa_heavy' ? 0.5 : 0.55);
+      dmg *= cut + (1 - cut) * ap;
       spark(g, b.x, b.y, '#8ff');
     }
+  }
+  // on-hit mod effects
+  if (b._onHit) {
+    if (b._onHit.indexOf('burn') >= 0) g.hazards.push(new Hazard(e.x, e.y, 26, 2.2, 7, 'player', 'plasma'));
+    if (b._onHit.indexOf('stun') >= 0) e.stun = Math.max(e.stun || 0, 0.5);
   }
 
   // Replicators adapt to whatever damage type keeps hitting them

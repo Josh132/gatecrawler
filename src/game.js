@@ -1,4 +1,4 @@
-import { keys, mouse, pressed, endFrameInput } from './input.js';
+import { keys, mouse, pressed, endFrameInput, captureNextKey, setAimAssistTargets } from './input.js';
 import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
 import { TAU, clamp, glowCircle, shade, figure, spider, critter } from './draw.js';
@@ -92,7 +92,15 @@ function defaultSave() {
     // { [enemyKind]: { seen: n, killed: n } }
     bestiary: {},
     // key rebinds + a couple of toggles; audio volume persists separately
-    settings: { binds: {} },
+    settings: {
+      binds: {}, // { action: KeyboardEvent.code }
+      shake: 1, // screen-shake scale 0..1.5
+      gamma: 1, // screen brightness multiply/screen 0.7..1.4
+      reduceFlash: false, // damp muzzle/hit flashes + skip the webgl grade
+      cbPalette: false, // colour-blind faction tagging (HUD legend note — see TODO)
+      aimAssist: false, // gamepad: snap pad-aim toward the nearest enemy
+      seenTutorial: false, // first-run corner tips have been shown
+    },
   };
 }
 
@@ -289,6 +297,17 @@ export function createGame(canvas) {
     mouseWasDown: false,
     mouse: { wx: 0, wy: 0 },
     buttons: [],
+    // front-of-house UI: main-menu selection + a breadcrumb stack of sub-screens
+    // ('settings' | 'rebind' | 'codex') that overlay either the menu or the pause
+    // overlay. g.state stays 'menu' / 'play' / 'hub' the whole time.
+    menuSel: 0,
+    uiStack: [],
+    uiRoot: 'menu',
+    codexScroll: 0,
+    settingsScroll: 0,
+    _resetArm: 0, // >0 while RESET CAMPAIGN is waiting for the confirm click
+    _rebinding: null, // action id currently listening for a key
+    tips: null, // { list:[{txt,check?}], i, t } — first-run tutorial prompts
     mapNodes: [],
     deadInfo: null,
     debrief: null, // built by dialHome / onDeath, consumed by renderDebrief
@@ -418,6 +437,7 @@ function enterHub(g) {
   if (ambient && ambient.set) ambient.set('hub');
   ensureCampaign(g.save); // the Incursion: seed / repair save.campaign every hub entry
   persist(g.save);
+  queueTips(g, HUB_TIPS, 'hub', false); // first-run tutorial: hub orientation prompt
   g.message(g.save.runs > 0 ? 'Welcome back to Stargate Command — Level 28' : 'Stargate Command — Level 28');
 }
 
@@ -445,6 +465,8 @@ function launchRun(g, addr) {
   g.runIntel = 0;
   g.heat = 0;
   g._firstWorld = true;
+  g._tipMoved = false; // first-run tutorial: reset the "player has moved" latch
+  g._tipSpawn = null;
   // per-run campaign event buffer + bookkeeping — flushed in dialHome / onDeath
   g._events = [{ t: 'runStart' }];
   g._seenKinds = new Set(); // bestiary: kinds that have gone active this run
@@ -543,6 +565,7 @@ function startWorld(g, addr, hop) {
   g.cam.y = p.y;
   g.curRoom = gr;
   g.state = 'play';
+  if (hop === 0) queueTips(g, FIELD_TIPS, 'field', true); // first-run tutorial: field prompts
 
   g.save.known = Array.from(new Set([...g.save.known, g.params.address]));
   g.save.deepestThreat = Math.max(g.save.deepestThreat, g.params.threat);
@@ -674,8 +697,12 @@ function update(g, dt) {
   if (pressed('BracketLeft')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() - 0.1) * 100) + '%');
   if (pressed('BracketRight')) g.message('Volume ' + Math.round(setSfxVolume(getSfxVolume() + 0.1) * 100) + '%');
 
-  // pause overlay — works in play or hub, freezes the world
-  if ((g.state === 'play' || g.state === 'hub') && !g.panelOpen && !g.station && !g.vendorOpen && pressed('Escape')) {
+  // pause overlay — works in play or hub, freezes the world. an open sub-screen
+  // (settings / codex / rebind) eats Esc so it backs out rather than un-pausing.
+  if (
+    (g.state === 'play' || g.state === 'hub') &&
+    !g.panelOpen && !g.station && !g.vendorOpen && !g.uiStack.length && pressed('Escape')
+  ) {
     g.paused = !g.paused;
   }
   if (g.paused) {
@@ -687,7 +714,7 @@ function update(g, dt) {
   }
 
   if (g.state === 'play') {
-    if (pressed('Tab') || pressed('KeyI')) togglePanel(g);
+    if (pressed('Tab') || pressed('KeyI') || pressed(boundKey(g, 'inventory', 'Tab'))) togglePanel(g);
     if (g.panelOpen) {
       if (pressed('Escape')) togglePanel(g);
     } else if (g.hitstop > 0) {
@@ -706,8 +733,11 @@ function update(g, dt) {
     // covers both the KIA screen and the EXTRACTED debrief (see dialHome note)
     if (pressed('Enter')) debriefContinue(g);
   } else if (g.state === 'menu') {
-    if (pressed('Enter')) enterHub(g);
+    updateMenu(g);
   }
+
+  if ((g.state === 'play' || g.state === 'hub') && !g.panelOpen && !g.station) updateTips(g, dt);
+  feedAimAssist(g);
 
   g.mouseWasDown = mouse.down;
   g.wheel = 0;
@@ -785,16 +815,16 @@ function updateHub(g, dt) {
     if (pressed('Escape') || pressed('Tab')) g.station = null;
     return;
   }
-  if (pressed('Tab') || pressed('KeyI')) {
+  if (pressed('Tab') || pressed('KeyI') || pressed(boundKey(g, 'inventory', 'Tab'))) {
     togglePanel(g);
     return;
   }
-  if (pressed('KeyQ')) quickHeal(g);
+  if (keyHit(g, 'heal', 'KeyQ')) quickHeal(g);
 
   g.mouse.wx = (mouse.x - g.view.w / 2) / ZOOM + g.cam.x;
   g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
-  let ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
-  let iy = (keys.has('KeyS') ? 1 : 0) - (keys.has('KeyW') ? 1 : 0);
+  let ix = (keyHeld(g, 'right', 'KeyD') ? 1 : 0) - (keyHeld(g, 'left', 'KeyA') ? 1 : 0);
+  let iy = (keyHeld(g, 'down', 'KeyS') ? 1 : 0) - (keyHeld(g, 'up', 'KeyW') ? 1 : 0);
   if (ix || iy) {
     const l = Math.hypot(ix, iy);
     ix /= l;
@@ -821,7 +851,7 @@ function updateHub(g, dt) {
   g._atGate = (w.gateCenter.x - p.x) ** 2 + (w.gateCenter.y - p.y) ** 2 < 62 * 62;
   g._atDialer = !!w.dialer && (w.dialer.x - p.x) ** 2 + (w.dialer.y - p.y) ** 2 < 54 * 54;
 
-  if (pressed('KeyE')) {
+  if (keyHit(g, 'interact', 'KeyE')) {
     if (near) {
       // armory opens the loadout panel; research / infirmary / workbench /
       // operations each open their own station panel (renderStationPanel routes)
@@ -884,8 +914,8 @@ function updatePlay(g, dt) {
   g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
   p.aim = Math.atan2(g.mouse.wy - p.y, g.mouse.wx - p.x);
 
-  let ix = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
-  let iy = (keys.has('KeyS') ? 1 : 0) - (keys.has('KeyW') ? 1 : 0);
+  let ix = (keyHeld(g, 'right', 'KeyD') ? 1 : 0) - (keyHeld(g, 'left', 'KeyA') ? 1 : 0);
+  let iy = (keyHeld(g, 'down', 'KeyS') ? 1 : 0) - (keyHeld(g, 'up', 'KeyW') ? 1 : 0);
   if (ix || iy) {
     const l = Math.hypot(ix, iy);
     ix /= l;
@@ -897,7 +927,7 @@ function updatePlay(g, dt) {
     p.x += p.ddx * 470 * dt;
     p.y += p.ddy * 470 * dt;
   } else if (p.stun <= 0) {
-    if (pressed('Space') && p.dodgeCd <= 0 && p.dodgeCharge >= 1) {
+    if (keyHit(g, 'dodge', 'Space') && p.dodgeCd <= 0 && p.dodgeCharge >= 1) {
       // dodge toward movement input, or toward aim from a standstill
       let ddx = ix;
       let ddy = iy;
@@ -928,8 +958,9 @@ function updatePlay(g, dt) {
 
   // hotbar consumables / quick-heal / weapon swap / grenade
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
-  if (pressed('KeyQ')) quickHeal(g);
-  if (pressed('KeyX') || g.wheel) {
+  if (keyHit(g, 'heal', 'KeyQ')) quickHeal(g);
+  const swapHit = keyHit(g, 'swap', 'KeyX');
+  if (swapHit || g.wheel) {
     const dir = g.wheel < 0 ? -1 : 1;
     g.wheel = 0;
     if (p.beam && p.beam.on) {
@@ -938,10 +969,10 @@ function updatePlay(g, dt) {
     }
     cancelReload(p); // swapping weapons aborts a reload in progress
     p.burstN = 0;
-    const wid = toggleWeapon(g.inv, eff.weaponSlots, pressed('KeyX') ? 1 : dir);
+    const wid = toggleWeapon(g.inv, eff.weaponSlots, swapHit ? 1 : dir);
     g.message('Weapon: ' + (ITEMS[weaponItemId(g.inv)] ? ITEMS[weaponItemId(g.inv)].name : wid));
   }
-  if (pressed('KeyG')) throwGrenade(g);
+  if (keyHit(g, 'grenade', 'KeyG')) throwGrenade(g);
 
   // fire
   p.cool -= dt;
@@ -956,7 +987,7 @@ function updatePlay(g, dt) {
   if (hasMag && p.mag[wid] == null) p.mag[wid] = Math.min(wp.mag, p.ammo[wid] || 0);
 
   // manual reload (R)
-  if (hasMag && pressed('KeyR') && p.reloadT <= 0 && (p.mag[wid] || 0) < wp.mag && (p.ammo[wid] || 0) > 0) {
+  if (hasMag && keyHit(g, 'reload', 'KeyR') && p.reloadT <= 0 && (p.mag[wid] || 0) < wp.mag && (p.ammo[wid] || 0) > 0) {
     startReload(g, p, wid);
   }
 
@@ -1296,7 +1327,7 @@ function updatePlay(g, dt) {
 
   if (g.dhdActive) {
     const c = w.dhdRoom.centerPx;
-    if ((c.x - p.x) ** 2 + (c.y - p.y) ** 2 < 54 * 54 && pressed('KeyE')) {
+    if ((c.x - p.x) ** 2 + (c.y - p.y) ** 2 < 54 * 54 && keyHit(g, 'interact', 'KeyE')) {
       buildGateMap(g);
       g.state = 'gatemap';
     }
@@ -1905,7 +1936,7 @@ function updateSpecials(g, dt) {
     v.t += dt;
     const near = (v.x - p.x) ** 2 + (v.y - p.y) ** 2 < 60 * 60;
     if (near) anyVendorNear = true;
-    if (near && !g.vendorOpen && pressed('KeyE')) g.vendorOpen = v;
+    if (near && !g.vendorOpen && keyHit(g, 'interact', 'KeyE')) g.vendorOpen = v;
     if (g.vendorOpen === v && !near) g.vendorOpen = null;
   }
   if (g.vendorOpen && (pressed('Escape') || !anyVendorNear)) g.vendorOpen = null;
@@ -4185,7 +4216,8 @@ function render(g, dt) {
   }
 
   if (g.state === 'menu') {
-    renderMenu(g);
+    if (g.uiStack.length && g.uiRoot === 'menu') renderUiScreen(g);
+    else renderMenu(g);
   } else if (g.state === 'gatemap') {
     // dialling out of the hub keeps SGC behind the launch overlay, not a bare grid
     if (g.hub) {
@@ -4206,14 +4238,18 @@ function render(g, dt) {
     if (g.state === 'dead') renderDead(g);
   }
   drawUnlockCard(g, dt); // sliding reward card — above everything but postfx
+  if ((g.state === 'play' || g.state === 'hub') && !g.paused) renderTips(g, dt);
   if (g.paused) renderPause(g);
 
   // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
   // createPostFX returns null wherever webgl isn't available; the 2d frame stands.
-  if (g.postfx !== false) {
+  // "reduce flash" also opts out of the grade (it's the biggest bloom source).
+  if (g.postfx !== false && !(g.save.settings && g.save.settings.reduceFlash)) {
     if (g._fx === undefined) g._fx = createPostFX(ctx.canvas);
     if (g._fx) g._fx.draw(g.time);
   }
+
+  applyGamma(g); // screen brightness — one composite fillRect over the finished frame
 
   if (window.DEBUG && g.world) {
     const dbg = document.getElementById('dbg');
@@ -6358,7 +6394,19 @@ function button(g, label, x, y, w, h, fn, enabled = true) {
   ctx.fillText(label, x + w / 2, y + h / 2);
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
-  if (enabled) g.buttons.push({ x, y, w, h, fn });
+  if (enabled) {
+    g.buttons.push({
+      x, y, w, h,
+      fn: () => {
+        try {
+          if (sfx.uiClick) sfx.uiClick();
+        } catch (e) {
+          /* headless / audio not ready */
+        }
+        fn();
+      },
+    });
+  }
 }
 
 // ---------------------------------------------------------------- pause + settings
@@ -6380,7 +6428,14 @@ const CONTROLS = [
 ];
 
 function updatePauseMenu(g) {
-  // Esc toggle is handled in update(); nothing else needs polling here
+  // a sub-screen open over the pause overlay eats Esc (back out one level) plus
+  // the wheel (codex / settings scroll). the top-level Esc toggle in update() is
+  // already suppressed while g.uiStack has entries.
+  if (g.uiStack.length) {
+    if (pressed('Escape')) uiPop(g);
+    if (g.wheel) uiScroll(g, g.wheel);
+    return;
+  }
 }
 
 function settingsShake(g) {
@@ -6389,13 +6444,35 @@ function settingsShake(g) {
   return g.save.settings.shake;
 }
 
+// live controls list for the pause overlay — reflects the player's rebinds
+function controlsList(g) {
+  const kn = (a, d) => keyName(boundKey(g, a, d));
+  return [
+    ['Move', `${kn('up', 'KeyW')} ${kn('left', 'KeyA')} ${kn('down', 'KeyS')} ${kn('right', 'KeyD')}`],
+    ['Aim / Fire', 'Mouse / Left mouse'],
+    ['Dodge roll', kn('dodge', 'Space')],
+    ['Reload', kn('reload', 'KeyR')],
+    ['Grenade', kn('grenade', 'KeyG')],
+    ['Swap weapon', `${kn('swap', 'KeyX')}  /  wheel`],
+    ['Quick heal', kn('heal', 'KeyQ')],
+    ['Inventory', `${keyName(boundKey(g, 'inventory', 'Tab'))}  /  I`],
+    ['Interact / dial', kn('interact', 'KeyE')],
+    ['Mute · Volume', 'M · [  ]'],
+    ['Pause', 'Esc'],
+  ];
+}
+
 function renderPause(g) {
   const { ctx, view } = g;
+  if (g.uiStack.length && g.uiRoot === 'pause') {
+    renderUiScreen(g);
+    return;
+  }
   textReset(ctx);
   ctx.fillStyle = 'rgba(4,6,12,0.82)';
   ctx.fillRect(0, 0, view.w, view.h);
-  const w = Math.min(760, view.w - 80);
-  const h = Math.min(560, view.h - 60);
+  const w = Math.min(720, view.w - 80);
+  const h = Math.min(460, view.h - 60);
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
   ctx.fillStyle = 'rgba(12,17,26,0.98)';
@@ -6407,88 +6484,577 @@ function renderPause(g) {
   ctx.fillStyle = '#9cf';
   ctx.font = 'bold 20px monospace';
   ctx.fillText('PAUSED', x + 28, y + 38);
+  ctx.fillStyle = '#567';
+  ctx.font = '10px monospace';
+  ctx.fillText('the world is frozen while paused', x + 108, y + 38);
 
-  // --- settings column (left) ---
+  // --- menu column (left) ---
   const sx = x + 28;
-  let sy = y + 78;
-  ctx.font = 'bold 12px monospace';
-  ctx.fillStyle = '#8ef';
-  ctx.fillText('SETTINGS', sx, sy);
-  sy += 22;
-  const stepper = (label, val, dec, inc) => {
-    ctx.fillStyle = '#bcd';
-    ctx.font = '12px monospace';
-    ctx.fillText(label, sx, sy + 4);
-    button(g, '–', sx + 210, sy - 12, 24, 22, dec);
-    ctx.fillStyle = '#dff';
-    ctx.font = 'bold 12px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(val, sx + 268, sy + 4);
-    ctx.textAlign = 'left';
-    button(g, '+', sx + 300, sy - 12, 24, 22, inc);
-    sy += 34;
-  };
-  const clampv = (v) => Math.max(0, Math.min(1, Math.round(v * 20) / 20));
-  stepper(
-    'SFX volume',
-    Math.round(getSfxVolume() * 100) + '%',
-    () => setSfxVolume(clampv(getSfxVolume() - 0.1)),
-    () => setSfxVolume(clampv(getSfxVolume() + 0.1))
-  );
-  const mv = music && music.getVolume ? music.getVolume() : 1;
-  stepper(
-    'Music volume',
-    Math.round(mv * 100) + '%',
-    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) - 0.1)),
-    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) + 0.1))
-  );
-  stepper(
-    'Screen shake',
-    Math.round(settingsShake(g) * 100) + '%',
-    () => {
-      g.save.settings.shake = Math.max(0, settingsShake(g) - 0.25);
-      persist(g.save);
-    },
-    () => {
-      g.save.settings.shake = Math.min(1.5, settingsShake(g) + 0.25);
-      persist(g.save);
-    }
-  );
-  button(g, isMuted() ? 'UNMUTE ALL' : 'MUTE ALL', sx, sy, 180, 30, () => toggleMute());
-  sy += 46;
+  let sy = y + 74;
+  button(g, 'RESUME   (Esc)', sx, sy, 240, 38, () => {
+    g.paused = false;
+  });
+  sy += 48;
+  button(g, 'SETTINGS', sx, sy, 240, 38, () => uiPush(g, 'settings'));
+  sy += 48;
+  button(g, 'CODEX', sx, sy, 240, 38, () => uiPush(g, 'codex'));
+  sy += 48;
+  button(g, 'KEY BINDINGS', sx, sy, 240, 38, () => uiPush(g, 'rebind'));
+  sy += 48;
+  button(g, isMuted() ? 'UNMUTE ALL' : 'MUTE ALL', sx, sy, 240, 38, () => toggleMute());
+  sy += 48;
+  if (g.state === 'play') {
+    button(g, 'ABANDON RUN → SGC', sx, sy, 240, 38, () => {
+      g.paused = false;
+      onDeath(g, true);
+    });
+  }
 
   // --- controls column (right) ---
-  const cx = x + w / 2 + 10;
-  let cy = y + 78;
+  const cx = x + w / 2 + 24;
+  let cy = y + 74;
   ctx.fillStyle = '#8ef';
   ctx.font = 'bold 12px monospace';
   ctx.fillText('CONTROLS', cx, cy);
   cy += 20;
   ctx.font = '11px monospace';
-  for (const [k, v] of CONTROLS) {
+  for (const [k, v] of controlsList(g)) {
     ctx.fillStyle = '#9ab';
     ctx.fillText(k, cx, cy);
     ctx.fillStyle = '#dff';
-    ctx.fillText(v, cx + 150, cy);
-    cy += 17;
+    ctx.fillText(v, cx + 140, cy);
+    cy += 18;
   }
+}
 
-  // --- bottom actions ---
-  const by = y + h - 56;
-  button(g, 'RESUME   (Esc)', x + 28, by, 200, 36, () => {
-    g.paused = false;
-  });
-  if (g.state === 'play') {
-    button(g, 'ABANDON RUN → SGC', x + 244, by, 220, 36, () => {
-      g.paused = false;
-      onDeath(g, true);
+// ---------------------------------------------------------------- front-of-house UI
+// main menu, the shared Settings / Key-bindings / Codex sub-screens, and the
+// first-run tutorial. everything here overlays g.state 'menu' (uiRoot 'menu') or
+// the pause overlay (uiRoot 'pause'); g.state itself is never a new string.
+
+const MENU_ITEMS = [
+  { key: 'DEPLOY', hint: 'gear up at the SGC, then step through the gate', fn: (g) => enterHub(g) },
+  { key: 'LOADOUT', hint: 'the Armory — weapons, armour, mods', fn: (g) => { enterHub(g); g.message('Armory is off the gate room — walk over and press E'); } },
+  { key: 'RESEARCH', hint: 'the Research Lab — spend naquadah & intel on tech', fn: (g) => { enterHub(g); g.message('Research Lab console is in the SGC — press E at it'); } },
+  { key: 'OPERATIONS', hint: 'the Briefing Room — your current Incursion order', fn: (g) => { enterHub(g); g.message('Briefing Room holds the active Operation'); } },
+  { key: 'CODEX', hint: 'field intelligence — enemies, worlds, factions', fn: (g) => uiPush(g, 'codex') },
+  { key: 'SETTINGS', hint: 'audio, video, accessibility, key bindings', fn: (g) => uiPush(g, 'settings') },
+];
+
+function uiPush(g, screen) {
+  g.uiRoot = g.paused ? 'pause' : 'menu';
+  g.uiStack.push(screen);
+  g.codexScroll = 0;
+  g.settingsScroll = 0;
+  g._rebinding = null;
+  g._resetArm = 0;
+}
+function uiPop(g) {
+  g.uiStack.pop();
+  g._rebinding = null;
+  g._resetArm = 0;
+}
+function uiScroll(g, d) {
+  const top = g.uiStack[g.uiStack.length - 1];
+  if (top === 'codex') g.codexScroll = Math.max(0, g.codexScroll + d * 40);
+  else if (top === 'settings') g.settingsScroll = Math.max(0, g.settingsScroll + d * 40);
+}
+function renderUiScreen(g) {
+  const top = g.uiStack[g.uiStack.length - 1];
+  if (top === 'settings') renderSettings(g);
+  else if (top === 'rebind') renderRebind(g);
+  else if (top === 'codex') renderCodex(g);
+  else uiPop(g);
+}
+
+function updateMenu(g) {
+  if (g.uiStack.length) {
+    if (pressed('Escape')) uiPop(g);
+    if (g.wheel) uiScroll(g, g.wheel);
+    return;
+  }
+  const n = MENU_ITEMS.length;
+  if (pressed('ArrowDown') || pressed('KeyS')) {
+    g.menuSel = (g.menuSel + 1) % n;
+    try { sfx.uiHover && sfx.uiHover(); } catch (e) {}
+  }
+  if (pressed('ArrowUp') || pressed('KeyW')) {
+    g.menuSel = (g.menuSel + n - 1) % n;
+    try { sfx.uiHover && sfx.uiHover(); } catch (e) {}
+  }
+  if (pressed('Enter') || pressed('NumpadEnter') || pressed('Space')) {
+    try { sfx.uiClick && sfx.uiClick(); } catch (e) {}
+    (MENU_ITEMS[g.menuSel] || MENU_ITEMS[0]).fn(g);
+  }
+}
+
+function uiFrame(g, title, sub) {
+  const { ctx, view } = g;
+  textReset(ctx);
+  ctx.fillStyle = 'rgba(4,6,12,0.94)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  starfield(g);
+  const w = Math.min(760, view.w - 60);
+  const h = Math.min(560, view.h - 48);
+  const x = (view.w - w) / 2;
+  const y = (view.h - h) / 2;
+  ctx.fillStyle = 'rgba(10,14,22,0.96)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(120,170,220,0.4)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#9cf';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(title, x + 26, y + 34);
+  if (sub) {
+    ctx.fillStyle = '#678';
+    ctx.font = '11px monospace';
+    ctx.fillText(sub, x + 26, y + 50);
+  }
+  return { x, y, w, h };
+}
+
+// ---- shared Settings ------------------------------------------------------
+function renderSettings(g) {
+  const { ctx } = g;
+  const st = g.save.settings;
+  const F = uiFrame(g, 'SETTINGS', g.uiRoot === 'pause' ? 'run paused' : '');
+  const sx = F.x + 30;
+  let sy = F.y + 70 - g.settingsScroll;
+  const clampv = (v) => Math.max(0, Math.min(1, Math.round(v * 20) / 20));
+  const row = (label) => {
+    ctx.fillStyle = '#bcd';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, sx, sy + 4);
+  };
+  const stepper = (label, val, dec, inc) => {
+    if (sy > F.y + 40 && sy < F.y + F.h - 60) {
+      row(label);
+      button(g, '–', sx + 250, sy - 12, 26, 22, dec);
+      ctx.fillStyle = '#dff';
+      ctx.font = 'bold 12px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(val, sx + 312, sy + 4);
+      ctx.textAlign = 'left';
+      button(g, '+', sx + 344, sy - 12, 26, 22, inc);
+    }
+    sy += 34;
+  };
+  const toggle = (label, on, fn) => {
+    if (sy > F.y + 40 && sy < F.y + F.h - 60) {
+      row(label);
+      button(g, on ? 'ON' : 'OFF', sx + 250, sy - 12, 120, 22, fn);
+    }
+    sy += 34;
+  };
+
+  stepper(
+    'SFX volume', Math.round(getSfxVolume() * 100) + '%',
+    () => setSfxVolume(clampv(getSfxVolume() - 0.1)),
+    () => setSfxVolume(clampv(getSfxVolume() + 0.1))
+  );
+  const mv = music && music.getVolume ? music.getVolume() : 1;
+  stepper(
+    'Music volume', Math.round(mv * 100) + '%',
+    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) - 0.1)),
+    () => music && music.setVolume && music.setVolume(clampv((music.getVolume ? music.getVolume() : 1) + 0.1))
+  );
+  toggle('Master mute', isMuted(), () => toggleMute());
+  stepper(
+    'Screen shake', Math.round(settingsShake(g) * 100) + '%',
+    () => { st.shake = Math.max(0, Math.round((settingsShake(g) - 0.25) * 100) / 100); persist(g.save); },
+    () => { st.shake = Math.min(1.5, Math.round((settingsShake(g) + 0.25) * 100) / 100); persist(g.save); }
+  );
+  stepper(
+    'Screen brightness', Math.round((st.gamma || 1) * 100) + '%',
+    () => { st.gamma = Math.max(0.7, Math.round(((st.gamma || 1) - 0.1) * 10) / 10); persist(g.save); },
+    () => { st.gamma = Math.min(1.4, Math.round(((st.gamma || 1) + 0.1) * 10) / 10); persist(g.save); }
+  );
+  toggle('Reduce flash', !!st.reduceFlash, () => { st.reduceFlash = !st.reduceFlash; persist(g.save); });
+  toggle('Colour-blind faction tags', !!st.cbPalette, () => { st.cbPalette = !st.cbPalette; persist(g.save); });
+  toggle('Gamepad aim-assist', !!st.aimAssist, () => { st.aimAssist = !st.aimAssist; persist(g.save); });
+
+  sy += 6;
+  if (sy > F.y + 40 && sy < F.y + F.h - 60) {
+    button(g, 'KEY BINDINGS →', sx, sy - 14, 200, 28, () => uiPush(g, 'rebind'));
+    button(g, 'REPLAY TUTORIAL', sx + 220, sy - 14, 200, 28, () => {
+      st.seenTutorial = false;
+      g.tips = null;
+      g._tipsQueued = null;
+      persist(g.save);
+      g.message('Tutorial tips will show on your next deployment');
     });
   }
-  ctx.fillStyle = '#567';
+  sy += 44;
+  if (sy > F.y + 40 && sy < F.y + F.h - 60) {
+    if (g._resetArm > 0) {
+      button(g, 'CONFIRM — WIPE CAMPAIGN', sx, sy - 14, 300, 28, () => { resetCampaign(g); g._resetArm = 0; });
+      button(g, 'CANCEL', sx + 316, sy - 14, 90, 28, () => { g._resetArm = 0; });
+    } else {
+      button(g, 'RESET CAMPAIGN…', sx, sy - 14, 300, 28, () => { g._resetArm = 1; });
+    }
+  }
+  sy += 34;
+  if (sy > F.y + 40 && sy < F.y + F.h - 46) {
+    ctx.fillStyle = '#566';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('colour-blind tags: stored — draws a shaped faction mark on the gate-map legend  (TODO: full enemy recolour)', sx, sy);
+    ctx.fillText('aim-assist: on for gamepad — snaps pad-aim to the nearest enemy in a cone', sx, sy + 14);
+  }
+
+  button(g, g.uiRoot === 'pause' ? 'BACK   (Esc)' : 'CLOSE   (Esc)', F.x + 26, F.y + F.h - 42, 200, 30, () => uiPop(g));
+}
+
+// ---- key rebinding ------------------------------------------------------
+const REBINDS = [
+  ['up', 'Move up', 'KeyW'],
+  ['down', 'Move down', 'KeyS'],
+  ['left', 'Move left', 'KeyA'],
+  ['right', 'Move right', 'KeyD'],
+  ['dodge', 'Dodge roll', 'Space'],
+  ['reload', 'Reload', 'KeyR'],
+  ['grenade', 'Grenade', 'KeyG'],
+  ['swap', 'Swap weapon', 'KeyX'],
+  ['heal', 'Quick heal', 'KeyQ'],
+  ['interact', 'Interact / dial', 'KeyE'],
+  ['inventory', 'Inventory', 'Tab'],
+];
+
+function boundKey(g, action, dflt) {
+  const b = g.save && g.save.settings && g.save.settings.binds;
+  return (b && b[action]) || dflt;
+}
+// true if a bound OR the hard default code is down — keeps the gamepad bridge
+// (which always writes WASD) working no matter how the player has remapped.
+function keyHeld(g, action, dflt) {
+  return keys.has(dflt) || keys.has(boundKey(g, action, dflt));
+}
+function keyHit(g, action, dflt) {
+  return pressed(dflt) || pressed(boundKey(g, action, dflt));
+}
+function keyName(code) {
+  if (!code) return '—';
+  return code
+    .replace(/^Key/, '')
+    .replace(/^Digit/, '')
+    .replace(/^Arrow/, '')
+    .replace('Numpad', 'Num');
+}
+
+function renderRebind(g) {
+  const { ctx } = g;
+  const F = uiFrame(g, 'KEY BINDINGS', 'click a row, then press a key');
+  let sy = F.y + 76;
+  const binds = (g.save.settings.binds = g.save.settings.binds || {});
+  for (const [act, label, dflt] of REBINDS) {
+    ctx.fillStyle = '#bcd';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, F.x + 34, sy + 4);
+    const cur = binds[act] || dflt;
+    const listening = g._rebinding === act;
+    button(g, listening ? 'press a key…' : keyName(cur), F.x + 240, sy - 14, 160, 26, () => {
+      g._rebinding = act;
+      captureNextKey((code) => {
+        g._rebinding = null;
+        if (code === 'Escape') return; // cancel
+        if (code === 'Delete' || code === 'Backspace') { delete binds[act]; persist(g.save); return; }
+        binds[act] = code;
+        persist(g.save);
+      });
+    });
+    if (binds[act] && binds[act] !== dflt) {
+      ctx.fillStyle = '#567';
+      ctx.font = '10px monospace';
+      ctx.fillText('default ' + keyName(dflt), F.x + 412, sy + 3);
+    }
+    sy += 30;
+  }
+  sy += 8;
+  button(g, 'RESET TO DEFAULTS', F.x + 34, sy, 220, 30, () => {
+    g.save.settings.binds = {};
+    persist(g.save);
+  });
+  ctx.fillStyle = '#566';
   ctx.font = '10px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText('the world is frozen while paused', x + w - 20, y + h - 14);
   ctx.textAlign = 'left';
+  ctx.fillText('Esc while listening cancels · Del clears a binding · gamepad WASD keeps working regardless', F.x + 34, sy + 48);
+  button(g, 'BACK   (Esc)', F.x + 26, F.y + F.h - 42, 200, 30, () => uiPop(g));
+}
+
+// ---- codex / bestiary --------------------------------------------------
+const CODEX = {
+  jaffa: 'Rank-and-file warriors of the System Lords, staff weapon and armour issued, courage enforced by the symbiote in their pouch.',
+  jaffa_heavy: 'Elite guard in reinforced plate — slow, brutally durable, and unbothered by the first several hits you land.',
+  jaffa_grenadier: 'Line-breakers who lob plasma charges over cover to flush you into the open.',
+  jaffa_sniper: 'A lane-holder anchored on a firing spot, charging one heavy telegraphed bolt at a time from long range.',
+  wraith: 'Life-draining hunters of the Pegasus galaxy — fast, relentless, and hard to pin down in the open.',
+  wraith_drone: 'Expendable hive soldiers thrown forward in swarms to overwhelm by sheer number.',
+  wraith_stalker: 'A blink-hunter that phases out of phase to slip through crossfire and reappear on your flank.',
+  replicator: 'Self-replicating Asgard-tech blocks that scuttle and assemble; ignore them and the room fills up.',
+  replicator_brute: 'A heavy assembly of blocks that shrugs off whatever damage type hit it last — vary your fire.',
+  replicator_weaver: 'Support unit that extrudes short-lived walls to sever your sightlines mid-fight.',
+  scavenger: 'Non-hostile off-world critter picking through the ruins; killing one spills extra naquadah and salvage.',
+  boss: 'A System Lord champion, hive queen or replicator core — shielded, multi-phase, and the gatekeeper of the sector.',
+  nexus: 'The Incursion Nexus: the staging intelligence behind the raids on Earth. Kill it and the war ends.',
+};
+const BIOME_LORE = {
+  ruins: 'Poured-concrete SGC-pattern facilities — the fallback world dressing.',
+  temple: "System Lord's gilded hall: ashlar, gold friezes, torchlight.",
+  pyramid: "Ra's pyramid interior — red-ochre stone and heavy gold banding.",
+  jungle: 'Overgrown outdoor ruins under open sky — cracked flagstone and vines.',
+  desert: 'Open canyon outpost — rippled sand, strata mesas, bone-bleached light.',
+  savannah: 'Wide dry grassland — acacia stands and granite kopjes.',
+  ice: 'Glacier cavern — translucent blue ice, deep cracks, drifting snow.',
+  foundry: 'Derelict deck — riveted plate, grating, hazard chevrons, oil and rust.',
+  hive: 'Wraith hive — chitin ribs, sinew membrane, bioluminescent pods.',
+  atlantis: 'Ancient outpost — blue-grey alloy, stained glass, clean geometry.',
+  catacomb: 'Buried ossuary tunnels — close, dark, and full of dead ends.',
+};
+const FACTION_LORE = {
+  Jaffa: 'The System Lords’ armies — disciplined infantry that use cover, suppress, and flank as squads.',
+  Wraith: 'Pegasus hive-fleets — fast, aggressive swarms that close distance and drain the living.',
+  Replicators: 'Runaway self-replicating machines — no morale, no retreat, only spread and adapt.',
+};
+
+function renderCodex(g) {
+  const { ctx } = g;
+  const F = uiFrame(g, 'CODEX', 'field intelligence — enemies, worlds, factions');
+  const clipY = F.y + 66;
+  const clipH = F.y + F.h - 96 - clipY;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(F.x + 2, clipY, F.w - 4, clipH);
+  ctx.clip();
+  let y = clipY + 8 - g.codexScroll;
+  const bst = g.save.bestiary || {};
+  const line = (s, col, fnt) => {
+    if (y > clipY - 20 && y < clipY + clipH + 20) {
+      ctx.fillStyle = col;
+      ctx.font = fnt || '11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(s, F.x + 78, y);
+    }
+  };
+
+  ctx.textAlign = 'left';
+  for (const kind of Object.keys(CODEX)) {
+    const rec = bst[kind];
+    const seen = rec && rec.seen > 0;
+    const rowY = y;
+    if (rowY > clipY - 40 && rowY < clipY + clipH + 20) {
+      if (seen) {
+        drawCodexFigure(ctx, kind, F.x + 40, rowY + 6, g.time);
+        ctx.fillStyle = '#dff';
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(codexName(kind), F.x + 78, rowY);
+        ctx.fillStyle = '#8fb';
+        ctx.font = '10px monospace';
+        ctx.fillText('killed ' + ((rec && rec.killed) || 0), F.x + 78 + 220, rowY);
+        ctx.fillStyle = '#9ab';
+        ctx.font = '10px monospace';
+        ctx.fillText(CODEX[kind], F.x + 78, rowY + 15);
+      } else {
+        ctx.fillStyle = '#556';
+        ctx.font = 'bold 20px monospace';
+        ctx.fillText('?', F.x + 34, rowY + 10);
+        ctx.fillStyle = '#667';
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText('??? — UNIDENTIFIED', F.x + 78, rowY);
+        ctx.fillStyle = '#556';
+        ctx.font = '10px monospace';
+        ctx.fillText('no field contact logged', F.x + 78, rowY + 15);
+      }
+    }
+    y += 40;
+  }
+  y += 8;
+  line('WORLDS', '#8ef', 'bold 12px monospace');
+  y += 18;
+  for (const b of Object.keys(BIOME_LORE)) {
+    ctx.textAlign = 'left';
+    if (y > clipY - 20 && y < clipY + clipH + 20) {
+      ctx.fillStyle = '#cde';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(b.toUpperCase(), F.x + 40, y);
+      ctx.fillStyle = '#9ab';
+      ctx.font = '10px monospace';
+      ctx.fillText(BIOME_LORE[b], F.x + 150, y);
+    }
+    y += 18;
+  }
+  y += 12;
+  line('FACTIONS', '#8ef', 'bold 12px monospace');
+  y += 18;
+  for (const f of Object.keys(FACTION_LORE)) {
+    if (y > clipY - 20 && y < clipY + clipH + 20) {
+      ctx.fillStyle = '#cde';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(f.toUpperCase(), F.x + 40, y);
+      ctx.fillStyle = '#9ab';
+      ctx.font = '10px monospace';
+      wrapText(ctx, FACTION_LORE[f], F.x + 150, y, F.w - 190, 13);
+    }
+    y += 34;
+  }
+  g._codexMax = (y + g.codexScroll) - clipY - clipH + 40;
+  ctx.restore();
+
+  if ((g._codexMax || 0) > 0) {
+    button(g, 'SCROLL ▲', F.x + F.w - 220, F.y + F.h - 42, 90, 30, () => uiScroll(g, -3));
+    button(g, 'SCROLL ▼', F.x + F.w - 120, F.y + F.h - 42, 90, 30, () => uiScroll(g, 3));
+  }
+  if (g.codexScroll > (g._codexMax || 0) && g._codexMax != null && g._codexMax > 0) g.codexScroll = g._codexMax;
+  button(g, g.uiRoot === 'pause' ? 'BACK   (Esc)' : 'CLOSE   (Esc)', F.x + 26, F.y + F.h - 42, 200, 30, () => uiPop(g));
+}
+
+function codexName(kind) {
+  return kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+// cheap silhouette for the codex — reuse the vector primitives from draw.js
+function drawCodexFigure(ctx, kind, x, y, t) {
+  ctx.save();
+  const o = { t, gait: 0 };
+  if (kind.indexOf('replicator') === 0) spider(ctx, x, y, t * 0.6, 1.5, '#9ad0ff', o);
+  else if (kind === 'scavenger') critter(ctx, x, y, 0.4, 1.4, '#b9a', o);
+  else if (kind.indexOf('wraith') === 0) figure(ctx, x, y, 0.5, 0.85, '#6b4a72', '#d7ffda', o);
+  else if (kind === 'nexus') spider(ctx, x, y, t * 0.3, 2.2, '#f0b64a', o);
+  else if (kind === 'boss') figure(ctx, x, y, 0.5, 1.15, '#7a2b2b', '#ffe6c8', o);
+  else figure(ctx, x, y, 0.5, 0.95, '#5a4a2a', '#ffe6c8', o); // jaffa family
+  ctx.restore();
+}
+
+// ---- screen brightness ------------------------------------------------
+function applyGamma(g) {
+  const gm = g.save && g.save.settings && g.save.settings.gamma;
+  if (!gm || gm === 1) return;
+  const { ctx, view } = g;
+  ctx.save();
+  if (gm < 1) {
+    ctx.globalCompositeOperation = 'multiply';
+    const v = Math.round(255 * gm);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+  } else {
+    ctx.globalCompositeOperation = 'screen';
+    const v = Math.round(255 * Math.min(0.6, gm - 1));
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+  }
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.restore();
+}
+
+// ---- gamepad aim-assist feed ----------------------------------------
+function feedAimAssist(g) {
+  if (g.state !== 'play' || !g.save.settings || !g.save.settings.aimAssist || !g.enemies) {
+    setAimAssistTargets(null);
+    return;
+  }
+  const pts = [];
+  for (const e of g.enemies) {
+    if (!e.alive || e.state !== 'active' || e.neutral) continue;
+    pts.push({
+      x: (e.x - g.cam.x) * ZOOM + g.view.w / 2,
+      y: (e.y - g.cam.y) * ZOOM + g.view.h / 2,
+    });
+  }
+  setAimAssistTargets(pts);
+}
+
+// ---- first-run tutorial --------------------------------------------
+const HUB_TIPS = [
+  { txt: 'Walk into the gate to deploy · visit the consoles to spend what you earn · the Briefing Room holds your current Operation' },
+];
+const FIELD_TIPS = [
+  { txt: 'WASD to move · mouse to aim · click to fire', check: (g) => g._tipMoved },
+  { txt: 'SPACE dodges — you are invulnerable mid-roll', check: (g) => (g.player && g.player.dodge > 0) },
+  { txt: 'Clear the sectors, reach the DHD, then press E to dial deeper or home' },
+  { txt: 'You can only see what is in your line of sight' },
+];
+
+function queueTips(g, list, tag, final) {
+  if (g.save.settings.seenTutorial) return;
+  if (g._tipsQueued === tag) return;
+  g._tipsQueued = tag;
+  g.tips = { list: list.map((t) => ({ ...t })), i: 0, t: 0, final: !!final };
+}
+
+function updateTips(g, dt) {
+  if (g.state === 'play' && g.player) {
+    if (g._tipSpawn == null) g._tipSpawn = { x: g.player.x, y: g.player.y };
+    if (Math.hypot(g.player.x - g._tipSpawn.x, g.player.y - g._tipSpawn.y) > 40) g._tipMoved = true;
+  }
+  const T = g.tips;
+  if (!T || T.i >= T.list.length) return;
+  T.t += dt;
+  const tip = T.list[T.i];
+  const dismissed =
+    pressed('Space') || pressed('Enter') || pressed('Escape') ||
+    keyHit(g, 'up', 'KeyW') || keyHit(g, 'down', 'KeyS') ||
+    keyHit(g, 'left', 'KeyA') || keyHit(g, 'right', 'KeyD') ||
+    keyHit(g, 'interact', 'KeyE') || (mouse.down && !g.mouseWasDown);
+  const auto = tip.check && tip.check(g) && T.t > 1.4;
+  if (T.t > 6 || auto || (dismissed && T.t > 0.35)) {
+    T.i++;
+    T.t = 0;
+    if (T.i >= T.list.length && T.final) {
+      g.save.settings.seenTutorial = true;
+      persist(g.save);
+    }
+  }
+}
+
+function renderTips(g, dt) {
+  const T = g.tips;
+  if (!T || T.i >= T.list.length) return;
+  const { ctx, view } = g;
+  textReset(ctx);
+  const tip = T.list[T.i];
+  ctx.font = '12px monospace';
+  const tw = Math.min(view.w - 80, ctx.measureText(tip.txt).width + 40);
+  const bw = Math.max(260, tw);
+  const bh = 52;
+  const bx = (view.w - bw) / 2;
+  const by = view.h - 132;
+  ctx.fillStyle = 'rgba(8,12,20,0.92)';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = 'rgba(120,200,255,0.6)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = '#8ef';
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`TIP ${T.i + 1}/${T.list.length}`, bx + 12, by + 15);
+  ctx.fillStyle = '#dff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(tip.txt, view.w / 2, by + 33);
+  ctx.fillStyle = '#567';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('any key →', bx + bw - 10, by + bh - 8);
+  ctx.textAlign = 'left';
+}
+
+// ---- reset campaign ---------------------------------------------------
+function resetCampaign(g) {
+  const d = defaultSave();
+  g.save.campaign = d.campaign;
+  g.save.tech = [];
+  g.save.weapons = {};
+  g.save.bestiary = {};
+  g.save.known = [HOME];
+  g.save.naquadah = 0;
+  g.save.intel = 0;
+  g.save.salvage = 0;
+  g.save.deepestThreat = 0;
+  g.save.runs = 0;
+  try { ensureCampaign(g.save); } catch (e) {}
+  persist(g.save);
+  g.message('Campaign wiped — the Incursion begins again');
 }
 
 function starfield(g) {
@@ -6538,37 +7104,63 @@ function renderMenu(g) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
+  const titleY = Math.min(view.h * 0.36, 250);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8cf';
   ctx.shadowBlur = 24;
   ctx.shadowColor = '#39f';
   ctx.font = 'bold 54px monospace';
-  ctx.fillText('GATE  CRAWLER', cx, view.h * 0.46);
+  ctx.fillText('GATE  CRAWLER', cx, titleY);
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#7a9';
   ctx.font = '13px monospace';
-  ctx.fillText('a procedural top-down SG-1 roguelite', cx, view.h * 0.46 + 28);
-  ctx.fillStyle = '#9cf';
+  ctx.fillText('a procedural top-down SG-1 roguelite', cx, titleY + 24);
+
+  // one-line campaign hook straight off the active Operation
+  let hook = 'The System Lords are massing. Hold the line.';
+  try {
+    const cs = campaignStatus(g.save);
+    if (cs) {
+      hook = cs.won
+        ? 'The Incursion Nexus is dark. Earth endures — deploy anyway.'
+        : `${String(cs.activeName || 'The Incursion').toUpperCase()}  ·  ${cs.opsDone}/${cs.opsTotal} operations complete`;
+    }
+  } catch (e) {}
+  ctx.fillStyle = '#e9b96a';
   ctx.font = '12px monospace';
-  ctx.fillText(
-    `banked ${g.save.naquadah} N · ${g.save.intel || 0} intel     deepest threat ${g.save.deepestThreat}     sorties ${g.save.runs}     worlds mapped ${g.save.known.length}`,
-    cx,
-    view.h * 0.46 + 50
-  );
+  ctx.fillText(hook, cx, titleY + 46);
 
-  button(g, 'ENTER  STARGATE  COMMAND   (Enter)', cx - 190, view.h * 0.6, 380, 48, () => enterHub(g));
+  // --- vertical menu ---
+  const mBtnW = 300;
+  const mBtnH = 40;
+  const gap = 8;
+  const startY = titleY + 78;
+  ctx.textAlign = 'center';
+  MENU_ITEMS.forEach((it, i) => {
+    const by = startY + i * (mBtnH + gap);
+    const sel = i === g.menuSel;
+    if (sel) {
+      ctx.fillStyle = '#9cf';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText('▸', cx - mBtnW / 2 - 16, by + mBtnH / 2 + 6);
+    }
+    button(g, it.key, cx - mBtnW / 2, by, mBtnW, mBtnH, () => it.fn(g));
+  });
+  const hintY = startY + MENU_ITEMS.length * (mBtnH + gap) + 10;
+  ctx.fillStyle = '#8ad';
+  ctx.font = '11px monospace';
+  ctx.fillText((MENU_ITEMS[g.menuSel] || MENU_ITEMS[0]).hint, cx, hintY);
 
+  // small controls hint + career stats along the base
   ctx.fillStyle = '#678';
-  ctx.font = '12px monospace';
+  ctx.font = '11px monospace';
+  ctx.fillText('↑↓ / mouse to choose · Enter to select · full controls & rebinding under Settings', cx, view.h - 44);
+  ctx.fillStyle = '#567';
+  ctx.font = '10px monospace';
   ctx.fillText(
-    'WASD move   ·   mouse aim   ·   LMB fire   ·   SPACE dodge   ·   Q heal   ·   X / wheel swap weapon   ·   G grenade   ·   R reload   ·   TAB gear',
+    `banked ${g.save.naquadah} N · ${g.save.intel || 0} intel  ·  deepest threat ${g.save.deepestThreat}  ·  sorties ${g.save.runs}  ·  worlds mapped ${g.save.known.length}`,
     cx,
-    view.h * 0.6 + 90
-  );
-  ctx.fillText(
-    'at the SGC: visit the Armory, Research Lab and Infirmary, then walk into the gate to deploy.',
-    cx,
-    view.h * 0.6 + 110
+    view.h - 26
   );
 }
 

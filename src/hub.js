@@ -35,7 +35,7 @@ const DOORS = [
 ];
 
 const GATE_T = { x: 24, y: 4 }; // the gate's tile in the embarkation room
-const DIALER_T = { x: 20, y: 18 }; // dialling console in the control room
+const DIALER_T = { x: 18, y: 20 }; // dialling console in the control room
 
 // three consoles: the Armory covers loadout AND drawing unlocked weapons
 // (the old separate Requisitions console folded into it).
@@ -171,10 +171,12 @@ function box(c, x, y, w, h, body, edge, radius) {
   c.restore();
 }
 
+// a soft light pool — steep falloff so it reads as light, not fog
 function pool(c, x, y, r, color, a) {
-  const g = c.createRadialGradient(x, y, r * 0.05, x, y, r);
+  const g = c.createRadialGradient(x, y, r * 0.04, x, y, r);
   g.addColorStop(0, rgba(color, a));
-  g.addColorStop(0.55, rgba(color, a * 0.4));
+  g.addColorStop(0.32, rgba(color, a * 0.42));
+  g.addColorStop(0.66, rgba(color, a * 0.12));
   g.addColorStop(1, rgba(color, 0));
   c.fillStyle = g;
   c.fillRect(x - r, y - r, r * 2, r * 2);
@@ -483,17 +485,77 @@ function embarkDecor(c, r, world) {
   banner(c, gc.x - 168, R.y - 4);
   banner(c, gc.x + 168, R.y - 4);
 
+  // a MALP parked off the ramp, waiting for its next recon
+  malp(c, R.x + 96, bot + 6);
+  // equipment carts and cases staged along the east wall
+  for (let i = 0; i < 3; i++) {
+    const y = R.y + 150 + i * 74;
+    box(c, R.x + R.w - 60, y, 40, 30, 'rgba(30,38,30,0.95)', 'rgba(150,175,120,0.35)', 2);
+    c.fillStyle = 'rgba(201,162,39,0.25)';
+    c.fillRect(R.x + R.w - 56, y + 12, 32, 3);
+  }
+  // benches for teams waiting on a go
+  for (const bx2 of [R.x + 40, R.x + R.w - 116]) {
+    box(c, bx2, R.y + 92, 76, 16, 'rgba(34,40,50,0.9)', 'rgba(130,160,190,0.28)', 3);
+  }
+  // cable trunk clipped down the west wall, running to the control room
+  c.save();
+  c.strokeStyle = 'rgba(90,110,130,0.3)';
+  c.lineWidth = 5;
+  c.lineCap = 'round';
+  c.beginPath();
+  c.moveTo(R.x + 12, R.y + 130);
+  c.lineTo(R.x + 12, R.y + R.h - 6);
+  c.stroke();
+  c.strokeStyle = 'rgba(160,190,220,0.12)';
+  c.lineWidth = 1.6;
+  c.stroke();
+  c.strokeStyle = 'rgba(30,38,48,0.7)';
+  c.lineWidth = 2;
+  for (let y = R.y + 150; y < R.y + R.h - 10; y += 54) {
+    c.beginPath();
+    c.moveTo(R.x + 6, y);
+    c.lineTo(R.x + 18, y);
+    c.stroke();
+  }
+  c.restore();
+
   // conduit along the east wall + ceiling lighting pools down the room
   pipes(c, R.x + R.w - 14, R.y + 20, R.x + R.w - 14, R.y + R.h - 20, 3);
   for (let i = 0; i < 3; i++) {
-    pool(c, R.x + 62, R.y + 90 + i * 130, 74, '#cfe0f0', 0.05);
-    pool(c, R.x + R.w - 62, R.y + 90 + i * 130, 74, '#cfe0f0', 0.05);
+    pool(c, R.x + 62, R.y + 90 + i * 130, 92, '#dce8f4', 0.10);
+    pool(c, R.x + R.w - 62, R.y + 90 + i * 130, 92, '#dce8f4', 0.10);
   }
-  pool(c, gc.x, gc.y + 40, 150, '#5aa8ff', 0.05);
+  pool(c, gc.x, gc.y + 40, 190, '#5aa8ff', 0.10);
+  pool(c, gc.x, bot + 40, 150, '#cfe0f0', 0.07);
 
-  // camera + speaker fittings, and the stairs marker down to control
+  // stairs marker down to control
   stencil(c, 'TO CONTROL  ▼', P(19) + TILE, P(15) - 8, 10, '#8fc0e0', 0.45);
-  stencil(c, 'GATE ROOM  ·  SG TEAMS ONLY', gc.x, R.y + R.h - 14, 10, '#7fa8c4', 0.22);
+  stencil(c, 'SG TEAMS ONLY', R.x + 106, R.y + R.h - 24, 10, '#7fa8c4', 0.26);
+}
+
+// the wheeled recon probe that goes through first
+function malp(c, x, y) {
+  c.save();
+  c.translate(x, y);
+  box(c, -22, -16, 44, 32, 'rgba(38,46,38,0.95)', 'rgba(160,185,130,0.45)', 3);
+  c.fillStyle = 'rgba(20,26,20,0.9)';
+  for (const wy of [-14, 0, 14]) {
+    c.fillRect(-26, wy - 4, 6, 9);
+    c.fillRect(20, wy - 4, 6, 9);
+  }
+  c.strokeStyle = 'rgba(190,215,240,0.5)';
+  c.lineWidth = 1.4;
+  c.beginPath();
+  c.moveTo(0, -14);
+  c.lineTo(0, -26);
+  c.stroke();
+  c.fillStyle = 'rgba(140,220,255,0.6)';
+  c.beginPath();
+  c.arc(0, -28, 3, 0, TAU);
+  c.fill();
+  c.restore();
+  stencil(c, 'MALP-4', x, y + 26, 7.5, '#9fc4e0', 0.35);
 }
 
 // SGC shoulder-flash: chevron over a stylised gate ring
@@ -592,6 +654,31 @@ function controlDecor(c, r, world) {
   c.fillRect(R.x + 22, wy, R.w - 44, 16);
   c.restore();
 
+  // gate light spilling through the glass onto the control-room floor
+  const spill = c.createLinearGradient(0, R.y, 0, R.y + 96);
+  spill.addColorStop(0, 'rgba(110,190,255,0.14)');
+  spill.addColorStop(1, 'rgba(110,190,255,0)');
+  c.fillStyle = spill;
+  c.fillRect(R.x + 22, R.y, R.w - 44, 96);
+
+  // safety railing along the window ledge
+  c.save();
+  c.strokeStyle = 'rgba(170,200,230,0.32)';
+  c.lineWidth = 2.4;
+  c.beginPath();
+  c.moveTo(R.x + 26, R.y + 16);
+  c.lineTo(R.x + R.w - 26, R.y + 16);
+  c.stroke();
+  c.lineWidth = 1.3;
+  c.strokeStyle = 'rgba(170,200,230,0.18)';
+  for (let x = R.x + 40; x < R.x + R.w - 30; x += 40) {
+    c.beginPath();
+    c.moveTo(x, R.y + 16);
+    c.lineTo(x, R.y + 4);
+    c.stroke();
+  }
+  c.restore();
+
   // a bank of dialling consoles facing the window
   for (let i = 0; i < 5; i++) {
     const x = R.x + 54 + i * 96;
@@ -601,24 +688,51 @@ function controlDecor(c, r, world) {
     // keyboard shelf
     c.fillStyle = 'rgba(70,84,100,0.5)';
     c.fillRect(x - 26, y + 16, 52, 7);
-    chair(c, x, y + 40, Math.PI, 1);
+    chair(c, x, y + 44, Math.PI, 1.15);
   }
-  stencil(c, 'DIALLING COMPUTER', R.x + R.w / 2, R.y + 100, 10, '#7fa8c4', 0.26);
+  stencil(c, 'DIALLING COMPUTER', R.x + R.w / 2, R.y + 82, 10, '#7fa8c4', 0.24);
 
-  // status board on the south wall
-  const bx = R.x + R.w / 2 - 130;
+  // a second, lower bank of analyst desks
+  for (let i = 0; i < 2; i++) {
+    const x = R.x + 220 + i * 130;
+    const y = R.y + 190;
+    box(c, x - 40, y - 14, 80, 28, 'rgba(20,27,36,0.92)', 'rgba(130,175,215,0.32)', 3);
+    screen(c, x - 22, y - 10, 44, 16, '#4fa8d8');
+    chair(c, x, y + 36, Math.PI, 1.15);
+    c.fillStyle = 'rgba(200,225,250,0.10)';
+    c.fillRect(x - 34, y + 18, 22, 8); // scattered paper
+  }
+
+  // cable channel running the length of the floor
+  c.save();
+  c.fillStyle = 'rgba(12,16,22,0.4)';
+  c.fillRect(R.x + 26, R.y + 128, R.w - 52, 10);
+  c.strokeStyle = 'rgba(150,180,210,0.14)';
+  c.lineWidth = 1;
+  c.strokeRect(R.x + 26, R.y + 128, R.w - 52, 10);
+  for (let x = R.x + 34; x < R.x + R.w - 30; x += 16) {
+    c.beginPath();
+    c.moveTo(x, R.y + 128);
+    c.lineTo(x, R.y + 138);
+    c.stroke();
+  }
+  c.restore();
+
+  // status board on the south wall — the live layer writes on it
+  const bx = R.x + R.w / 2 - 170;
   const by = R.y + R.h - 34;
-  screen(c, bx, by, 260, 26, '#4fa8d8');
-  stencil(c, 'GATE  ·  IRIS  ·  SGC NETWORK', bx + 130, by + 13, 9, '#9fd0ee', 0.5);
+  screen(c, bx, by, 340, 26, '#4fa8d8');
 
   // side racks of humming equipment
   for (let i = 0; i < 3; i++) {
-    box(c, R.x + 14, R.y + 120 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
-    box(c, R.x + R.w - 40, R.y + 120 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
+    box(c, R.x + 14, R.y + 150 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
+    box(c, R.x + R.w - 40, R.y + 150 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
   }
   pipes(c, R.x + 8, R.y + 16, R.x + 8, R.y + R.h - 16, 2);
-  pool(c, R.x + R.w / 2, R.y + 60, 150, '#7fc8f0', 0.06);
-  pool(c, world.dialer.x, world.dialer.y, 84, '#e8a33c', 0.05);
+  pool(c, R.x + R.w / 2, R.y + 48, 190, '#7fc8f0', 0.09);
+  pool(c, R.x + 220, R.y + 190, 96, '#cfe0f0', 0.06);
+  pool(c, R.x + 350, R.y + 190, 96, '#cfe0f0', 0.06);
+  pool(c, world.dialer.x, world.dialer.y, 96, '#e8a33c', 0.09);
 }
 
 // ---- 5. ready room / armoury --------------------------------------------
@@ -643,7 +757,54 @@ function readyDecor(c, r) {
   const bx = R.x + 36;
   const by = R.y + 210;
   plate(c, bx - 12, by - 40, 200, 96, 0.2);
-  pool(c, bx + 88, by + 4, 96, '#e8d8a0', 0.08);
+  pool(c, bx + 88, by + 4, 50, '#e8d8a0', 0.06);
+
+  // kit table: vests, mags and a helmet laid out ready to be picked up
+  const kx = R.x + 240;
+  const ky = R.y + 170;
+  box(c, kx - 56, ky - 30, 112, 60, 'rgba(30,36,44,0.92)', 'rgba(130,160,190,0.3)', 3);
+  c.save();
+  c.fillStyle = 'rgba(84,100,72,0.8)';
+  rr(c, kx - 46, ky - 20, 34, 40, 5);
+  c.fill();
+  c.fillStyle = 'rgba(150,175,120,0.25)';
+  c.fillRect(kx - 40, ky - 10, 22, 4);
+  c.fillRect(kx - 40, ky - 2, 22, 4);
+  c.fillStyle = 'rgba(60,70,84,0.9)';
+  for (let i = 0; i < 6; i++) c.fillRect(kx - 2 + (i % 3) * 9, ky - 18 + ((i / 3) | 0) * 14, 6, 11);
+  c.strokeStyle = 'rgba(160,190,215,0.45)';
+  c.lineWidth = 1.6;
+  c.beginPath();
+  c.arc(kx + 36, ky + 2, 11, 0, TAU);
+  c.stroke();
+  c.restore();
+  pool(c, kx, ky, 84, '#dce8f4', 0.06);
+  stencil(c, 'PRE-MISSION KIT', kx, ky + 42, 8, '#7fa8c4', 0.3);
+
+  // scuffed boot prints leading toward the gate room door
+  c.save();
+  c.fillStyle = 'rgba(180,200,220,0.05)';
+  for (let i = 0; i < 9; i++) {
+    const px2 = R.x + 150 + i * 32;
+    const py2 = R.y + 268 - i * 4 + (i % 2) * 11;
+    c.beginPath();
+    c.ellipse(px2, py2, 4.5, 2.6, 0.2, 0, TAU);
+    c.fill();
+  }
+  c.restore();
+
+  // duffels dumped by the wall
+  for (const [dx2, dy2] of [[R.x + 60, R.y + R.h - 44], [R.x + 96, R.y + R.h - 36]]) {
+    c.save();
+    c.fillStyle = 'rgba(46,52,44,0.92)';
+    c.beginPath();
+    c.ellipse(dx2, dy2, 19, 11, 0.2, 0, TAU);
+    c.fill();
+    c.strokeStyle = 'rgba(140,165,120,0.3)';
+    c.lineWidth = 1.2;
+    c.stroke();
+    c.restore();
+  }
 
   // gear on the west wall: vests and helmets in silhouette
   for (let i = 0; i < 4; i++) {
@@ -688,8 +849,8 @@ export const TROPHIES = [
 export function trophySpots(r) {
   const R = r.rectPx;
   const out = [];
-  for (let i = 0; i < 3; i++) out.push({ x: R.x + 62 + i * 100, y: R.y + 34, t: TROPHIES[i] });
-  for (let i = 0; i < 3; i++) out.push({ x: R.x + 62 + i * 100, y: R.y + R.h - 92, t: TROPHIES[i + 3] });
+  for (let i = 0; i < 3; i++) out.push({ x: R.x + 76 + i * 96, y: R.y + 34, t: TROPHIES[i] });
+  for (let i = 0; i < 3; i++) out.push({ x: R.x + 76 + i * 96, y: R.y + R.h - 158, t: TROPHIES[i + 3] });
   return out;
 }
 
@@ -698,11 +859,55 @@ function trophyDecor(c, r) {
   c.fillStyle = 'rgba(30,36,48,0.28)';
   c.fillRect(R.x, R.y, R.w, R.h);
   // a carpet runner down the middle of the hall
-  c.fillStyle = 'rgba(70,48,40,0.22)';
-  c.fillRect(R.x + 40, R.y + 92, R.w - 80, R.h - 200);
-  c.strokeStyle = 'rgba(201,162,39,0.2)';
-  c.lineWidth = 2;
-  c.strokeRect(R.x + 40, R.y + 92, R.w - 80, R.h - 200);
+  const cy0 = R.y + 92;
+  const ch = R.h - 268;
+  c.fillStyle = 'rgba(56,34,28,0.4)';
+  c.fillRect(R.x + 52, cy0, R.w - 104, ch);
+  c.strokeStyle = 'rgba(140,96,60,0.25)';
+  c.lineWidth = 5;
+  c.strokeRect(R.x + 56, cy0 + 4, R.w - 112, ch - 8);
+  c.strokeStyle = 'rgba(201,162,39,0.14)';
+  c.lineWidth = 1.2;
+  c.strokeRect(R.x + 64, cy0 + 12, R.w - 128, ch - 24);
+
+  // a scale model of the gate on a plinth, centre of the hall
+  const mx = R.x + R.w / 2;
+  const my = cy0 + ch / 2;
+  c.save();
+  c.fillStyle = 'rgba(18,23,31,0.95)';
+  rr(c, mx - 34, my - 30, 68, 60, 5);
+  c.fill();
+  c.strokeStyle = 'rgba(150,185,220,0.4)';
+  c.lineWidth = 1.5;
+  c.stroke();
+  c.strokeStyle = 'rgba(180,215,245,0.6)';
+  c.lineWidth = 4;
+  c.beginPath();
+  c.arc(mx, my - 2, 19, 0, TAU);
+  c.stroke();
+  c.fillStyle = 'rgba(201,162,39,0.7)';
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * TAU - Math.PI / 2;
+    c.beginPath();
+    c.arc(mx + Math.cos(a) * 19, my - 2 + Math.sin(a) * 19, 1.7, 0, TAU);
+    c.fill();
+  }
+  c.restore();
+  pool(c, mx, my, 90, '#cfe0f0', 0.09);
+  stencil(c, 'ORIGINAL SURVEY MODEL', mx, my + 40, 7.5, '#9fc4e0', 0.35);
+
+  // memorial name wall on the east side — those who did not come home
+  const nx = R.x + R.w - 40;
+  c.save();
+  c.fillStyle = 'rgba(14,18,24,0.9)';
+  c.fillRect(nx - 18, R.y + 96, 32, 200);
+  c.strokeStyle = 'rgba(201,162,39,0.35)';
+  c.lineWidth = 1.4;
+  c.strokeRect(nx - 18, R.y + 96, 32, 200);
+  c.fillStyle = 'rgba(210,225,240,0.22)';
+  for (let i = 0; i < 22; i++) c.fillRect(nx - 13, R.y + 106 + i * 8.6, 22, 2);
+  c.restore();
+  stencil(c, 'IN MEMORIAM', nx - 2, R.y + 84, 8, '#c9a227', 0.5);
 
   for (const s of trophySpots(r)) {
     // pedestal
@@ -739,8 +944,7 @@ function trophyDecor(c, r) {
   c.strokeStyle = 'rgba(201,162,39,0.25)';
   c.lineWidth = 1;
   c.strokeRect(px - 112, py - 20, 224, 40);
-  pool(c, px, py, 110, '#c9a227', 0.05);
-  stencil(c, 'STAFF WEAPON RACK', R.x + R.w - 66, R.y + 128, 7.5, '#9fc4e0', 0.3, 'center', -Math.PI / 2);
+  pool(c, px, py, 130, '#c9a227', 0.08);
 }
 
 // little procedural relics, all drawn at roughly 34px across
@@ -905,9 +1109,40 @@ function infirmDecor(c, r) {
     c.fillStyle = 'rgba(190,225,245,0.2)';
     c.fillRect(R.x + R.w - 36, R.y + 56 + i * 52, 22, 2);
   }
+  // an examination table under a surgical lamp, and a gurney parked by it
+  const tx = R.x + 250;
+  const ty = R.y + 150;
+  box(c, tx - 34, ty - 54, 68, 108, 'rgba(226,238,246,0.12)', 'rgba(180,215,240,0.45)', 6);
+  c.strokeStyle = 'rgba(180,215,240,0.25)';
+  c.lineWidth = 1;
+  c.strokeRect(tx - 26, ty - 44, 52, 88);
+  pool(c, tx, ty, 104, '#eaf6ff', 0.13);
+  c.save();
+  c.strokeStyle = 'rgba(200,235,255,0.35)';
+  c.lineWidth = 1.6;
+  c.beginPath();
+  c.arc(tx, ty, 26, 0, TAU);
+  c.stroke();
+  c.restore();
+  // IV stands
+  for (const [sx, sy] of [[tx - 52, ty - 40], [tx + 52, ty + 30]]) {
+    c.strokeStyle = 'rgba(190,225,245,0.4)';
+    c.lineWidth = 1.6;
+    c.beginPath();
+    c.arc(sx, sy, 5, 0, TAU);
+    c.stroke();
+    c.fillStyle = 'rgba(160,220,240,0.35)';
+    c.fillRect(sx - 2, sy - 12, 4, 8);
+  }
+  // duty desk with a chart
+  box(c, R.x + 208, R.y + R.h - 84, 88, 30, 'rgba(224,236,244,0.09)', 'rgba(180,215,240,0.35)', 3);
+  c.fillStyle = 'rgba(235,245,252,0.18)';
+  c.fillRect(R.x + 218, R.y + R.h - 76, 20, 14);
+  chair(c, R.x + 252, R.y + R.h - 34, -Math.PI / 2, 1.05);
+
   // eyewash + sink station in the south-west corner
-  const ex = R.x + 30;
-  const ey = R.y + R.h - 40;
+  const ex = R.x + 24;
+  const ey = R.y + R.h - 36;
   box(c, ex, ey, 54, 26, 'rgba(210,232,244,0.10)', 'rgba(180,215,240,0.4)', 2);
   c.strokeStyle = 'rgba(120,220,240,0.5)';
   c.lineWidth = 2;
@@ -916,8 +1151,8 @@ function infirmDecor(c, r) {
   c.moveTo(ex + 40, ey + 7);
   c.lineTo(ex + 40, ey + 19);
   c.stroke();
-  stencil(c, 'EYEWASH', ex + 27, ey - 12, 8, '#7fe8e0', 0.4);
-  stencil(c, 'STERILE FIELD', R.x + R.w / 2, R.y + R.h - 76, 9, '#9fd0ee', 0.2);
+  stencil(c, 'EYEWASH', ex + 27, ey + 34, 8, '#7fe8e0', 0.4);
+  stencil(c, 'STERILE FIELD', R.x + R.w / 2 + 40, R.y + 24, 9, '#9fd0ee', 0.2);
   pipes(c, R.x + 16, R.y + 8, R.x + R.w - 16, R.y + 8, 2, '#7fe8e0');
 }
 
@@ -927,14 +1162,36 @@ function briefDecor(c, r) {
   c.fillStyle = 'rgba(58,46,34,0.14)';
   c.fillRect(R.x, R.y, R.w, R.h);
 
-  // the long table
+  // a rug under the table
+  c.fillStyle = 'rgba(48,34,28,0.28)';
+  c.fillRect(R.x + 56, R.y + R.h / 2 - 150, R.w - 112, 290);
+
+  // the long table — dark walnut with a grain and an inlay edge
   const tx = R.x + R.w / 2;
   const ty = R.y + R.h / 2 - 6;
   c.save();
-  c.fillStyle = 'rgba(58,40,26,0.92)';
+  c.fillStyle = 'rgba(42,28,18,0.95)';
   rr(c, tx - 62, ty - 108, 124, 216, 40);
   c.fill();
-  c.strokeStyle = 'rgba(201,162,39,0.4)';
+  c.save();
+  c.clip();
+  c.strokeStyle = 'rgba(96,66,38,0.22)';
+  c.lineWidth = 1;
+  for (let i = 0; i < 14; i++) {
+    c.beginPath();
+    c.moveTo(tx - 60 + i * 9, ty - 110);
+    c.quadraticCurveTo(tx - 56 + i * 9, ty, tx - 60 + i * 9, ty + 110);
+    c.stroke();
+  }
+  const sheen = c.createLinearGradient(tx - 62, ty - 108, tx + 62, ty + 108);
+  sheen.addColorStop(0, 'rgba(255,225,170,0.07)');
+  sheen.addColorStop(0.5, 'rgba(255,225,170,0.01)');
+  sheen.addColorStop(1, 'rgba(255,225,170,0.05)');
+  c.fillStyle = sheen;
+  c.fillRect(tx - 62, ty - 108, 124, 216);
+  c.restore();
+  rr(c, tx - 62, ty - 108, 124, 216, 40);
+  c.strokeStyle = 'rgba(201,162,39,0.35)';
   c.lineWidth = 2;
   c.stroke();
   c.strokeStyle = 'rgba(255,225,170,0.10)';
@@ -990,8 +1247,46 @@ function briefDecor(c, r) {
     c.stroke();
   }
   stencil(c, 'COFFEE', cx + 22, cy - 10, 8, '#c9a227', 0.4);
-  pool(c, tx, ty, 150, '#e8d8a0', 0.05);
-  stencil(c, 'MISSION BRIEFING', R.x + R.w / 2, R.y + 68, 9, '#9fc4e0', 0.22);
+
+  // a sideboard with unit flags and a framed shot of the first team through
+  const sx2 = R.x + 22;
+  const sy2 = R.y + R.h - 96;
+  box(c, sx2, sy2, 34, 84, 'rgba(34,26,18,0.95)', 'rgba(201,162,39,0.35)', 3);
+  for (let i = 0; i < 2; i++) {
+    c.save();
+    c.translate(sx2 + 12 + i * 12, sy2 + 20 + i * 34);
+    c.strokeStyle = 'rgba(190,215,240,0.4)';
+    c.lineWidth = 1.4;
+    c.beginPath();
+    c.moveTo(0, -12);
+    c.lineTo(0, 14);
+    c.stroke();
+    c.fillStyle = i ? 'rgba(90,120,180,0.5)' : 'rgba(170,60,55,0.5)';
+    c.beginPath();
+    c.moveTo(0, -12);
+    c.lineTo(14, -7);
+    c.lineTo(0, -2);
+    c.closePath();
+    c.fill();
+    c.restore();
+  }
+  // a plant, because someone always brings one
+  c.save();
+  c.translate(R.x + 30, R.y + 44);
+  c.fillStyle = 'rgba(62,46,32,0.9)';
+  c.fillRect(-7, 2, 14, 11);
+  c.fillStyle = 'rgba(54,88,50,0.5)';
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * TAU;
+    c.beginPath();
+    c.ellipse(Math.cos(a) * 5, Math.sin(a) * 4 - 3, 4.6, 2.6, a, 0, TAU);
+    c.fill();
+  }
+  c.restore();
+
+  pool(c, tx, ty, 170, '#e8d8a0', 0.07);
+  pool(c, R.x + R.w / 2, R.y + 30, 120, '#7fc8f0', 0.05);
+  stencil(c, 'MISSION BRIEFING', R.x + R.w / 2, R.y + 70, 9, '#9fc4e0', 0.22);
 }
 
 // a small node-and-edge gate network sketch for the briefing screen
@@ -1082,9 +1377,9 @@ export function drawHubLive(ctx, world, t, p, save) {
   const bx = cR.x + cR.w / 2;
   const by = cR.y + cR.h - 21;
   ctx.textAlign = 'center';
-  ctx.font = 'bold 9px monospace';
+  ctx.font = 'bold 8px monospace';
   ctx.fillStyle = `rgba(120,255,190,${0.55 + 0.25 * Math.sin(t * 2)})`;
-  ctx.fillText('IRIS CLOSED  ·  GATE IDLE  ·  ALL TEAMS ACCOUNTED FOR', bx, by);
+  ctx.fillText('IRIS CLOSED   ·   GATE IDLE   ·   ALL TEAMS ACCOUNTED FOR', bx, by);
   ctx.restore();
 
   // --- memorial hall: cases brighten as you walk the runner
@@ -1231,10 +1526,10 @@ export function makeCrew(world) {
 }
 
 export const CREW_COLORS = {
-  marine: ['rgba(96,116,84,0.85)', 'rgba(150,170,130,0.9)'],
-  tech: ['rgba(84,104,130,0.85)', 'rgba(150,185,215,0.9)'],
-  sci: ['rgba(180,196,208,0.8)', 'rgba(215,230,240,0.9)'],
-  medic: ['rgba(200,214,220,0.85)', 'rgba(230,242,248,0.9)'],
+  marine: ['rgba(118,142,98,0.95)', 'rgba(178,198,152,1)'],
+  tech: ['rgba(104,132,166,0.95)', 'rgba(172,205,232,1)'],
+  sci: ['rgba(198,212,222,0.92)', 'rgba(228,240,248,1)'],
+  medic: ['rgba(214,228,234,0.95)', 'rgba(240,250,255,1)'],
 };
 
 export function updateCrew(crew, dt) {

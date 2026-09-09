@@ -4571,7 +4571,7 @@ function renderHub(g) {
       continue;
     }
     const col = CREW_COLORS[d.cr.role] || CREW_COLORS.tech;
-    drawHumanoid(ctx, d.cr.x, d.cr.y, d.cr.a, 0.82, col[0], col[1], {
+    drawHumanoid(ctx, d.cr.x, d.cr.y, d.cr.a, 0.95, col[0], col[1], {
       weapon: d.cr.role === 'marine',
       weaponLen: 10,
       weaponColor: 'rgba(200,220,240,0.7)',

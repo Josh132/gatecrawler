@@ -93,14 +93,21 @@ export function worldParams(addr, hop) {
     modChance -= 30;
   }
   const roomCount = 4 + (e % 3) + Math.min(2, Math.floor(threat / 2)); // 4..8
-  // biome loosely follows the faction, with a coin-flip between two looks
+  // biome follows the faction — each holds two or three looks, and the roll
+  // between them is a plain draw off the address stream so it stays stable
   const biomePools = {
-    jaffa: ['ruins', 'foundry'],
+    jaffa: ['temple', 'desert', 'jungle'],
     wraith: ['hive', 'ice'],
-    replicator: ['foundry', 'ice'],
+    replicator: ['foundry', 'atlantis'],
   };
-  const bp = biomePools[primary] || ['ruins', 'foundry'];
-  const biome = bp[h() % bp.length];
+  const bp = biomePools[primary] || biomePools.jaffa;
+  let biome = bp[h() % bp.length];
+  // the rarer looks sit out past the shallow worlds: an ancient city or an
+  // ossuary cut into the rock, both getting likelier the deeper you push
+  const rare = h();
+  if (threat >= 4 && rare % 100 < 8 + threat * 3) {
+    biome = ['catacomb', 'catacomb', 'atlantis'][(rare >> 9) % 3];
+  }
   return {
     address: normalize(addr),
     hop,

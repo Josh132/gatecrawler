@@ -42,7 +42,7 @@ const rr = (a, b) => a + Math.random() * (b - a);
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
-const ZOOM = 1.18;
+const ZOOM = 1.4;
 
 function defaultSave() {
   return { naquadah: 0, intel: 0, tech: [], maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
@@ -135,7 +135,7 @@ function modLabels(mods) {
 function worldMods(g) {
   const m = (g.params && g.params.mods) || [];
   return {
-    visionR: m.includes('black-fog') ? 235 : m.includes('eclipse') ? 330 : 560,
+    visionR: m.includes('black-fog') ? 330 : m.includes('eclipse') ? 470 : 780,
     naqMul: m.includes('naquadah-rich') ? 2 : 1,
     intelMul: m.includes('intel-rich') ? 2 : 1,
     lootMul: m.includes('black-fog') ? 1.4 : 1,
@@ -2777,11 +2777,11 @@ function clampCam(g) {
   const hpx = g.world.H * TILE;
   const halfW = g.view.w / 2 / ZOOM;
   const halfH = g.view.h / 2 / ZOOM;
-  // let the camera overscan the world edge by most of a half-view so the player
-  // stays near centre at the map border instead of pinned to the screen edge
-  // (the void past the wall shows, which reads fine)
-  const ovX = halfW * 0.62;
-  const ovY = halfH * 0.62;
+  // let the camera overscan the world edge so the player stays near centre at
+  // the map border instead of pinned to the screen edge (the void past the
+  // wall shows briefly, which reads fine)
+  const ovX = halfW * 0.5;
+  const ovY = halfH * 0.5;
   g.cam.x = wpx > (halfW - ovX) * 2 ? clamp(g.cam.x, halfW - ovX, wpx - halfW + ovX) : wpx / 2;
   g.cam.y = hpx > (halfH - ovY) * 2 ? clamp(g.cam.y, halfH - ovY, hpx - halfH + ovY) : hpx / 2;
 }
@@ -2799,6 +2799,8 @@ function render(g, dt) {
   }
 
   ctx.clearRect(0, 0, view.w, view.h);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic'; // never inherit a stray alignment across frames
   g.buttons = [];
   try {
     const arrow = g.panelOpen || g.station || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead';
@@ -4079,6 +4081,48 @@ function hexA(hex, a) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+// reset canvas text state so a block that forgot to set alignment can't inherit
+// 'center'/'right' from whatever drew last frame
+function textReset(ctx) {
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// split `text` into lines that each fit `maxW` at the ctx's current font.
+// measure-only — caller draws. long unbreakable tokens are hard-cut.
+function wrapLines(ctx, text, maxW) {
+  const out = [];
+  let line = '';
+  for (const w of String(text).split(/\s+/)) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width <= maxW || !line) {
+      line = test;
+    } else {
+      out.push(line);
+      line = w;
+    }
+    // a single word wider than the box: chop it
+    while (ctx.measureText(line).width > maxW && line.length > 1) {
+      let cut = line.length - 1;
+      while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxW) cut--;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut);
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+// draw `text` wrapped to `maxW` from (x,y); returns the y past the last line.
+function wrapText(ctx, text, x, y, maxW, lineH) {
+  let yy = y;
+  for (const l of wrapLines(ctx, text, maxW)) {
+    ctx.fillText(l, x, yy);
+    yy += lineH;
+  }
+  return yy;
+}
+
 function drawCrosshair(g) {
   const { ctx } = g;
   ctx.save();
@@ -4561,6 +4605,7 @@ function renderPanel(g) {
   }
 
   // tooltip for hovered item
+  textReset(ctx); // the scrap bar above left textAlign on 'center'
   for (const c of lay.cells) {
     if (c.loc.kind === 'scrap') continue;
     const hover = g.pmouse.x >= c.x && g.pmouse.x <= c.x + c.w && g.pmouse.y >= c.y && g.pmouse.y <= c.y + c.h;
@@ -4569,29 +4614,33 @@ function renderPanel(g) {
     if (!st || !ITEMS[st.id]) break;
     const def = ITEMS[st.id];
     const tier = stackRarity(st);
-    const tw = 214;
-    const tx = Math.min(c.x + c.w + 8, view.w - tw - 8);
-    const ty = c.y;
-    const th = tier !== 'common' ? 68 : 54;
+    const tw = 230;
+    const tx = clamp(c.x + c.w + 8, 8, view.w - tw - 8);
+    const inW = tw - 16;
+    // measure the content first, then size the box to it
+    ctx.font = '10px monospace';
+    const blLines = wrapLines(ctx, def.blurb || def.type, inW);
+    const sub = def.type === 'consumable' ? 'hotbar slot · use with 1-4' : def.type === 'armor' ? 'equip to ' + def.region : def.type;
+    const rarLine = tier !== 'common' ? (RARITY_LABEL[tier] || tier.toUpperCase()) + '  ·  +' + Math.round((RARITY_MULT[tier] - 1) * 100) + '% effect' : null;
+    const th = 24 + blLines.length * 13 + 14 + (rarLine ? 14 : 0);
+    const ty = clamp(c.y, 8, view.h - th - 8);
     ctx.fillStyle = 'rgba(6,10,16,0.96)';
     ctx.fillRect(tx, ty, tw, th);
     ctx.strokeStyle = tier !== 'common' ? RARITY_COLOR[tier] : def.color;
     ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
+    let yy = ty + 17;
     ctx.fillStyle = tier !== 'common' ? RARITY_COLOR[tier] : def.color;
     ctx.font = 'bold 12px monospace';
-    ctx.fillText(tier !== 'common' ? rarityAffixName(st.id, tier) : def.name, tx + 8, ty + 18);
+    ctx.fillText(tier !== 'common' ? rarityAffixName(st.id, tier) : def.name, tx + 8, yy);
+    yy += 16;
     ctx.fillStyle = '#bcd';
     ctx.font = '10px monospace';
-    ctx.fillText(def.blurb || def.type, tx + 8, ty + 36);
+    for (const l of blLines) { ctx.fillText(l, tx + 8, yy); yy += 13; }
     ctx.fillStyle = '#678';
-    ctx.fillText(
-      def.type === 'consumable' ? 'hotbar slot · use with 1-4' : def.type === 'armor' ? 'equip to ' + def.region : def.type,
-      tx + 8,
-      ty + 48
-    );
-    if (tier !== 'common') {
+    ctx.fillText(sub, tx + 8, yy + 1);
+    if (rarLine) {
       ctx.fillStyle = RARITY_COLOR[tier];
-      ctx.fillText((RARITY_LABEL[tier] || tier.toUpperCase()) + '  ·  +' + Math.round((RARITY_MULT[tier] - 1) * 100) + '% effect', tx + 8, ty + 62);
+      ctx.fillText(rarLine, tx + 8, yy + 15);
     }
     break;
   }
@@ -5096,25 +5145,38 @@ function renderResearchPanel(g) {
   ctx.fillStyle = '#667';
   ctx.fillText('■ locked (needs prereq / funds)', fr.x + 210, ly);
 
-  // hover tooltip — full description
+  // hover tooltip — full description, wrapped to the box
   if (hoverNode) {
-    const tw = 260;
-    const tx = clamp(g.pmouse.x + 12, fr.x, fr.x + fr.w - tw);
-    const ty = clamp(g.pmouse.y + 12, fr.y, fr.y + fr.h - 56);
+    textReset(ctx);
+    const tw = 264;
+    const inW = tw - 16;
+    const needsStr = hoverNode.requires.length
+      ? 'needs: ' + hoverNode.requires.map((r) => (nodeById(r) || {}).name || r).join(', ')
+      : null;
+    // measure wrap lines up front
+    ctx.font = '10px monospace';
+    const descLines = wrapLines(ctx, hoverNode.desc, inW);
+    ctx.font = '9px monospace';
+    const needsLines = needsStr ? wrapLines(ctx, needsStr, inW) : [];
+    const th = 26 + descLines.length * 13 + (needsLines.length ? 4 + needsLines.length * 12 : 0);
+    const tx = clamp(g.pmouse.x + 12, fr.x, fr.x + fr.w - tw - 4);
+    const ty = clamp(g.pmouse.y + 12, fr.y, fr.y + fr.h - th - 4);
     ctx.fillStyle = 'rgba(6,10,16,0.97)';
-    ctx.fillRect(tx, ty, tw, 52);
+    ctx.fillRect(tx, ty, tw, th);
     ctx.strokeStyle = '#6cf';
-    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, 51);
+    ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, th - 1);
     ctx.fillStyle = '#dff';
     ctx.font = 'bold 11px monospace';
     ctx.fillText(hoverNode.name, tx + 8, ty + 17);
     ctx.fillStyle = '#bcd';
     ctx.font = '10px monospace';
-    ctx.fillText(hoverNode.desc, tx + 8, ty + 34);
-    if (hoverNode.requires.length) {
+    let yy = ty + 33;
+    for (const l of descLines) { ctx.fillText(l, tx + 8, yy); yy += 13; }
+    if (needsLines.length) {
       ctx.fillStyle = '#89a';
       ctx.font = '9px monospace';
-      ctx.fillText('needs: ' + hoverNode.requires.map((r) => (nodeById(r) || {}).name || r).join(', '), tx + 8, ty + 46);
+      yy += 3;
+      for (const l of needsLines) { ctx.fillText(l, tx + 8, yy); yy += 12; }
     }
   }
 }

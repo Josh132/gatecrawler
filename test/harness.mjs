@@ -587,7 +587,7 @@ section('line of sight: polygon bounded, walls occlude, self is lit');
   const p = g.player;
   let maxr = 0;
   for (let i = 0; i < poly.length; i += 2) maxr = Math.max(maxr, Math.hypot(poly[i] - p.x, poly[i + 1] - p.y));
-  assert(maxr <= 563, `polygon never exceeds the view radius (max ${maxr | 0})`);
+  assert(maxr <= 800, `polygon never exceeds the view radius (max ${maxr | 0})`);
   assert(inPolyFlat(p.x, p.y, poly), 'player stands inside its own visibility polygon');
   // find a point one tile beyond the first wall east of the player — must be dark
   let beyond = null;

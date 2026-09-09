@@ -631,26 +631,27 @@ export function sunDisc(c, x, y, r, o) {
   c.beginPath();
   c.arc(0, 0, r, 0, Math.PI * 2);
   c.fill();
-  c.strokeStyle = rgba(gold, o.line == null ? 0.45 : o.line);
-  c.lineWidth = o.lw || 2;
+  const line = o.line == null ? 0.5 : o.line;
+  c.lineWidth = o.lw || 2.4;
   for (const k of [1, 0.62, 0.32]) {
+    c.strokeStyle = rgba(gold, line * (k === 1 ? 1 : 0.8));
     c.beginPath();
     c.arc(0, 0, r * k, 0, Math.PI * 2);
     c.stroke();
   }
-  c.lineWidth = 1.4;
+  c.lineWidth = 1.6;
   const rays = o.rays || 24;
   for (let i = 0; i < rays; i++) {
     const a = (i / rays) * Math.PI * 2;
     const r0 = r * 0.66;
-    const r1 = r * (i % 2 ? 0.99 : 0.88);
-    c.strokeStyle = rgba(i % 2 ? gold : deep, 0.42);
+    const r1 = r * (i % 2 ? 0.99 : 0.86);
+    c.strokeStyle = rgba(i % 2 ? gold : deep, (o.rayA == null ? 0.55 : o.rayA) * (i % 2 ? 1 : 0.8));
     c.beginPath();
     c.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
     c.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
     c.stroke();
   }
-  c.fillStyle = rgba(o.core || '#ffdd90', 0.26);
+  c.fillStyle = rgba(o.core || '#ffdd90', 0.3);
   c.beginPath();
   c.arc(0, 0, r * 0.19, 0, Math.PI * 2);
   c.fill();

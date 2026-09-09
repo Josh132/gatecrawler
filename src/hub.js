@@ -803,7 +803,20 @@ function readyDecor(c, r) {
   const bx = R.x + 36;
   const by = R.y + 210;
   plate(c, bx - 12, by - 40, 200, 96, 0.2);
-  pool(c, bx + 88, by + 4, 50, '#e8d8a0', 0.06);
+  // the lamp itself, so the light on the bench has a source
+  c.save();
+  c.translate(bx + 42, by - 30);
+  c.fillStyle = 'rgba(36,44,54,0.95)';
+  rr(c, -14, -5, 28, 10, 3);
+  c.fill();
+  c.strokeStyle = 'rgba(160,190,220,0.4)';
+  c.lineWidth = 1.2;
+  c.stroke();
+  c.fillStyle = 'rgba(255,238,190,0.55)';
+  c.fillRect(-11, 2, 22, 3);
+  c.restore();
+  pool(c, bx + 42, by - 12, 34, '#ffeebe', 0.11);
+  pool(c, bx + 42, by + 16, 26, '#ffeebe', 0.05);
 
   // kit table: vests, mags and a helmet laid out ready to be picked up
   const kx = R.x + 240;
@@ -1303,18 +1316,42 @@ function briefDecor(c, r) {
   screen(c, sx, sy, 184, 44, '#4fa8d8');
   netDiagram(c, sx + 6, sy + 5, 172, 34);
 
-  // blinds on the west wall — the window down into the control room
+  // the window down into the control room, blinds half drawn — kept clear of
+  // the doorway further south
+  const wy0 = P(16) + 10;
+  const wy1 = P(18) + 10;
   c.save();
-  c.strokeStyle = 'rgba(180,215,245,0.18)';
+  c.fillStyle = 'rgba(150,200,235,0.10)';
+  c.fillRect(R.x - 6, wy0, 16, wy1 - wy0);
+  c.strokeStyle = 'rgba(180,215,245,0.35)';
   c.lineWidth = 1.6;
-  for (let y = P(20); y < P(22); y += 5) {
+  c.strokeRect(R.x - 6, wy0, 16, wy1 - wy0);
+  c.strokeStyle = 'rgba(190,220,245,0.22)';
+  c.lineWidth = 1.4;
+  for (let y = wy0 + 4; y < wy0 + (wy1 - wy0) * 0.55; y += 5) {
     c.beginPath();
-    c.moveTo(R.x - 8, y);
-    c.lineTo(R.x + 2, y);
+    c.moveTo(R.x - 5, y);
+    c.lineTo(R.x + 9, y);
     c.stroke();
   }
-  c.fillStyle = 'rgba(150,200,235,0.07)';
-  c.fillRect(R.x - 8, P(20) - 6, 12, TILE * 2 + 12);
+  c.restore();
+  stencil(c, 'CONTROL', R.x + 26, (wy0 + wy1) / 2, 8, '#9fd0ee', 0.3, 'center', Math.PI / 2);
+
+  // a podium at the head of the room and a wall clock
+  box(c, R.x + 46, R.y + 108, 30, 22, 'rgba(40,28,18,0.95)', 'rgba(201,162,39,0.35)', 3);
+  c.save();
+  c.translate(R.x + 44, R.y + 200);
+  c.strokeStyle = 'rgba(190,215,240,0.4)';
+  c.lineWidth = 1.4;
+  c.beginPath();
+  c.arc(0, 0, 10, 0, TAU);
+  c.stroke();
+  c.beginPath();
+  c.moveTo(0, 0);
+  c.lineTo(0, -6);
+  c.moveTo(0, 0);
+  c.lineTo(5, 2);
+  c.stroke();
   c.restore();
 
   // coffee station in the corner
@@ -1538,12 +1575,17 @@ export function drawHubLive(ctx, world, t, p, save) {
 
   // --- ready room: the bench lamp flickers very slightly
   const rR = room('ready').rectPx;
+  const lx = rR.x + 78;
+  const ly = rR.y + 198;
+  const flick = 0.05 + 0.02 * Math.sin(t * 7.3);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.fillStyle = `rgba(240,220,160,${0.05 + 0.02 * Math.sin(t * 7.3)})`;
-  ctx.beginPath();
-  ctx.arc(rR.x + 124, rR.y + 214, 62, 0, TAU);
-  ctx.fill();
+  const lg = ctx.createRadialGradient(lx, ly, 2, lx, ly, 40);
+  lg.addColorStop(0, `rgba(255,238,190,${flick})`);
+  lg.addColorStop(0.4, `rgba(255,238,190,${flick * 0.4})`);
+  lg.addColorStop(1, 'rgba(255,238,190,0)');
+  ctx.fillStyle = lg;
+  ctx.fillRect(lx - 40, ly - 40, 80, 80);
   ctx.restore();
 }
 

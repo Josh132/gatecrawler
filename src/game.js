@@ -349,7 +349,7 @@ function enterHub(g) {
   g.state = 'hub';
   g.log = [];
   persist(g.save);
-  g.message('Stargate Command — Level 28');
+  g.message(g.save.runs > 0 ? 'Welcome back to Stargate Command — Level 28' : 'Stargate Command — Level 28');
 }
 
 function launchRun(g, addr) {

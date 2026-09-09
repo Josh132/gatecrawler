@@ -183,6 +183,57 @@ export function buildWorld(params) {
     });
   }
 
+  // a deterministic slice of rooms grow into one unused neighbour cell, turning
+  // into a 2x1 hall. Purely additive floor — the room graph, every doorway and
+  // the perimeter are untouched, so connectivity can only improve. Runs on its
+  // own rng stream so interior layouts downstream aren't shifted by the roll.
+  {
+    const HR = rngHelpers(makeRng('halls:' + params.seedStr));
+    const roomKeys = new Set(rooms.map((r) => r.gx + ',' + r.gy));
+    const claimed = new Set();
+    const dirs4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (const r of rooms) {
+      if (r.kind !== 'normal' && r.kind !== 'dhd') continue;
+      if (!HR.chance(r.kind === 'dhd' ? 0.5 : 0.22)) continue;
+      for (const [dx, dy] of HR.shuffle(dirs4)) {
+        const nx = r.gx + dx;
+        const ny = r.gy + dy;
+        if (nx < 0 || ny < 0 || nx >= roomsWide || ny >= roomsHigh) continue;
+        const k = nx + ',' + ny;
+        if (roomKeys.has(k) || claimed.has(k)) continue;
+        claimed.add(k);
+        r.big = dx !== 0 ? 'wide' : 'tall';
+        const ex = nx * ROOM_W;
+        const ey = ny * ROOM_H;
+        for (let y = 1; y < ROOM_H - 1; y++) {
+          for (let x = 1; x < ROOM_W - 1; x++) grid[at(ex + x, ey + y)] = 0;
+        }
+        // open the shared divider wall so the two cells read as one room
+        if (dx !== 0) {
+          const bx = dx > 0 ? r.ox + ROOM_W - 1 : r.ox;
+          for (let y = 1; y < ROOM_H - 1; y++) {
+            grid[at(bx, r.oy + y)] = 0;
+            grid[at(bx + dx, r.oy + y)] = 0;
+          }
+        } else {
+          const by = dy > 0 ? r.oy + ROOM_H - 1 : r.oy;
+          for (let x = 1; x < ROOM_W - 1; x++) {
+            grid[at(r.ox + x, by)] = 0;
+            grid[at(r.ox + x, by + dy)] = 0;
+          }
+        }
+        const rx = Math.min(r.ox, ex);
+        const ry = Math.min(r.oy, ey);
+        r.rectPx = {
+          x: rx * TILE, y: ry * TILE,
+          w: (dx !== 0 ? ROOM_W * 2 : ROOM_W) * TILE,
+          h: (dy !== 0 ? ROOM_H * 2 : ROOM_H) * TILE,
+        };
+        break;
+      }
+    }
+  }
+
   // carve doorways between grid-adjacent rooms (the 2-tile shared wall).
   // outdoor worlds get a wider 5-tile gap so the treeline reads as a path.
   const bdef = BIOMES[params.biome] || BIOMES.ruins;
@@ -232,6 +283,13 @@ export function buildWorld(params) {
         r.props.push({ tx: px, ty: py, kind });
       }
     };
+    // stricter guard for the newer built-interior shapes: keeps the whole
+    // 3-wide centre cross open, so every DW=1 doorway lane stays clear no
+    // matter how the cover is drawn.
+    const lane = (px, py) => Math.abs(px - cxT) <= 1 || Math.abs(py - cyT) <= 1;
+    const put2 = (px, py) => {
+      if (inRoom(px, py) && !lane(px, py)) grid[at(px, py)] = 1;
+    };
 
     if (outdoor) {
       // open-air layouts: scattered trees & boulders that are real cover
@@ -272,10 +330,14 @@ export function buildWorld(params) {
         }
       }
     } else {
-      const shape = r.kind === 'dhd' ? 'open' : R.pick(['open', 'open', 'arena', 'pillars', 'bisected']);
+      // weighted so ~10 of 12 rooms carry real cover for the Jaffa cover-AI,
+      // while doorway lanes + the centre always stay clear.
+      const pool = ['open', 'open', 'pillars', 'columns', 'columns', 'rubble',
+        'rubble', 'perimeter', 'cross', 'chokepoint', 'arena', 'bisected'];
+      const shape = r.kind === 'dhd' ? 'bossArena' : R.pick(pool);
       r.shape = shape;
       if (shape === 'open') {
-        const n = R.int(1, 3);
+        const n = R.int(2, 4);
         for (let i = 0; i < n; i++) put(r.ox + R.int(3, ROOM_W - 4), r.oy + R.int(3, ROOM_H - 4));
       } else if (shape === 'arena') {
         // a ring of pillars around the centre + corner blocks
@@ -283,10 +345,54 @@ export function buildWorld(params) {
           put(cxT + dx, cyT + dy);
         }
         for (const [dx, dy] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) put(cxT + dx, cyT + dy);
+      } else if (shape === 'bossArena') {
+        // wide fighting pit for the DHD: cover only in the outer ring, so the
+        // centre (pedestal + dial range) and every doorway lane stay wide open
+        for (const [dx, dy] of [
+          [-3, -3], [3, -3], [-3, 3], [3, 3],
+          [-5, -2], [5, -2], [-5, 2], [5, 2],
+          [-6, -3], [6, -3], [-6, 3], [6, 3],
+        ]) put2(cxT + dx, cyT + dy);
       } else if (shape === 'pillars') {
         for (let px = r.ox + 3; px <= r.ox + ROOM_W - 4; px += 2) {
           put(px, cyT - 2);
           put(px, cyT + 2);
+        }
+      } else if (shape === 'columns') {
+        // formal colonnade flanking a processional aisle — Jaffa hall
+        const rows = R.chance(0.5) ? [cyT - 3, cyT + 3] : [cyT - 2, cyT + 2];
+        for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px += 2) {
+          for (const py of rows) put2(px, py);
+        }
+      } else if (shape === 'rubble') {
+        // scattered debris — broken cover across the floor, lanes still clear
+        const n = R.int(8, 12);
+        for (let i = 0; i < n; i++) put2(r.ox + R.int(2, ROOM_W - 3), r.oy + R.int(2, ROOM_H - 3));
+      } else if (shape === 'perimeter') {
+        // cover hugging the walls, open middle
+        for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px += 2) {
+          put2(px, r.oy + 2);
+          put2(px, r.oy + ROOM_H - 3);
+        }
+        for (let py = r.oy + 3; py <= r.oy + ROOM_H - 4; py += 2) {
+          put2(r.ox + 2, py);
+          put2(r.ox + ROOM_W - 3, py);
+        }
+      } else if (shape === 'cross') {
+        // an L of cover in each quadrant — a broken plus with corner gaps
+        for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+          put2(cxT + sx * 2, cyT + sy * 2);
+          put2(cxT + sx * 3, cyT + sy * 2);
+          put2(cxT + sx * 2, cyT + sy * 3);
+        }
+      } else if (shape === 'chokepoint') {
+        // one wall dividing the room; the central cross keeps a 3-tile gap
+        if (R.chance(0.5)) {
+          const wx = cxT + (R.chance(0.5) ? 3 : -3);
+          for (let py = r.oy + 1; py < r.oy + ROOM_H - 1; py++) put2(wx, py);
+        } else {
+          const wy = cyT + (R.chance(0.5) ? 2 : -2);
+          for (let px = r.ox + 1; px < r.ox + ROOM_W - 1; px++) put2(px, wy);
         }
       } else if (shape === 'bisected') {
         // a short wall off-centre with a wide gap kept open on the doorway row

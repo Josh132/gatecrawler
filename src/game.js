@@ -51,6 +51,17 @@ import {
   FINALE_ADDRESS,
 } from './campaign.js';
 import {
+  SG_TEAMS,
+  teamById,
+  teamForName,
+  applyRoster,
+  BASE_UPGRADES,
+  hasBase,
+  baseMag,
+  canBuyBase,
+  buyBase,
+} from './roster.js';
+import {
   modsForWeapon,
   weaponStats,
   MOD_SLOTS,
@@ -80,6 +91,12 @@ function defaultSave() {
     intel: 0,
     salvage: 0, // workbench currency from scrapping weapons; kept in full on death
     tech: [],
+    // recovered SG teams — permanent passives, folded in fx() via applyRoster
+    roster: [],
+    // purchased SGC base upgrades (naquadah sink) — see BASE_UPGRADES
+    base: [],
+    // between-runs storage chest — { id, count, rarity } | null slots
+    stash: [],
     maxHpBonus: 0,
     deepestThreat: 0,
     runs: 0,
@@ -114,6 +131,9 @@ function normalizeSave(s) {
   }
   if (!s.campaign.progress) s.campaign.progress = {};
   if (!Array.isArray(s.campaign.completed)) s.campaign.completed = [];
+  if (!Array.isArray(s.roster)) s.roster = [];
+  if (!Array.isArray(s.base)) s.base = [];
+  if (!Array.isArray(s.stash)) s.stash = [];
   return s;
 }
 
@@ -176,7 +196,55 @@ try {
   /* icons.js not present yet */
 }
 function fx(g) {
-  return techEffects(g.save.tech || []);
+  const e = techEffects(g.save.tech || []);
+  // rescued SG teams stack their passives on top of the tech tree
+  applyRoster(e, g.save.roster || []);
+  // base upgrades that map straight onto effect keys — the rest are read via
+  // the helpers below (researchCostMul / modCostMul / stashCap / ...)
+  if (hasBase(g.save, 'heatSoften')) {
+    e.heatMul = (e.heatMul == null ? 1 : e.heatMul) * baseMag(g.save, 'heatSoften', 1);
+  }
+  if (hasBase(g.save, 'bestiaryDmgMul')) {
+    e.bestiaryDmgMul = (e.bestiaryDmgMul == null ? 1 : e.bestiaryDmgMul) * baseMag(g.save, 'bestiaryDmgMul', 1);
+  }
+  return e;
+}
+// base-upgrade effects that aren't folded into the effects object
+function researchCostMul(g) {
+  return hasBase(g.save, 'researchDiscount') ? baseMag(g.save, 'researchDiscount', 1) : 1;
+}
+function modCostMul(g) {
+  return hasBase(g.save, 'modDiscount') ? baseMag(g.save, 'modDiscount', 1) : 1;
+}
+function stashCap(g) {
+  return hasBase(g.save, 'stashSlots') ? (baseMag(g.save, 'stashSlots', 0) | 0) : 0;
+}
+function homeHealFull(g) {
+  return hasBase(g.save, 'homeHeal');
+}
+function passiveXpPerSortie(g) {
+  return hasBase(g.save, 'passiveXp') ? (baseMag(g.save, 'passiveXp', 0) | 0) : 0;
+}
+// split a passive mastery-XP grant across the weapons the player has touched
+function grantPassiveXp(g, amount) {
+  try {
+    if (!g.save.weapons || typeof g.save.weapons !== 'object') g.save.weapons = {};
+    let keys = Object.keys(g.save.weapons);
+    if (!keys.length) {
+      const wk = g.inv ? activeWeaponId(g.inv) : null;
+      if (!wk) return;
+      g.save.weapons[wk] = { level: 1, xp: 0, mods: [] };
+      keys = [wk];
+    }
+    const per = Math.max(1, Math.round(amount / keys.length));
+    for (const k of keys) {
+      const ws = g.save.weapons[k] || (g.save.weapons[k] = { level: 1, xp: 0, mods: [] });
+      ws.xp = (ws.xp || 0) + per;
+      ws.level = Math.min(weaponMaxLevel, Math.max(ws.level || 1, levelForXp(ws.xp)));
+    }
+  } catch (e) {
+    /* odd save.weapons shape — skip the grant */
+  }
 }
 
 // the effective rarity of an inventory stack — an explicit roll if it has one,
@@ -436,6 +504,18 @@ function enterHub(g) {
   g.log = [];
   if (ambient && ambient.set) ambient.set('hub');
   ensureCampaign(g.save); // the Incursion: seed / repair save.campaign every hub entry
+  if (!Array.isArray(g.save.roster)) g.save.roster = [];
+  if (!Array.isArray(g.save.base)) g.save.base = [];
+  if (!Array.isArray(g.save.stash)) g.save.stash = [];
+  g.stashView = false;
+  // Infirmary Wing base upgrade: always dock at full health
+  if (homeHealFull(g)) p.hp = p.maxHp;
+  // Training Range base upgrade: idle weapons earn mastery XP once per sortie
+  const pxp = passiveXpPerSortie(g);
+  if (pxp > 0 && g.save.runs > 0 && g._xpRuns !== g.save.runs) {
+    g._xpRuns = g.save.runs;
+    grantPassiveXp(g, pxp);
+  }
   persist(g.save);
   queueTips(g, HUB_TIPS, 'hub', false); // first-run tutorial: hub orientation prompt
   g.message(g.save.runs > 0 ? 'Welcome back to Stargate Command — Level 28' : 'Stargate Command — Level 28');
@@ -609,6 +689,15 @@ function dialHome(g) {
         g._events.push({ t: 'rescue' });
         g.message(cap.name + ' — extracted');
         if (g.runStats) g.runStats.special.push(cap.name + ' extracted to the SGC');
+        // a recovered captive brings an SG team back into the fight — a
+        // permanent passive shown in the Memorial Hall roster
+        if (!Array.isArray(g.save.roster)) g.save.roster = [];
+        const tid = teamForName(cap.name, g.save.roster);
+        if (tid && !g.save.roster.includes(tid)) {
+          g.save.roster.push(tid);
+          const tm = teamById(tid);
+          if (tm) showUnlock(g, 'SG TEAM RECOVERED', tm.name + ' — ' + tm.role);
+        }
       }
     }
   }

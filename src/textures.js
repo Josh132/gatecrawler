@@ -499,3 +499,323 @@ export function edgeAO(c, x, y, size, dir, depth, color) {
   else if (dir === 2) c.fillRect(x, y + size - d, size, d);
   else c.fillRect(x, y, d, size);
 }
+
+// ---- monumental (goa'uld) & natural (outdoor) props ----------------------
+
+// gold-leaf trim: a bright edge line with a soft inward bloom
+export function gild(c, x, y, w, h, o) {
+  o = o || {};
+  const g = o.gold || '#e8c46a';
+  const hi = o.hi || '#fff0c0';
+  c.save();
+  const gr = c.createLinearGradient(x, y, x, y + h);
+  gr.addColorStop(0, rgba(hi, 0.9));
+  gr.addColorStop(0.5, rgba(g, 0.82));
+  gr.addColorStop(1, rgba(g, 0.18));
+  c.fillStyle = gr;
+  c.fillRect(x, y, w, h);
+  c.fillStyle = rgba(hi, 0.95);
+  c.fillRect(x, y, w, Math.max(1, h * 0.24));
+  c.fillStyle = rgba('#5c3d0c', 0.5);
+  c.fillRect(x, y + h - 1, w, 1);
+  c.restore();
+}
+
+// a band of procedural hieroglyphs — gold glyphs on a sunk shadow channel
+export function frieze(c, x, y, w, h, seed, o) {
+  o = o || {};
+  const gold = o.gold || '#e8c46a';
+  const bg = o.bg == null ? 'rgba(0,0,0,0.4)' : o.bg;
+  c.save();
+  c.beginPath();
+  c.rect(x, y, w, h);
+  c.clip();
+  if (bg) {
+    c.fillStyle = bg;
+    c.fillRect(x, y, w, h);
+  }
+  const cell = o.cell || Math.max(6, h * 0.9);
+  let i = 0;
+  for (let gx = x + 2; gx < x + w - 2; gx += cell, i++) {
+    const s = hash2(i * 13 + 1, seed | 0, 41);
+    const s2 = hash2(i * 7 + 5, seed | 0, 97);
+    const gy = y + h * 0.1;
+    const gh = h * 0.8;
+    const gw = cell * 0.62;
+    c.fillStyle = rgba(gold, 0.42 + s * 0.42);
+    if (s < 0.22) {
+      // seated figure / offering
+      c.fillRect(gx + gw * 0.4, gy, 2, gh);
+      c.fillRect(gx, gy + gh * 0.3, gw, 2);
+      c.beginPath();
+      c.arc(gx + gw * 0.46, gy + gh * 0.14, gw * 0.26, 0, 7);
+      c.fill();
+    } else if (s < 0.44) {
+      // bird
+      c.fillRect(gx, gy + gh * 0.52, gw, 2);
+      c.fillRect(gx + gw * 0.12, gy + gh * 0.52, 2, gh * 0.36);
+      c.beginPath();
+      c.moveTo(gx, gy + gh * 0.52);
+      c.lineTo(gx + gw * 0.5, gy + gh * 0.2);
+      c.lineTo(gx + gw, gy + gh * 0.52);
+      c.fill();
+    } else if (s < 0.63) {
+      // eye of horus
+      c.beginPath();
+      c.ellipse(gx + gw * 0.5, gy + gh * 0.44, gw * 0.5, gh * 0.3, 0, 0, 7);
+      c.fill();
+      c.fillStyle = typeof bg === 'string' ? bg : 'rgba(0,0,0,0.5)';
+      c.beginPath();
+      c.ellipse(gx + gw * 0.5, gy + gh * 0.44, gw * 0.28, gh * 0.15, 0, 0, 7);
+      c.fill();
+      c.fillStyle = rgba(gold, 0.7);
+      c.fillRect(gx + gw * 0.5, gy + gh * 0.62, gw * 0.42, 2);
+    } else if (s < 0.82) {
+      // water / n-glyph
+      for (let k = 0; k < 3; k++) c.fillRect(gx, gy + gh * (0.2 + k * 0.3), gw, 2);
+    } else {
+      // was-sceptre / staff
+      c.fillRect(gx + gw * 0.42, gy, 2, gh);
+      c.fillRect(gx + gw * 0.42 - 2, gy, 6, 3);
+      if (s2 > 0.5) c.fillRect(gx + gw * 0.42 - 3, gy + gh - 3, 8, 3);
+    }
+  }
+  c.restore();
+}
+
+// an oval gold cartouche frame with a few glyph strokes inside
+export function cartouche(c, x, y, w, h, seed, o) {
+  o = o || {};
+  const gold = o.gold || '#e8c46a';
+  const r = h / 2;
+  if (w < h + 4) return;
+  c.save();
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.lineTo(x + w - r, y);
+  c.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  c.lineTo(x + r, y + h);
+  c.arc(x + r, y + r, r, Math.PI / 2, -Math.PI / 2);
+  c.closePath();
+  c.fillStyle = rgba(o.fill || '#1c1206', o.fillA == null ? 0.5 : o.fillA);
+  c.fill();
+  c.strokeStyle = rgba(gold, 0.82);
+  c.lineWidth = o.lw || 2;
+  c.stroke();
+  c.fillStyle = rgba(gold, 0.6);
+  const n = Math.max(1, (w / 9) | 0);
+  for (let i = 0; i < n; i++) {
+    const s = hash2(i * 5 + 2, seed | 0, 61);
+    const gx = x + r + 2 + i * ((w - r * 2 - 4) / n);
+    if (s < 0.5) c.fillRect(gx, y + h * 0.24, 2, h * 0.52);
+    else {
+      c.fillRect(gx, y + h * 0.34, 4, 2);
+      c.fillRect(gx + 1, y + h * 0.34, 2, h * 0.42);
+    }
+  }
+  c.restore();
+}
+
+// rayed sun-disc medallion (Ra): concentric gold rings + radiating rays
+export function sunDisc(c, x, y, r, o) {
+  o = o || {};
+  const gold = o.gold || '#e8c46a';
+  const deep = o.deep || '#8a5a1c';
+  c.save();
+  c.translate(x, y);
+  const g = c.createRadialGradient(0, 0, 0, 0, 0, r);
+  g.addColorStop(0, rgba(o.core || '#ffdd90', o.coreA == null ? 0.4 : o.coreA));
+  g.addColorStop(0.5, rgba(gold, 0.2));
+  g.addColorStop(1, rgba(gold, 0));
+  c.fillStyle = g;
+  c.beginPath();
+  c.arc(0, 0, r, 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = rgba(gold, o.line == null ? 0.45 : o.line);
+  c.lineWidth = o.lw || 2;
+  for (const k of [1, 0.62, 0.32]) {
+    c.beginPath();
+    c.arc(0, 0, r * k, 0, Math.PI * 2);
+    c.stroke();
+  }
+  c.lineWidth = 1.4;
+  const rays = o.rays || 24;
+  for (let i = 0; i < rays; i++) {
+    const a = (i / rays) * Math.PI * 2;
+    const r0 = r * 0.66;
+    const r1 = r * (i % 2 ? 0.99 : 0.88);
+    c.strokeStyle = rgba(i % 2 ? gold : deep, 0.42);
+    c.beginPath();
+    c.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    c.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    c.stroke();
+  }
+  c.fillStyle = rgba(o.core || '#ffdd90', 0.26);
+  c.beginPath();
+  c.arc(0, 0, r * 0.19, 0, Math.PI * 2);
+  c.fill();
+  c.restore();
+}
+
+// a standing obelisk drawn into a wall-tile column: tapering gilt-capped shaft
+// with a glyph column. (x,y) = tile top-left, w/h = tile size, lift = px the
+// pyramidion rises above the tile top.
+export function obelisk(c, x, y, w, h, lift, seed, o) {
+  o = o || {};
+  const stone = o.stone || '#c9a25a';
+  const shade = o.shade || '#5c3f18';
+  const gold = o.gold || '#f0d182';
+  const baseW = w * 0.66;
+  const tipW = w * 0.32;
+  const cx = x + w / 2;
+  const top = y - lift;
+  const bot = y + h;
+  const capY = top + w * 0.5;
+  const halfAt = (yy) => {
+    const t = (bot - yy) / (bot - capY);
+    return (tipW + (baseW - tipW) * Math.max(0, Math.min(1, 1 - t))) / 2;
+  };
+  const hb = baseW / 2;
+  const ht = tipW / 2;
+  c.save();
+  // shaft
+  c.beginPath();
+  c.moveTo(cx - hb, bot);
+  c.lineTo(cx - ht, capY);
+  c.lineTo(cx + ht, capY);
+  c.lineTo(cx + hb, bot);
+  c.closePath();
+  const g = c.createLinearGradient(x, 0, x + w, 0);
+  g.addColorStop(0, rgba(shade, 0.95));
+  g.addColorStop(0.42, rgba(mix(stone, '#fff2cc', 0.28), 0.98));
+  g.addColorStop(1, rgba(shade, 0.95));
+  c.fillStyle = g;
+  c.fill();
+  c.strokeStyle = rgba(shade, 0.7);
+  c.lineWidth = 1;
+  c.stroke();
+  // pyramidion
+  c.beginPath();
+  c.moveTo(cx - ht, capY);
+  c.lineTo(cx, top);
+  c.lineTo(cx + ht, capY);
+  c.closePath();
+  c.fillStyle = rgba(gold, 0.95);
+  c.fill();
+  c.fillStyle = rgba('#fff6d8', 0.7);
+  c.beginPath();
+  c.moveTo(cx, top);
+  c.lineTo(cx - 1.5, capY);
+  c.lineTo(cx + 1, capY);
+  c.fill();
+  // glyph column
+  c.fillStyle = rgba(shade, 0.5);
+  for (let i = 0; capY + 6 + i * 7 < bot - 4; i++) {
+    const s = hash2(i, seed | 0, 29);
+    const gy = capY + 6 + i * 7;
+    if (halfAt(gy) < 3) continue;
+    if (s < 0.5) {
+      c.fillRect(cx - 2, gy, 4, 2);
+      c.fillRect(cx - 1, gy, 2, 5);
+    } else {
+      c.beginPath();
+      c.arc(cx, gy + 2, 2, 0, 7);
+      c.fill();
+    }
+  }
+  // gilt base band
+  c.fillStyle = rgba(gold, 0.85);
+  c.fillRect(cx - hb - 1, bot - 3, hb * 2 + 2, 3);
+  c.restore();
+}
+
+// a tree for the outdoor prop pass: offset ground shadow, trunk, soft round
+// canopy (translucent so a unit under it still reads). v = 0..1 variation.
+export function tree(c, x, y, size, v, o) {
+  o = o || {};
+  const trunk = o.trunk || '#463726';
+  const leaf = o.leaf || '#3f6b34';
+  const leaf2 = o.leaf2 || '#6a9a44';
+  const lift = o.lift || size * 1.3;
+  const r = size * (0.72 + v * 0.5);
+  c.save();
+  c.fillStyle = rgba('#000000', 0.22);
+  c.beginPath();
+  c.ellipse(x + size * 0.32, y + size * 0.3, r * 0.95, r * 0.46, 0, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = trunk;
+  c.fillRect(x - size * 0.11, y - lift * 0.32, size * 0.22, lift * 0.42 + size * 0.36);
+  const cy = y - lift;
+  const blobs = [
+    [0, 0, 1],
+    [-r * 0.58, r * 0.24, 0.68],
+    [r * 0.54, r * 0.2, 0.7],
+    [0, -r * 0.42, 0.58],
+  ];
+  c.globalAlpha = o.alpha == null ? 0.85 : o.alpha;
+  for (const b of blobs) {
+    const rr = r * b[2];
+    const g = c.createRadialGradient(x + b[0], cy + b[1], rr * 0.2, x + b[0], cy + b[1], rr);
+    g.addColorStop(0, mix(leaf2, '#ffffff', 0.12 * (1 - v)));
+    g.addColorStop(0.7, leaf);
+    g.addColorStop(1, mix(leaf, '#000000', 0.4));
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(x + b[0], cy + b[1], rr, 0, Math.PI * 2);
+    c.fill();
+  }
+  c.globalAlpha = Math.min(1, (o.alpha == null ? 0.85 : o.alpha) * 0.7);
+  c.strokeStyle = rgba(mix(leaf2, '#fff2c0', 0.5), 0.5);
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.arc(x - r * 0.2, cy - r * 0.2, r * 0.95, Math.PI * 0.92, Math.PI * 1.7);
+  c.stroke();
+  c.restore();
+}
+
+// a boulder for the outdoor prop pass: layered rounded rock, AO, a top highlight
+export function boulder(c, x, y, size, v, o) {
+  o = o || {};
+  const rock = o.rock || '#8a8378';
+  const dark = o.dark || '#3c352c';
+  const r = size * (0.8 + v * 0.5);
+  const cx = x + size * 0.5 + (v - 0.5) * size * 0.2;
+  const cy = y + size * 0.55;
+  c.save();
+  c.fillStyle = rgba('#000000', 0.28);
+  c.beginPath();
+  c.ellipse(cx + size * 0.12, cy + size * 0.2, r * 1.02, r * 0.5, 0, 0, Math.PI * 2);
+  c.fill();
+  const lobes = 4 + ((v * 3) | 0);
+  c.beginPath();
+  for (let i = 0; i <= lobes; i++) {
+    const a = (i / lobes) * Math.PI * 2;
+    const rr = r * (0.68 + hash2(i, (v * 100) | 0, 17) * 0.5);
+    const px = cx + Math.cos(a) * rr;
+    const py = cy + Math.sin(a) * rr * 0.78 - r * 0.2;
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+  c.closePath();
+  const g = c.createLinearGradient(cx, cy - r, cx, cy + r);
+  g.addColorStop(0, mix(rock, '#ffffff', 0.22));
+  g.addColorStop(0.55, rock);
+  g.addColorStop(1, dark);
+  c.fillStyle = g;
+  c.fill();
+  c.strokeStyle = rgba(dark, 0.6);
+  c.lineWidth = 1;
+  c.stroke();
+  c.strokeStyle = rgba(dark, 0.45);
+  for (let i = 0; i < 2; i++) {
+    const s = hash2(i + 3, (v * 100) | 0, 51);
+    c.beginPath();
+    c.moveTo(cx - r * 0.5 + s * r, cy - r * 0.8);
+    c.lineTo(cx - r * 0.2 + s * r * 0.5, cy + r * 0.5);
+    c.stroke();
+  }
+  c.fillStyle = rgba('#fff2c0', 0.16);
+  c.beginPath();
+  c.ellipse(cx - r * 0.25, cy - r * 0.5, r * 0.4, r * 0.22, -0.4, 0, Math.PI * 2);
+  c.fill();
+  c.restore();
+}

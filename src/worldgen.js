@@ -28,26 +28,46 @@ export const BIOMES = {
     lo: '#161a20', hi: '#3d444f', accent: '#8fc0e0', accent2: '#c9a227',
     outline: 'neon', gridLines: true, ambient: '#7fa8c8', dust: '#9fb8cc', fog: '#03040a',
   },
-  // warm sandstone ashlar, gold inlay, hieroglyph friezes, torchlight
+  // System Lord's hall: gilded ashlar, gold hieroglyph friezes, torch-warm
   temple: {
-    void: '#0a0704', floorA: '#5a4227', floorB: '#43301c', wall: '#4a3620',
-    edge: 'rgba(255,206,130,0.5)', glow: '#c98a34', grid: 'rgba(210,170,110,0.05)',
-    lo: '#1d1409', hi: '#8a6a3c', accent: '#e8c46a', accent2: '#ff8a3c',
-    outline: 'rim', ambient: '#e0b070', dust: '#d8b98a', fog: '#0a0705',
+    void: '#0a0704', floorA: '#6b4e2a', floorB: '#4a3620', wall: '#4f3a21',
+    edge: 'rgba(255,214,140,0.6)', glow: '#e0a340', grid: 'rgba(210,170,110,0.05)',
+    lo: '#1d1409', hi: '#b58a4c', accent: '#f0d47a', accent2: '#ff8a3c',
+    outline: 'rim', ambient: '#e8bc76', dust: '#e6cfa0', fog: '#0a0705',
+  },
+  // Ra's pyramid interior: deep ochre, heavy gold banding, sun-disc everywhere
+  pyramid: {
+    void: '#0a0602', floorA: '#7a5a2e', floorB: '#4c3818', wall: '#523c1c',
+    edge: 'rgba(255,222,150,0.66)', glow: '#f0b64a', grid: 'rgba(230,190,120,0.05)',
+    lo: '#1c1206', hi: '#c79a52', accent: '#f6d888', accent2: '#ff7a2c',
+    outline: 'rim', ambient: '#f0c47e', dust: '#efd6a2', fog: '#0a0603',
   },
   // overgrown outdoor ruins: cracked flagstone, moss, vines, dappled light
   jungle: {
-    void: '#050a05', floorA: '#3d4a30', floorB: '#2c3624', wall: '#3a4432',
+    void: '#0c160c', sky: '#8fae7e', floorA: '#44532f', floorB: '#334025', wall: '#3a4432',
     edge: 'rgba(180,245,160,0.4)', glow: '#4e8a3a', grid: 'rgba(140,190,120,0.05)',
-    lo: '#141a0f', hi: '#6d8253', accent: '#8fd45a', accent2: '#3f6b8a',
-    outline: 'rim', outdoor: true, ambient: '#9fd070', dust: '#b6e08a', fog: '#050c07',
+    lo: '#1a2412', hi: '#7d9560', accent: '#8fd45a', accent2: '#3f6b8a',
+    outline: 'rim', outdoor: true, perimeter: 'treeline',
+    foliage: '#355f2c', foliageHi: '#6fa544', rock: '#6b6f5a', rockDark: '#2a2c1e', treeTrunk: '#3c3220',
+    ambient: '#b6e08a', dust: '#c6ec9a', fog: '#0a140b',
   },
   // open canyon outpost: rippled sand, strata mesas, bleached bone light
   desert: {
-    void: '#20180c', floorA: '#7d6440', floorB: '#634e30', wall: '#6b5333',
+    void: '#2a2013', sky: '#e6cf9c', floorA: '#8a6f47', floorB: '#6b5537', wall: '#6b5333',
     edge: 'rgba(255,238,190,0.42)', glow: '#c9a35e', grid: 'rgba(220,190,140,0.05)',
-    lo: '#4a3820', hi: '#c8ac7e', accent: '#f0dcae', accent2: '#8a6a3a',
-    outline: 'rim', outdoor: true, ambient: '#ffe6b0', dust: '#e8d0a0', fog: '#120c06',
+    lo: '#544024', hi: '#d4b884', accent: '#f4e0b2', accent2: '#8a6a3a',
+    outline: 'rim', outdoor: true, perimeter: 'cliff',
+    foliage: '#6e5f38', foliageHi: '#9a8654', rock: '#9a8058', rockDark: '#3a2a14', treeTrunk: '#5a4a30',
+    ambient: '#ffe6b0', dust: '#efd8a8', fog: '#120c06',
+  },
+  // wide open savannah: dry gold grass, acacia stands, granite kopjes
+  savannah: {
+    void: '#161307', sky: '#cabb8a', floorA: '#9c8a4c', floorB: '#7a6c3a', wall: '#6f6338',
+    edge: 'rgba(255,240,190,0.4)', glow: '#c9b25e', grid: 'rgba(220,200,140,0.05)',
+    lo: '#3f3418', hi: '#cdbb7e', accent: '#f0e0a4', accent2: '#c8863a',
+    outline: 'rim', outdoor: true, perimeter: 'treeline',
+    foliage: '#6f7a3a', foliageHi: '#aab060', rock: '#9a8f7c', rockDark: '#3e372c', treeTrunk: '#4a3c28',
+    ambient: '#ffe8b0', dust: '#ecdca0', fog: '#0c0a05',
   },
   // glacier cavern: translucent blue ice, deep cracks, snow drift, icicles
   ice: {
@@ -162,21 +182,25 @@ export function buildWorld(params) {
     });
   }
 
-  // carve doorways between grid-adjacent rooms (the 2-tile shared wall)
+  // carve doorways between grid-adjacent rooms (the 2-tile shared wall).
+  // outdoor worlds get a wider 5-tile gap so the treeline reads as a path.
+  const bdef = BIOMES[params.biome] || BIOMES.ruins;
+  const outdoor = !!bdef.outdoor;
+  const DW = outdoor ? 2 : 1;
   const byKey = new Map(rooms.map((r) => [r.gx + ',' + r.gy, r]));
   for (const r of rooms) {
     const right = byKey.get(r.gx + 1 + ',' + r.gy);
     const down = byKey.get(r.gx + ',' + (r.gy + 1));
     if (right) {
       const y0 = r.oy + (ROOM_H >> 1);
-      for (let k = -1; k <= 1; k++) {
+      for (let k = -DW; k <= DW; k++) {
         grid[at(r.ox + ROOM_W - 1, y0 + k)] = 0;
         grid[at(r.ox + ROOM_W, y0 + k)] = 0;
       }
     }
     if (down) {
       const x0 = r.ox + (ROOM_W >> 1);
-      for (let k = -1; k <= 1; k++) {
+      for (let k = -DW; k <= DW; k++) {
         grid[at(x0 + k, r.oy + ROOM_H - 1)] = 0;
         grid[at(x0 + k, r.oy + ROOM_H)] = 0;
       }
@@ -186,38 +210,110 @@ export function buildWorld(params) {
   // give each room an interior layout — cover, sightlines and feel vary while
   // the room-graph itself is untouched. Doorway lanes (centre row/col ±1) and
   // the centre prop tile always stay clear.
+  // props: tiles that are grid=1 (block sight + shots) but bake as a tree, rock,
+  // obelisk or brazier rather than stone. bakeWorld reads room.props.
+  const jaffaHall = params.biome === 'temple' || params.biome === 'pyramid';
   for (const r of rooms) {
+    r.props = [];
     if (r.kind === 'gate') continue;
     const cxT = r.ox + (ROOM_W >> 1);
     const cyT = r.oy + (ROOM_H >> 1);
     const clear = (px, py) =>
       (Math.abs(px - cxT) <= 1 && Math.abs(py - cyT) <= 1) || px === cxT || py === cyT;
+    const inRoom = (px, py) =>
+      px > r.ox && px < r.ox + ROOM_W - 1 && py > r.oy && py < r.oy + ROOM_H - 1;
     const put = (px, py) => {
-      if (px > r.ox && px < r.ox + ROOM_W - 1 && py > r.oy && py < r.oy + ROOM_H - 1 && !clear(px, py)) {
+      if (inRoom(px, py) && !clear(px, py)) grid[at(px, py)] = 1;
+    };
+    const prop = (px, py, kind) => {
+      if (inRoom(px, py) && !clear(px, py) && grid[at(px, py)] === 0) {
         grid[at(px, py)] = 1;
+        r.props.push({ tx: px, ty: py, kind });
       }
     };
-    const shape = r.kind === 'dhd' ? 'open' : R.pick(['open', 'open', 'arena', 'pillars', 'bisected']);
-    r.shape = shape;
-    if (shape === 'open') {
-      const n = R.int(1, 3);
-      for (let i = 0; i < n; i++) put(r.ox + R.int(3, ROOM_W - 4), r.oy + R.int(3, ROOM_H - 4));
-    } else if (shape === 'arena') {
-      // a ring of pillars around the centre + corner blocks
-      for (const [dx, dy] of [[-3, -2], [0, -3], [3, -2], [-4, 0], [4, 0], [-3, 2], [0, 3], [3, 2]]) {
-        put(cxT + dx, cyT + dy);
+
+    if (outdoor) {
+      // open-air layouts: scattered trees & boulders that are real cover
+      const rockBias = params.biome === 'desert';
+      const woody = () => (R.chance(rockBias ? 0.28 : 0.82) ? 'tree' : 'rock');
+      const dens = params.biome === 'savannah' ? 0.65 : 1;
+      const shape = r.kind === 'dhd'
+        ? R.pick(['clearing', 'open'])
+        : R.pick(['open', 'grove', 'grove', 'boulders', 'clearing', 'treeline']);
+      r.shape = shape;
+      if (shape === 'open') {
+        const n = Math.round(R.int(2, 4) * dens);
+        for (let i = 0; i < n; i++) prop(r.ox + R.int(3, ROOM_W - 4), r.oy + R.int(2, ROOM_H - 3), woody());
+      } else if (shape === 'grove') {
+        const clusters = Math.max(2, Math.round(R.int(2, 4) * dens));
+        for (let k = 0; k < clusters; k++) {
+          const ax = r.ox + R.int(3, ROOM_W - 4);
+          const ay = r.oy + R.int(2, ROOM_H - 3);
+          const m = R.int(3, 5);
+          for (let i = 0; i < m; i++) prop(ax + R.int(-1, 1), ay + R.int(-1, 1), R.chance(0.85) ? 'tree' : 'rock');
+        }
+      } else if (shape === 'boulders') {
+        const n = Math.round(R.int(6, 10) * dens);
+        for (let i = 0; i < n; i++) prop(r.ox + R.int(2, ROOM_W - 3), r.oy + R.int(2, ROOM_H - 3), R.chance(0.82) ? 'rock' : 'tree');
+        const bx = r.ox + R.int(3, ROOM_W - 5);
+        const by = r.oy + R.int(3, ROOM_H - 5);
+        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) prop(bx + dx, by + dy, 'rock');
+      } else if (shape === 'clearing') {
+        for (const ey of [r.oy + 2, r.oy + ROOM_H - 3]) {
+          const n = R.int(2, 4);
+          for (let i = 0; i < n; i++) prop(r.ox + R.int(2, ROOM_W - 3), ey, woody());
+        }
+      } else if (shape === 'treeline') {
+        const row = cyT + (R.chance(0.5) ? -2 : 2);
+        for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px++) {
+          if (Math.abs(px - cxT) <= 1 || R.chance(0.3)) continue;
+          prop(px, row, R.chance(0.82) ? 'tree' : 'rock');
+        }
       }
-      for (const [dx, dy] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) put(cxT + dx, cyT + dy);
-    } else if (shape === 'pillars') {
-      for (let px = r.ox + 3; px <= r.ox + ROOM_W - 4; px += 2) {
-        put(px, cyT - 2);
-        put(px, cyT + 2);
+    } else {
+      const shape = r.kind === 'dhd' ? 'open' : R.pick(['open', 'open', 'arena', 'pillars', 'bisected']);
+      r.shape = shape;
+      if (shape === 'open') {
+        const n = R.int(1, 3);
+        for (let i = 0; i < n; i++) put(r.ox + R.int(3, ROOM_W - 4), r.oy + R.int(3, ROOM_H - 4));
+      } else if (shape === 'arena') {
+        // a ring of pillars around the centre + corner blocks
+        for (const [dx, dy] of [[-3, -2], [0, -3], [3, -2], [-4, 0], [4, 0], [-3, 2], [0, 3], [3, 2]]) {
+          put(cxT + dx, cyT + dy);
+        }
+        for (const [dx, dy] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) put(cxT + dx, cyT + dy);
+      } else if (shape === 'pillars') {
+        for (let px = r.ox + 3; px <= r.ox + ROOM_W - 4; px += 2) {
+          put(px, cyT - 2);
+          put(px, cyT + 2);
+        }
+      } else if (shape === 'bisected') {
+        // a short wall off-centre with a wide gap kept open on the doorway row
+        const wx = cxT + (R.chance(0.5) ? 3 : -3);
+        for (let py = r.oy + 2; py <= r.oy + ROOM_H - 3; py++) {
+          if (Math.abs(py - cyT) > 1) put(wx, py);
+        }
       }
-    } else if (shape === 'bisected') {
-      // a short wall off-centre with a wide gap kept open on the doorway row
-      const wx = cxT + (R.chance(0.5) ? 3 : -3);
-      for (let py = r.oy + 2; py <= r.oy + ROOM_H - 3; py++) {
-        if (Math.abs(py - cyT) > 1) put(wx, py);
+
+      // grand Jaffa furniture: gilt obelisks in the corners, braziers on the
+      // walls — solid props that give cover and throw torch light
+      if (jaffaHall) {
+        const corners = R.shuffle([
+          [r.ox + 2, r.oy + 2], [r.ox + ROOM_W - 3, r.oy + 2],
+          [r.ox + 2, r.oy + ROOM_H - 3], [r.ox + ROOM_W - 3, r.oy + ROOM_H - 3],
+        ]);
+        const nOb = r.kind === 'dhd' ? 2 : R.int(0, 2);
+        for (let i = 0; i < nOb && i < corners.length; i++) prop(corners[i][0], corners[i][1], 'obelisk');
+        const nBr = r.kind === 'dhd' ? 4 : R.int(1, 3);
+        for (let i = 0; i < nBr; i++) {
+          const s = R.int(0, 3);
+          let bx, by;
+          if (s === 0) { bx = r.ox + R.int(3, ROOM_W - 4); by = r.oy + 2; }
+          else if (s === 1) { bx = r.ox + R.int(3, ROOM_W - 4); by = r.oy + ROOM_H - 3; }
+          else if (s === 2) { bx = r.ox + 2; by = r.oy + R.int(3, ROOM_H - 4); }
+          else { bx = r.ox + ROOM_W - 3; by = r.oy + R.int(3, ROOM_H - 4); }
+          prop(bx, by, 'brazier');
+        }
       }
     }
   }
@@ -364,100 +460,125 @@ const MAT = {
     },
   },
 
-  // ---- goa'uld / ancient temple -------------------------------------------
+  // ---- goa'uld temple: System Lord's gilded hall ------------------------
   temple: {
     floor(rand, p) {
       const cv = T.canv(FP, FP);
-      const c = base(cv, rand, [[0, p.lo], [0.42, p.floorB], [0.7, p.floorA], [1, p.hi]], { cells: 4, fine: 17, fineAmt: 0.28 });
+      const c = base(cv, rand, [[0, p.lo], [0.4, p.floorB], [0.68, p.floorA], [1, p.hi]], { cells: 4, fine: 18, fineAmt: 0.22 });
+      // polished flagstone: tight courses, strong bevel, a warm sheen
       T.ashlar(c, FP, FP, rand, {
-        course: TILE, minW: 30, maxW: 68, gap: 3, jitter: 0.11, bevel: 0.09,
-        light: '#ffe6b8', dark: '#0d0803', joint: 'rgba(13,8,3,0.55)',
+        course: TILE, minW: 30, maxW: 60, gap: 2, jitter: 0.07, bevel: 0.13,
+        light: '#ffeccb', dark: '#0d0803', joint: 'rgba(18,10,3,0.5)',
       });
-      T.cracks(c, FP, FP, rand, { count: 4, color: 'rgba(16,10,4,0.32)', step: 6, segs: 6 });
-      T.splotch(c, FP, FP, rand, { count: 6, color: '#d9bd8a', alpha: 0.1, max: 34 });
-      T.splotch(c, FP, FP, rand, { count: 4, color: '#150c04', alpha: 0.16, max: 28 });
-      T.speckle(c, FP, FP, rand, { count: 340, color: '#ffe0a0', alpha: 0.13 });
+      overlay(c, FP, FP, rand, '#ffe6bf', { cells: 5, at: 0.62, soft: 0.16, alpha: 0.28 });
+      T.cracks(c, FP, FP, rand, { count: 2, color: 'rgba(16,10,4,0.24)', step: 6, segs: 5 });
+      T.splotch(c, FP, FP, rand, { count: 3, color: '#150c04', alpha: 0.12, max: 26 });
+      T.speckle(c, FP, FP, rand, { count: 300, color: '#fff0c0', alpha: 0.14 });
       return cv;
     },
     wall(rand, p) {
       const cv = T.canv(WP, WP);
-      const c = base(cv, rand, [[0, '#170f06'], [0.5, p.wall], [1, T.mix(p.wall, p.hi, 0.6)]], { cells: 3, fine: 12, fineAmt: 0.3 });
+      const c = base(cv, rand, [[0, '#1a1006'], [0.5, p.wall], [1, T.mix(p.wall, p.hi, 0.7)]], { cells: 3, fine: 12, fineAmt: 0.26 });
       T.ashlar(c, WP, WP, rand, {
-        course: 17, minW: 20, maxW: 34, gap: 2, jitter: 0.14, bevel: 0.11,
-        light: '#ffdfa8', dark: '#0a0603', joint: 'rgba(10,6,3,0.6)',
+        course: 17, minW: 22, maxW: 34, gap: 2, jitter: 0.1, bevel: 0.14,
+        light: '#ffe6b0', dark: '#0a0603', joint: 'rgba(10,6,3,0.6)',
       });
-      T.speckle(c, WP, WP, rand, { count: 90, color: p.accent, alpha: 0.12 });
+      // gold leaf on the top course + a faint wash below
+      T.gild(c, 0, 0, WP, 5, { gold: p.accent, hi: '#fff2cc' });
+      c.fillStyle = T.rgba(p.accent, 0.1);
+      c.fillRect(0, 5, WP, 12);
+      T.speckle(c, WP, WP, rand, { count: 80, color: p.accent, alpha: 0.14 });
       return cv;
     },
-    // a gold inlay band over a recessed hieroglyph frieze
+    // gilded lintel over a gold hieroglyph frieze; some tiles carry a cartouche
     face(c, x, fy, tx, ty, p) {
-      c.fillStyle = T.rgba(p.accent, 0.42);
-      c.fillRect(x, fy + 3, TILE, 1);
-      c.fillStyle = 'rgba(0,0,0,0.34)';
-      c.fillRect(x, fy + 5, TILE, 8);
-      for (let i = 0; i < 4; i++) {
-        const h = T.hash2(tx * 4 + i, ty, 11);
-        const gx = x + 4 + i * 7;
-        c.fillStyle = T.rgba(p.accent, 0.3 + h * 0.34);
-        if (h < 0.25) {
-          c.fillRect(gx, fy + 6, 3, 6);
-          c.fillRect(gx - 1, fy + 6, 5, 1);
-        } else if (h < 0.5) {
-          c.fillRect(gx + 1, fy + 6, 1, 6);
-          c.fillRect(gx - 1, fy + 8, 5, 1);
-        } else if (h < 0.74) {
-          c.beginPath();
-          c.arc(gx + 1.5, fy + 8, 2, 0, Math.PI * 2);
-          c.fill();
-          c.fillRect(gx + 1, fy + 10, 1, 3);
-        } else {
-          c.fillRect(gx, fy + 7, 4, 1);
-          c.fillRect(gx, fy + 10, 4, 1);
-          c.fillRect(gx + 1, fy + 7, 1, 4);
-        }
-      }
-      c.fillStyle = T.rgba(p.accent, 0.24);
+      const h = T.hash2(tx, ty, 11);
+      T.gild(c, x, fy + 1, TILE, 3, { gold: p.accent, hi: '#fff2cc' });
+      if (h > 0.72) T.cartouche(c, x + 3, fy + 5, TILE - 6, 8, tx * 5 + ty, { gold: p.accent, fill: '#140c04', fillA: 0.55 });
+      else T.frieze(c, x, fy + 5, TILE, 8, tx * 3 + ty * 7, { gold: p.accent, bg: 'rgba(0,0,0,0.42)' });
+      c.fillStyle = T.rgba(p.accent, 0.22);
       c.fillRect(x, fy + 14, TILE, 1);
     },
     deco(c, world, rand, p, api) {
-      // a carved medallion in the middle of every chamber
+      const dhd = world.dhdRoom;
       for (const r of api.rooms) {
         const cx = r.centerPx.x;
         const cy = r.centerPx.y;
-        const rad = Math.min(r.rectPx.w, r.rectPx.h) * 0.3;
-        c.save();
-        c.strokeStyle = T.rgba(p.accent, 0.15);
+        // great-hall runner down the processional axis (the open centre row)
+        const rw = r.rectPx.w * 0.82;
+        const rh = r.rectPx.h * 0.22;
+        c.fillStyle = T.rgba('#1a0f05', 0.3);
+        c.fillRect(cx - rw / 2, cy - rh / 2, rw, rh);
+        c.strokeStyle = T.rgba(p.accent, 0.3);
         c.lineWidth = 2;
-        for (const k of [1, 0.72, 0.4]) {
-          c.beginPath();
-          c.arc(cx, cy, rad * k, 0, Math.PI * 2);
-          c.stroke();
-        }
-        c.lineWidth = 1;
-        for (let i = 0; i < 12; i++) {
-          const a = (i / 12) * Math.PI * 2;
-          c.beginPath();
-          c.moveTo(cx + Math.cos(a) * rad * 0.42, cy + Math.sin(a) * rad * 0.42);
-          c.lineTo(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
-          c.stroke();
-        }
-        c.restore();
+        c.strokeRect(cx - rw / 2, cy - rh / 2, rw, rh);
+        // sun-disc medallion — grand in the DHD hall, restrained elsewhere
+        const rad = Math.min(r.rectPx.w, r.rectPx.h) * 0.3;
+        if (r === dhd) T.sunDisc(c, cx, cy, rad * 1.15, { gold: p.accent, deep: p.accent2, core: '#ffdd90', coreA: 0.42, rays: 28 });
+        else T.sunDisc(c, cx, cy, rad * 0.78, { gold: p.accent, deep: p.accent2, core: '#ffce80', coreA: 0.15, rays: 18, line: 0.26 });
       }
-      // sand drifted against the stonework, then torches washing it warm
-      api.hugWalls(70, rand, (x, y) => T.pool(c, x, y, 26 + rand() * 26, '#dcc294', 0.13));
-      api.hugWalls(16, rand, (x, y) => T.pool(c, x, y, 66, p.accent2, 0.11));
-      api.spots(26, rand, (x, y) => {
-        c.strokeStyle = 'rgba(18,11,4,0.3)';
-        c.lineWidth = 1;
-        c.beginPath();
-        c.moveTo(x, y);
-        let a = rand() * 6.28;
-        for (let s = 0; s < 6; s++) {
-          a += (rand() - 0.5) * 1.2;
-          c.lineTo(x + Math.cos(a) * 9, y + Math.sin(a) * 9);
-        }
-        c.stroke();
+      // torchlight pooled at the wall bases; palace floors are swept, so only
+      // a little drift lingers in the corners
+      api.hugWalls(20, rand, (x, y) => T.pool(c, x, y, 60, p.accent2, 0.12));
+      api.hugWalls(26, rand, (x, y) => T.pool(c, x, y, 20 + rand() * 20, '#e8cd9a', 0.08));
+    },
+  },
+
+  // ---- Ra's pyramid: heavier gold, sun-disc in every chamber -------------
+  pyramid: {
+    floor(rand, p) {
+      const cv = T.canv(FP, FP);
+      const c = base(cv, rand, [[0, p.lo], [0.38, p.floorB], [0.66, p.floorA], [1, p.hi]], { cells: 4, fine: 16, fineAmt: 0.2 });
+      T.ashlar(c, FP, FP, rand, {
+        course: TILE, minW: 40, maxW: 70, gap: 2, jitter: 0.07, bevel: 0.15,
+        light: '#ffe6bf', dark: '#0a0602', joint: 'rgba(12,7,2,0.55)',
       });
+      overlay(c, FP, FP, rand, '#ffdca0', { cells: 4, at: 0.6, soft: 0.18, alpha: 0.32 });
+      T.splotch(c, FP, FP, rand, { count: 3, color: '#1a0e04', alpha: 0.14, max: 30 });
+      T.speckle(c, FP, FP, rand, { count: 220, color: '#ffe6ad', alpha: 0.16 });
+      return cv;
+    },
+    wall(rand, p) {
+      const cv = T.canv(WP, WP);
+      const c = base(cv, rand, [[0, '#160c04'], [0.48, p.wall], [1, T.mix(p.wall, p.accent, 0.5)]], { cells: 3, fine: 11, fineAmt: 0.28 });
+      T.ashlar(c, WP, WP, rand, {
+        course: 17, minW: 26, maxW: 40, gap: 2, jitter: 0.09, bevel: 0.16,
+        light: '#ffdfa0', dark: '#080402', joint: 'rgba(8,4,2,0.62)',
+      });
+      T.gild(c, 0, 0, WP, 6, { gold: p.accent, hi: '#fff4d2' });
+      T.gild(c, 0, WP - 3, WP, 3, { gold: p.accent, hi: '#fff4d2' });
+      c.fillStyle = T.rgba(p.accent, 0.14);
+      c.fillRect(0, 6, WP, WP - 12);
+      T.speckle(c, WP, WP, rand, { count: 70, color: '#fff0c8', alpha: 0.18 });
+      return cv;
+    },
+    face(c, x, fy, tx, ty, p) {
+      T.gild(c, x, fy + 1, TILE, 3, { gold: p.accent, hi: '#fff4d2' });
+      T.frieze(c, x, fy + 4, TILE, 5, tx * 9 + ty, { gold: p.accent, bg: 'rgba(0,0,0,0.4)' });
+      T.cartouche(c, x + 4, fy + 9, TILE - 8, 6, tx + ty * 3, { gold: p.accent, fill: '#120a03', fillA: 0.5 });
+      c.fillStyle = T.rgba(p.accent2, 0.2);
+      c.fillRect(x, fy + WALL_H - 2, TILE, 1);
+    },
+    deco(c, world, rand, p, api) {
+      const dhd = world.dhdRoom;
+      for (const r of api.rooms) {
+        const cx = r.centerPx.x;
+        const cy = r.centerPx.y;
+        const rw = r.rectPx.w * 0.84;
+        const rh = r.rectPx.h * 0.24;
+        c.fillStyle = T.rgba('#180d04', 0.34);
+        c.fillRect(cx - rw / 2, cy - rh / 2, rw, rh);
+        c.strokeStyle = T.rgba(p.accent, 0.34);
+        c.lineWidth = 2;
+        c.strokeRect(cx - rw / 2, cy - rh / 2, rw, rh);
+        const rad = Math.min(r.rectPx.w, r.rectPx.h) * 0.32;
+        T.sunDisc(c, cx, cy, r === dhd ? rad * 1.25 : rad * 0.7, {
+          gold: p.accent, deep: p.accent2, core: '#ffe0a0',
+          coreA: r === dhd ? 0.5 : 0.18, rays: r === dhd ? 32 : 16, line: r === dhd ? 0.5 : 0.24,
+        });
+      }
+      api.hugWalls(26, rand, (x, y) => T.pool(c, x, y, 64, p.accent2, 0.13));
+      api.hugWalls(20, rand, (x, y) => T.pool(c, x, y, 40, p.accent, 0.06));
     },
   },
 
@@ -634,6 +755,87 @@ const MAT = {
           c.stroke();
         }
       });
+    },
+  },
+
+  // ---- wide-open savannah: dry grass, acacia stands, granite kopjes ------
+  savannah: {
+    floor(rand, p) {
+      const cv = T.canv(FP, FP);
+      const c = base(cv, rand, [[0, p.lo], [0.4, p.floorB], [0.7, p.floorA], [1, p.hi]], { cells: 3, fine: 13, fineAmt: 0.34 });
+      overlay(c, FP, FP, rand, '#8f8340', { cells: 4, at: 0.5, soft: 0.2, alpha: 0.5 });
+      overlay(c, FP, FP, rand, '#b7ab5e', { cells: 8, at: 0.66, soft: 0.12, alpha: 0.3 });
+      T.cracks(c, FP, FP, rand, { count: 4, color: 'rgba(40,30,14,0.26)', step: 7, segs: 6 });
+      T.speckle(c, FP, FP, rand, { count: 300, color: '#f0e2a4', alpha: 0.16 });
+      T.pebbles(c, FP, FP, rand, { count: 30, color: '#8a7f66', shadow: '#2a2212', alpha: 0.5 });
+      // dry grass tufts
+      c.save();
+      c.strokeStyle = 'rgba(122,120,60,0.4)';
+      c.lineWidth = 1;
+      for (let i = 0; i < 120; i++) {
+        const x = rand() * FP;
+        const y = rand() * FP;
+        for (let k = 0; k < 4; k++) {
+          const a = -Math.PI / 2 + (rand() - 0.5) * 1.4;
+          c.beginPath();
+          c.moveTo(x, y);
+          c.lineTo(x + Math.cos(a) * (3 + rand() * 4), y + Math.sin(a) * (3 + rand() * 4));
+          c.stroke();
+        }
+      }
+      c.restore();
+      return cv;
+    },
+    wall(rand, p) {
+      const cv = T.canv(WP, WP);
+      const c = base(cv, rand, [[0, '#241d10'], [0.5, p.wall], [1, T.mix(p.wall, '#d8c890', 0.5)]], { cells: 3, fine: 12, fineAmt: 0.28 });
+      T.strata(c, WP, WP, rand, { min: 4, max: 12, jitter: 0.12, seam: 0.4, light: '#e0d0a0', dark: '#1a140a' });
+      T.speckle(c, WP, WP, rand, { count: 120, color: '#f0e4bc', alpha: 0.12 });
+      return cv;
+    },
+    // stacked granite boulders (kopje) rather than a dressed face
+    face(c, x, fy, tx, ty, p) {
+      const h = T.hash2(tx, ty, 43);
+      const g = c.createLinearGradient(0, fy, 0, fy + WALL_H);
+      g.addColorStop(0, T.rgba('#d8c894', 0.5));
+      g.addColorStop(1, T.rgba('#2a2212', 0.2));
+      c.fillStyle = g;
+      c.fillRect(x, fy, TILE, WALL_H);
+      for (let i = 0; i < 3; i++) {
+        const bx = x + 4 + i * 11 + h * 4;
+        const br = 6 + T.hash2(tx * 3 + i, ty, 7) * 5;
+        c.fillStyle = T.rgba(i % 2 ? '#8f8674' : '#756c58', 0.75);
+        c.beginPath();
+        c.ellipse(bx, fy + WALL_H - br * 0.5, br, br * 0.8, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = 'rgba(255,240,200,0.14)';
+        c.beginPath();
+        c.ellipse(bx - br * 0.3, fy + WALL_H - br * 0.85, br * 0.4, br * 0.3, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+    },
+    deco(c, world, rand, p, api) {
+      // huge sun-bleached open ground + a little scrub
+      api.spots(40, rand, (x, y) => T.pool(c, x, y, 40 + rand() * 70, '#fff0c0', 0.05));
+      api.spots(30, rand, (x, y) => {
+        c.strokeStyle = 'rgba(110,100,50,0.5)';
+        c.lineWidth = 1;
+        for (let i = 0; i < 6; i++) {
+          const a = -Math.PI / 2 + (rand() - 0.5) * 2.2;
+          c.beginPath();
+          c.moveTo(x, y);
+          c.lineTo(x + Math.cos(a) * (4 + rand() * 7), y + Math.sin(a) * (4 + rand() * 7));
+          c.stroke();
+        }
+      });
+      // dry litter + dust
+      api.spots(90, rand, (x, y) => {
+        c.fillStyle = rand() < 0.5 ? 'rgba(150,140,70,0.32)' : 'rgba(120,95,40,0.32)';
+        c.beginPath();
+        c.ellipse(x, y, 2.2, 1.1, rand() * 3, 0, Math.PI * 2);
+        c.fill();
+      });
+      api.hugWalls(50, rand, (x, y) => T.pool(c, x, y, 20 + rand() * 24, '#d8c088', 0.14));
     },
   },
 
@@ -1202,13 +1404,20 @@ export function bakeWorld(world) {
   cv.offsetY = WALL_H;
   const c = cv.getContext('2d');
   c.translate(0, WALL_H);
-  c.fillStyle = pal.void;
+  const outdoor = !!pal.outdoor;
+  c.fillStyle = outdoor ? (pal.sky || pal.void) : pal.void;
   c.fillRect(0, -WALL_H, cv.width, cv.height);
 
   const W = world.W;
   const H = world.H;
   const wall = (x, y) => x < 0 || y < 0 || x >= W || y >= H || world.grid[y * W + x] === 1;
   const api = bakeApi(world, wall);
+  // prop tiles: grid=1 (block sight/shots) but painted as tree/rock/obelisk/
+  // brazier by paintProps — paintWalls skips them so no stone is drawn there
+  const propSet = new Set();
+  for (const r of world.rooms) {
+    for (const pr of r.props || []) propSet.add(pr.ty * W + pr.tx);
+  }
 
   // one stream for the whole bake, so an address always mixes the same material
   const rand = makeRng('bake:' + name + ':' + ((world.params && world.params.seedStr) || 'sgc'));
@@ -1244,25 +1453,49 @@ export function bakeWorld(world) {
     c.stroke();
   }
   if (mat.deco) mat.deco(c, world, rand, pal, api);
+  if (outdoor) {
+    // low god-rays raking across the open ground (clipped to floor)
+    const rn = makeRng('ray:' + name + ':' + ((world.params && world.params.seedStr) || 'x'));
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    const rays = 2 + ((rn() * 2) | 0);
+    for (let i = 0; i < rays; i++) {
+      const bx = rn() * cv.width;
+      const bw = 60 + rn() * 130;
+      c.save();
+      c.translate(bx, 0);
+      c.rotate(0.3 + rn() * 0.14);
+      const g = c.createLinearGradient(0, 0, 0, H * TILE * 1.5);
+      g.addColorStop(0, T.rgba(pal.ambient || '#ffe8b0', 0.1));
+      g.addColorStop(1, T.rgba(pal.ambient || '#ffe8b0', 0));
+      c.fillStyle = g;
+      c.fillRect(-bw / 2, 0, bw, H * TILE * 1.5);
+      c.restore();
+    }
+    c.restore();
+  }
   // the ground sits in shade; wall tops get the light back in paintWalls, and
-  // that one stop of separation is what stops the map reading as flat blocks
-  c.fillStyle = 'rgba(0,0,0,0.2)';
+  // that one stop of separation is what stops the map reading as flat blocks.
+  // outdoors under open sky the ground stays lit, so the drop is far gentler.
+  c.fillStyle = outdoor ? 'rgba(0,0,0,0.07)' : 'rgba(0,0,0,0.2)';
   c.fillRect(0, 0, cv.width, H * TILE);
   // ambient occlusion where the ground runs into a wall
+  const aoK = outdoor ? 0.5 : 1;
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
       if (wall(tx, ty)) continue;
       const x = tx * TILE;
       const y = ty * TILE;
-      if (wall(tx, ty - 1)) T.edgeAO(c, x, y, TILE, 0, 12, '#000000');
-      if (wall(tx + 1, ty)) T.edgeAO(c, x, y, TILE, 1, 9, '#000000');
-      if (wall(tx, ty + 1)) T.edgeAO(c, x, y, TILE, 2, 7, '#000000');
-      if (wall(tx - 1, ty)) T.edgeAO(c, x, y, TILE, 3, 9, '#000000');
+      if (wall(tx, ty - 1)) T.edgeAO(c, x, y, TILE, 0, 12 * aoK, '#000000');
+      if (wall(tx + 1, ty)) T.edgeAO(c, x, y, TILE, 1, 9 * aoK, '#000000');
+      if (wall(tx, ty + 1)) T.edgeAO(c, x, y, TILE, 2, 7 * aoK, '#000000');
+      if (wall(tx - 1, ty)) T.edgeAO(c, x, y, TILE, 3, 9 * aoK, '#000000');
     }
   }
   c.restore();
 
-  paintWalls(c, world, pal, mat, wallTile, {});
+  paintWalls(c, world, pal, mat, wallTile, {}, propSet);
+  paintProps(c, world, pal, {});
 
   // a second, transparent copy of the wall mass carrying the lit trim. The
   // renderer paints tile bands of it back over the fog so walls next to ground
@@ -1270,19 +1503,93 @@ export function bakeWorld(world) {
   const wl = T.canv(cv.width, cv.height);
   const wc = wl.getContext('2d');
   wc.translate(0, WALL_H);
-  paintWalls(wc, world, pal, mat, wallTile, { glow: true, shadow: true });
+  paintWalls(wc, world, pal, mat, wallTile, { glow: true, shadow: true }, propSet);
+  paintProps(wc, world, pal, { glow: true });
   cv.walls = wl;
   return cv;
+}
+
+// tree / rock / obelisk / brazier props. Everything varies off hash2(tx,ty)
+// (never the bake rng) so the base pass and the walls-layer pass draw the
+// same thing. In the walls layer canopies are drawn faint so a unit under a
+// tree still reads once game.js re-blits that band over the fog.
+function paintProps(c, world, pal, opt) {
+  const glow = !!opt.glow;
+  for (const r of world.rooms) {
+    for (const pr of r.props || []) {
+      const x = pr.tx * TILE;
+      const y = pr.ty * TILE;
+      const v = T.hash2(pr.tx, pr.ty, 19);
+      const v2 = T.hash2(pr.tx, pr.ty, 71);
+      if (!glow && (pr.kind === 'tree' || pr.kind === 'rock')) {
+        // patch of ground so the prop tile isn't a hole in the sky
+        c.fillStyle = T.rgba(pal.floorB || '#333', 0.9);
+        c.fillRect(x, y, TILE, TILE);
+      }
+      if (pr.kind === 'tree') {
+        T.tree(c, x + TILE * 0.5, y + TILE * 0.72, TILE * (0.6 + v * 0.28), v2, {
+          trunk: pal.treeTrunk || '#463726',
+          leaf: pal.foliage || '#3f6b34',
+          leaf2: pal.foliageHi || '#6a9a44',
+          lift: TILE * (1.05 + v * 0.7),
+          alpha: glow ? 0.4 : 0.86,
+        });
+      } else if (pr.kind === 'rock') {
+        T.boulder(c, x, y, TILE * (0.78 + v * 0.28), v2, {
+          rock: pal.rock || '#8a8378',
+          dark: pal.rockDark || '#3c352c',
+        });
+      } else if (pr.kind === 'obelisk') {
+        T.obelisk(c, x, y, TILE, TILE, WALL_H, pr.tx * 7 + pr.ty, {
+          stone: pal.hi || '#c9a25a',
+          shade: pal.lo || '#5c3f18',
+          gold: pal.accent || '#f0d182',
+        });
+      } else if (pr.kind === 'brazier') {
+        const cx = x + TILE * 0.5;
+        const cy = y + TILE * 0.55;
+        c.save();
+        c.fillStyle = 'rgba(0,0,0,0.26)';
+        c.beginPath();
+        c.ellipse(cx, y + TILE * 0.82, TILE * 0.34, TILE * 0.15, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = pal.lo || '#3a2a15';
+        c.fillRect(cx - 2.5, cy, 5, TILE * 0.32);
+        c.fillStyle = T.mix(pal.wall || '#4a3620', '#000000', 0.2);
+        c.beginPath();
+        c.ellipse(cx, cy, TILE * 0.3, TILE * 0.15, 0, 0, Math.PI * 2);
+        c.fill();
+        c.fillStyle = T.rgba(pal.accent2 || '#ff8a3c', 0.9);
+        c.beginPath();
+        c.ellipse(cx, cy - 1, TILE * 0.21, TILE * 0.1, 0, 0, Math.PI * 2);
+        c.fill();
+        T.pool(c, cx, cy - 2, TILE * (glow ? 1.1 : 1.9), pal.accent2 || '#ff8a3c', glow ? 0.13 : 0.28);
+        c.fillStyle = 'rgba(255,210,122,0.8)';
+        for (let i = -1; i <= 1; i++) {
+          const fx = cx + i * TILE * 0.12;
+          const fh = TILE * (0.28 + T.hash2(pr.tx + i, pr.ty, 5) * 0.24);
+          c.beginPath();
+          c.moveTo(fx - 2, cy - 1);
+          c.quadraticCurveTo(fx, cy - fh, fx + 2, cy - 1);
+          c.fill();
+        }
+        c.restore();
+      }
+    }
+  }
 }
 
 // extruded wall mass: tile tops lifted WALL_H, a lit front face wherever open
 // floor lies to the south, and thin shaded faces on exposed east/west edges.
 // Everything a tile draws must stay inside its own column and within
 // [ty*TILE - WALL_H, ty*TILE + TILE + 11] — game.js re-blits exactly that band.
-function paintWalls(c, world, pal, mat, wallTile, opt) {
+function paintWalls(c, world, pal, mat, wallTile, opt, skip) {
   const W = world.W;
   const H = world.H;
   const wall = (x, y) => x < 0 || y < 0 || x >= W || y >= H || world.grid[y * W + x] === 1;
+  // a wall tile we actually paint stone for: real wall, not a prop tile
+  const drawn = (x, y) => wall(x, y) && !(skip && skip.has(y * W + x));
+  const treeline = pal.outdoor && pal.perimeter === 'treeline';
   const touches = (tx, ty) => {
     if (!wall(tx, ty)) return false;
     for (let k = 0; k < 8; k++) {
@@ -1292,10 +1599,19 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
     }
     return false;
   };
-  const side = T.mix(pal.wall, pal.void, 0.5);
-  const cap = T.mix(pal.glow, '#ffffff', 0.3);
-  const faceTop = T.mix(pal.wall, pal.glow, pal.outline === 'rim' ? 0.28 : 0.55);
-  const faceBot = T.mix(pal.wall, pal.void, 0.9);
+  let side = T.mix(pal.wall, pal.void, 0.5);
+  let cap = T.mix(pal.glow, '#ffffff', 0.3);
+  let faceTop = T.mix(pal.wall, pal.glow, pal.outline === 'rim' ? 0.28 : 0.55);
+  let faceBot = T.mix(pal.wall, pal.void, 0.9);
+  if (treeline) {
+    // the perimeter reads as a wall of forest: understory, not a stone panel
+    const fol = pal.foliage || '#3f6b34';
+    const folHi = T.mix(fol, pal.foliageHi || '#ffe9a0', 0.4);
+    side = T.mix(fol, '#000000', 0.5);
+    cap = folHi;
+    faceTop = T.mix(fol, folHi, 0.45);
+    faceBot = T.mix(fol, '#000000', 0.62);
+  }
 
   // tops — also filled one tile deep behind a lit tile so the lift leaves no
   // gap. The material pattern is world-aligned, so it runs on across tiles.
@@ -1303,7 +1619,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
   c.beginPath();
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
-      if (!wall(tx, ty)) continue;
+      if (!drawn(tx, ty)) continue;
       if (!touches(tx, ty) && !touches(tx, ty - 1)) continue;
       c.rect(tx * TILE, ty * TILE - WALL_H, TILE, TILE);
     }
@@ -1317,7 +1633,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
   // per-tile tone jitter keeps a long run from reading as one flat slab
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
-      if (!wall(tx, ty)) continue;
+      if (!drawn(tx, ty)) continue;
       const h = T.hash2(tx, ty, 7);
       c.fillStyle = T.rgba(h > 0.5 ? pal.hi : '#000000', Math.abs(h - 0.5) * 0.2);
       c.fillRect(tx * TILE, ty * TILE - WALL_H, TILE, TILE);
@@ -1338,7 +1654,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
   c.fillStyle = side;
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
-      if (!wall(tx, ty)) continue;
+      if (!drawn(tx, ty)) continue;
       const y = ty * TILE - WALL_H;
       if (!wall(tx - 1, ty)) c.fillRect(tx * TILE, y, 5, TILE);
       if (!wall(tx + 1, ty)) c.fillRect((tx + 1) * TILE - 5, y, 5, TILE);
@@ -1348,7 +1664,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
   // front faces: the wall's south side, standing on the floor tile below it
   for (let ty = 0; ty < H; ty++) {
     for (let tx = 0; tx < W; tx++) {
-      if (!wall(tx, ty) || wall(tx, ty + 1)) continue;
+      if (!drawn(tx, ty) || wall(tx, ty + 1)) continue;
       const x = tx * TILE;
       const fy = (ty + 1) * TILE - WALL_H;
       const grd = c.createLinearGradient(0, fy, 0, fy + WALL_H);
@@ -1379,6 +1695,41 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
     }
   }
 
+  // treeline crown: soft canopy scallops bulging off every exposed top edge, so
+  // the lifted mass reads as forest rather than a slab. Base pass only — the
+  // walls-layer re-blit must not drop opaque canopy over the player.
+  if (treeline && !opt.glow) {
+    const fol = pal.foliage || '#3f6b34';
+    const folHi = T.mix(fol, pal.foliageHi || '#9fd070', 0.5);
+    for (let ty = 0; ty < H; ty++) {
+      for (let tx = 0; tx < W; tx++) {
+        if (!drawn(tx, ty) || wall(tx, ty - 1)) continue;
+        const cx = tx * TILE + TILE / 2;
+        const topY = ty * TILE - WALL_H;
+        for (let k = 0; k < 3; k++) {
+          const hh = T.hash2(tx * 3 + k, ty, 45);
+          const bx = cx + (k - 1) * TILE * 0.34;
+          const br = TILE * (0.36 + hh * 0.26);
+          const by = topY + 3 - hh * 5;
+          const g = c.createRadialGradient(bx, by, br * 0.2, bx, by, br);
+          g.addColorStop(0, T.rgba(folHi, 0.5));
+          g.addColorStop(0.6, T.rgba(fol, 0.9));
+          g.addColorStop(1, T.rgba(T.mix(fol, '#000000', 0.4), 0.9));
+          c.fillStyle = g;
+          c.beginPath();
+          c.arc(bx, by, br, 0, Math.PI * 2);
+          c.fill();
+        }
+        // sun catch on the upper-left of the crown
+        c.strokeStyle = T.rgba(folHi, 0.4);
+        c.lineWidth = 1.4;
+        c.beginPath();
+        c.arc(cx - 4, topY + 1, TILE * 0.42, Math.PI * 0.95, Math.PI * 1.6);
+        c.stroke();
+      }
+    }
+  }
+
   if (!opt.glow) return;
 
   // the lifted silhouette: a hard neon rim for built worlds, a soft light
@@ -1392,7 +1743,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
     c.beginPath();
     for (let ty = 0; ty < H; ty++) {
       for (let tx = 0; tx < W; tx++) {
-        if (!wall(tx, ty) || wall(tx, ty - 1)) continue;
+        if (!drawn(tx, ty) || wall(tx, ty - 1)) continue;
         c.moveTo(tx * TILE, ty * TILE - WALL_H + 0.5);
         c.lineTo((tx + 1) * TILE, ty * TILE - WALL_H + 0.5);
       }
@@ -1405,7 +1756,7 @@ function paintWalls(c, world, pal, mat, wallTile, opt) {
     c.beginPath();
     for (let ty = 0; ty < H; ty++) {
       for (let tx = 0; tx < W; tx++) {
-        if (world.grid[ty * W + tx] !== 1) continue;
+        if (world.grid[ty * W + tx] !== 1 || (skip && skip.has(ty * W + tx))) continue;
         const x = tx * TILE;
         const y = ty * TILE - WALL_H;
         if (!wall(tx, ty - 1)) {

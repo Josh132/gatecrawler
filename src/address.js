@@ -95,8 +95,10 @@ export function worldParams(addr, hop) {
   const roomCount = 4 + (e % 3) + Math.min(2, Math.floor(threat / 2)); // 4..8
   // biome follows the faction — each holds two or three looks, and the roll
   // between them is a plain draw off the address stream so it stays stable
+  // jaffa hold grand interiors (temple, pyramid) and open-air worlds (desert,
+  // jungle, savannah) in roughly equal measure — a solid fraction are outdoors
   const biomePools = {
-    jaffa: ['temple', 'desert', 'jungle'],
+    jaffa: ['temple', 'pyramid', 'desert', 'jungle', 'savannah'],
     wraith: ['hive', 'ice'],
     replicator: ['foundry', 'atlantis'],
   };

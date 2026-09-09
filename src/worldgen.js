@@ -222,6 +222,53 @@ export function buildWorld(params) {
     }
   }
 
+  // --- one special set-piece room per world (game.js populateWorld reads
+  // room.special). Deterministic off a dedicated seed stream; only picks the
+  // room and, for a vault, carves its alcove — the props are game.js's job.
+  {
+    const SR = rngHelpers(makeRng('special:' + params.seedStr));
+    const grr = rooms.find((r) => r.kind === 'gate');
+    const normals = rooms.filter((r) => r.kind === 'normal');
+    const pool = normals.filter(
+      (r) => !grr || Math.abs(r.gx - grr.gx) + Math.abs(r.gy - grr.gy) > 1
+    );
+    const list = pool.length ? pool : normals;
+    if (list.length) {
+      const room = SR.pick(list);
+      const roll = SR.rand();
+      let kind = null;
+      if (params.campaignTarget) {
+        // worlds that feed the active op lean toward the objective-shaped rooms
+        kind = roll < 0.4 ? 'datacore' : roll < 0.7 ? 'rescue' : roll < 0.85 ? 'vault' : roll < 0.95 ? 'arena' : 'vendor';
+      } else {
+        kind = roll < 0.24 ? 'vault' : roll < 0.46 ? 'arena' : roll < 0.64 ? 'vendor' : roll < 0.78 ? 'datacore' : roll < 0.86 ? 'rescue' : null;
+      }
+      room.special = kind;
+      if (kind === 'vault') {
+        // carve a 3x2 (or 2x3) dead-end pocket into a wall side with no room
+        const sides = SR.shuffle([[1, 0], [-1, 0], [0, 1], [0, -1]]);
+        for (const [sx, sy] of sides) {
+          if (byKey.get(room.gx + sx + ',' + (room.gy + sy))) continue;
+          const cxT = room.ox + (ROOM_W >> 1);
+          const cyT = room.oy + (ROOM_H >> 1);
+          let ax, ay, aw, ah, mx, my;
+          if (sx === 1) { aw = 2; ah = 3; ax = room.ox + ROOM_W; ay = cyT - 1; mx = room.ox + ROOM_W - 1; my = cyT; }
+          else if (sx === -1) { aw = 2; ah = 3; ax = room.ox - 2; ay = cyT - 1; mx = room.ox; my = cyT; }
+          else if (sy === 1) { aw = 3; ah = 2; ax = cxT - 1; ay = room.oy + ROOM_H; mx = cxT; my = room.oy + ROOM_H - 1; }
+          else { aw = 3; ah = 2; ax = cxT - 1; ay = room.oy - 2; mx = cxT; my = room.oy; }
+          if (ax < 1 || ay < 1 || ax + aw > W - 1 || ay + ah > H - 1) continue;
+          for (let y = 0; y < ah; y++) for (let x = 0; x < aw; x++) grid[at(ax + x, ay + y)] = 0;
+          grid[at(mx, my)] = 0; // mouth into the room interior
+          room.alcove = {
+            x: ax * TILE, y: ay * TILE, w: aw * TILE, h: ah * TILE,
+            cx: (ax + aw / 2) * TILE, cy: (ay + ah / 2) * TILE,
+          };
+          break;
+        }
+      }
+    }
+  }
+
   return {
     grid,
     W,

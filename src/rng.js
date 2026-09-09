@@ -30,6 +30,12 @@ export function makeRng(str) {
   return mulberry32(seed());
 }
 
+// Unseeded random in [a, b). The cosmetic cousin of rngHelpers().range — use it
+// for anything purely visual (particle jitter, casing spin, screen-shake) that
+// must NOT touch the deterministic worldgen seed stream. Never use it in
+// worldgen or anywhere the test harness checks for determinism.
+export const rr = (a, b) => a + Math.random() * (b - a);
+
 export function rngHelpers(rand) {
   return {
     rand,

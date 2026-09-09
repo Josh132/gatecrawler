@@ -1,12 +1,21 @@
 import { keys, mouse, pressed, endFrameInput, captureNextKey, setAimAssistTargets } from './input.js';
 import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
-import { TAU, clamp, glowCircle, shade, figure, spider, critter } from './draw.js';
-import { makeRng, rngHelpers } from './rng.js';
+import { TAU, clamp, glowCircle, shade, figure, spider, critter, hexA, textReset, wrapLines, wrapText } from './draw.js';
+import { makeRng, rngHelpers, rr } from './rng.js';
+import {
+  spark, burst, kawoosh, addShake, addFlash, scorch, ejectCasing, splat,
+  factionSplatColor, biomeDust,
+} from './fx.js';
+import { computeVisPoly, polyBox, litAt, drawFog } from './vis.js';
+import { techEffects, TECH, canResearch, nodeById, milestoneFor } from './tech.js';
+import {
+  drawItemIcon, rarityOf, rarityTierOf, normRarity, RARITY_COLOR, RARITY_LABEL,
+} from './icons.js';
 import { HOME, neighbors, worldParams } from './address.js';
 import { buildWorld, bakeWorld, BIOMES, TILE, WALL_H, tileAt } from './worldgen.js';
 import { makeFlowField } from './pathfind.js';
-import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Decal, Hazard, Trap, circleVsGrid, DataCore, VaultDoor, Captive, Vendor, NexusPylon } from './entities.js';
+import { Player, Enemy, Bullet, Pickup, Grenade, Block, Particle, Hazard, Trap, circleVsGrid, DataCore, VaultDoor, Captive, Vendor, NexusPylon } from './entities.js';
 import { ITEMS, EQUIP_SLOTS, RARITY_MULT, rollRarity, rarityAffixName } from './items.js';
 import {
   buildHub,
@@ -78,12 +87,80 @@ import {
   modById,
 } from './weaponmods.js';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  game.js — the core loop, the state machine, and every gameplay + UI system.
+//
+//  Big file, but sectioned. Jump with your editor by searching the ▸ markers
+//  below (each matches a "// ▸ SECTION" banner further down). Anything that could
+//  be lifted out cleanly already has been — see the sibling modules in the map.
+//
+//  ── MAP OF THE CODEBASE ────────────────────────────────────────────────────
+//    address.js     glyphs, seed hashing, gate-network neighbours, worldParams
+//    worldgen.js    worldParams → room graph → tile map; offscreen bake; BIOMES
+//    pathfind.js    BFS flow field used by enemy pathing
+//    entities.js    Player / Enemy / Bullet / Pickup / … classes + circleVsGrid
+//    weapons.js     the weapon stat table
+//    weaponmods.js  per-weapon mastery + mod maths (weaponStats, costs, XP)
+//    items.js       gear/consumable catalogue + rarity multipliers
+//    inventory.js   grid / equipment / hotbar state + pure move/equip/derive
+//    tech.js        the 69-node research tree: data, effects fold, gating
+//    campaign.js    the Incursion: OPERATIONS, FINALE, progress tracking
+//    roster.js      recoverable SG teams + purchasable SGC base upgrades
+//    hub.js         the walkable SGC: layout, decor bake, station consoles, crew
+//    icons.js       procedural item icons + rarity colour/label tables
+//    draw.js        low-level canvas toolkit (shapes, figures, text/colour utils)
+//    textures.js    procedural wall/floor/prop textures for the world bake
+//    fx.js          particles, screen shake, flashes, battlefield decals
+//    vis.js         line of sight, the 360° visibility polygon, fog
+//    audio.js       synth sfx + ambient beds + the music bed
+//    postfx.js      optional WebGL colour-grade pass over the 2D canvas
+//    input.js  rng.js  loop.js  main.js   plumbing
+//
+//  ── SECTIONS IN THIS FILE (search "// ▸ <name>") ─────────────────────────────
+//    ▸ save               defaultSave / normalizeSave / load / persist
+//    ▸ effects            fx(g) — folded tech + roster + base-upgrade effects
+//    ▸ createGame         the game object `g`, its shape, the public API
+//    ▸ run lifecycle      enterHub / launchRun / startWorld / dialHome / onDeath
+//    ▸ update             the top-level tick + updateHub + updatePlay
+//    ▸ spawning           worldgen population: rooms, enemies, loot, hazards
+//    ▸ special rooms      data cores, vaults, arenas, vendors, captive escort
+//    ▸ combat             firing, bullets, alt-fires, hitEnemy, damagePlayer, kills
+//    ▸ enemy AI           idle/leash, per-kind behaviour, bosses
+//    ▸ new enemy kinds    sniper / stalker / weaver / scavenger behaviour
+//    ▸ squad AI           per-frame Jaffa squad coordination
+//    ▸ traps              dart traps + the nexus beam
+//    ▸ camera             clampCam
+//    ▸ render             render(g) orchestrator, renderPlay, the world draw pass
+//    ▸ fake-3d light      the fixed key light + ground shadows
+//    ▸ lights             coloured floor light sprites
+//    ▸ HUD                crosshair, health/ammo, minimap, messages, boss intro
+//    ▸ loadout panel      the grid, drag/drop, gear slots, stash chest
+//    ▸ pause + settings   pause overlay, settings, key rebinding
+//    ▸ front-of-house UI  main menu, codex, tutorial tips, starfield
+//    ▸ roster / base ops / operations / workbench   the SGC station panels
+//    ▸ debrief            floating combat text, boss bar, unlock cards, run debrief
+//
+//  ── RULES (do not break — the harness enforces the first two) ─────────────
+//   • g.state ∈ {menu, play, gatemap, dead} ONLY. Every other screen (pause,
+//     debrief, roster, research…) is a SUB-MODE: a flag on `g` read inside an
+//     existing state, never a new g.state string.
+//   • Worldgen is seeded + deterministic. Never use Math.random() (or fx.js's
+//     `rr`) in worldgen — use the address hash stream.
+//   • ctx.textAlign / textBaseline leak between frames; render() resets them —
+//     any fn that sets them must reset before returning (see textReset).
+//   • New save key ⇒ add a default in BOTH defaultSave() and normalizeSave(),
+//     and mirror it in the harness DEFAULTS.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const SAVE_KEY = 'gatecrawler.save.v1';
-const rr = (a, b) => a + Math.random() * (b - a);
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
 const ZOOM = 1.4;
+
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ save — defaultSave / normalizeSave / load / persist
+// ──────────────────────────────────────────────────────────────────────────
 
 function defaultSave() {
   return {
@@ -137,64 +214,10 @@ function normalizeSave(s) {
   return s;
 }
 
-// merged tech-tree effects — replaced by tech.js's techEffects() once that lands
-function techEffectsFallback() {
-  return {
-    maxHpBonus: 0,
-    dodgeCharges: 1,
-    dodgeCdMul: 1,
-    startArmor: null,
-    startShield: 0,
-    freeRevive: false,
-    weaponSlots: 2,
-    reloadMul: 1,
-    grenadeCap: 4,
-    weaponDmgMul: 1,
-    weaponModSlots: 0,
-    unlockedWeapons: [],
-    dialCostMul: 1,
-    mapLookahead: 0,
-    startHop: 0,
-    heatMul: 1,
-    naquadahMul: 1,
-    intelMul: 1,
-    deathKeepFrac: 0.5,
-  };
-}
-let techEffects = techEffectsFallback;
-let TECH = [];
-let canResearch = () => false;
-let nodeById = () => null;
-let researchCost = (id) => ({ naquadah: 0 });
-let milestoneFor = () => 0;
-let drawItemIcon = null;
-let rarityOf = () => 'common';
-let rarityTierOf = () => 'common';
-let normRarity = (r) => r || 'common';
-let RARITY_COLOR = { common: '#9fb0c0', good: '#57d977', epic: '#b06cff', legendary: '#ffb638', uncommon: '#57d977', rare: '#b06cff' };
-let RARITY_LABEL = { common: 'COMMON', good: 'GOOD', epic: 'EPIC', legendary: 'LEGENDARY' };
-try {
-  const mod = await import('./tech.js');
-  if (typeof mod.techEffects === 'function') techEffects = mod.techEffects;
-  if (Array.isArray(mod.TECH)) TECH = mod.TECH;
-  if (typeof mod.canResearch === 'function') canResearch = mod.canResearch;
-  if (typeof mod.nodeById === 'function') nodeById = mod.nodeById;
-  if (typeof mod.researchCost === 'function') researchCost = mod.researchCost;
-  if (typeof mod.milestoneFor === 'function') milestoneFor = mod.milestoneFor;
-} catch (e) {
-  /* tech.js not present yet — use the fallback */
-}
-try {
-  const ic = await import('./icons.js');
-  if (typeof ic.drawItemIcon === 'function') drawItemIcon = ic.drawItemIcon;
-  if (typeof ic.rarityOf === 'function') rarityOf = ic.rarityOf;
-  if (typeof ic.rarityTierOf === 'function') rarityTierOf = ic.rarityTierOf;
-  if (typeof ic.normRarity === 'function') normRarity = ic.normRarity;
-  if (ic.RARITY_COLOR) RARITY_COLOR = ic.RARITY_COLOR;
-  if (ic.RARITY_LABEL) RARITY_LABEL = ic.RARITY_LABEL;
-} catch (e) {
-  /* icons.js not present yet */
-}
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ effects — fx(g): folded tech + roster + base-upgrade stats
+// ──────────────────────────────────────────────────────────────────────────
+
 function fx(g) {
   const e = techEffects(g.save.tech || []);
   // rescued SG teams stack their passives on top of the tech tree
@@ -300,6 +323,10 @@ function persist(s) {
     /* ignore */
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ createGame — builds the game object `g` and the public API
+// ──────────────────────────────────────────────────────────────────────────
 
 export function createGame(canvas) {
   const ctx = canvas.getContext('2d');
@@ -449,7 +476,9 @@ export function createGame(canvas) {
   };
 }
 
-// ---------------------------------------------------------------- run lifecycle
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ run lifecycle
+// ──────────────────────────────────────────────────────────────────────────
 
 // ---- the walkable home base ----------------------------------------------
 
@@ -778,7 +807,9 @@ function saveInv(g) {
   persist(g.save);
 }
 
-// ---------------------------------------------------------------- update
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ update
+// ──────────────────────────────────────────────────────────────────────────
 
 function update(g, dt) {
   g.time += dt;
@@ -818,9 +849,15 @@ function update(g, dt) {
   } else if (g.state === 'hub') {
     updateHub(g, dt);
   } else if (g.state === 'gatemap') {
-    if (g.launching && pressed('Escape')) {
-      g.launching = false;
-      enterHub(g);
+    if (pressed('Escape')) {
+      if (g.launching) {
+        // backing out of the pre-run destination pick drops you back in the SGC
+        g.launching = false;
+        enterHub(g);
+      } else {
+        // changed your mind at the DHD mid-run — just go back to the floor
+        g.state = 'play';
+      }
     }
   } else if (g.state === 'dead') {
     // covers both the KIA screen and the EXTRACTED debrief (see dialHome note)
@@ -1332,6 +1369,8 @@ function updatePlay(g, dt) {
         nb._room = bl.room;
         nb.state = 'active';
         nb.mode = 'advance';
+        nb.aggressive = true;
+        nb.lungeCd = 0.6; // reforms already lunging
         g.enemies.push(nb);
         burst(g, bl.x, bl.y, 18, '#b6f0ff');
         g.message('Replicator reassembles');
@@ -1544,7 +1583,9 @@ function updateModifiers(g, dt) {
   }
 }
 
-// ---------------------------------------------------------------- spawning
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ spawning
+// ──────────────────────────────────────────────────────────────────────────
 
 function findRoom(g, x, y) {
   for (const r of g.world.rooms) {
@@ -1592,8 +1633,8 @@ function pickEnemyKind(fac, R, slot) {
     return R.chance(0.5) ? 'wraith_drone' : 'wraith';
   }
   if (fac === 'replicator') {
-    if (slot.weavers < 1 && R.chance(0.2)) return (slot.weavers++), 'replicator_weaver';
-    return slot.brutes < (slot.bruteCap || 1) && R.chance(0.24) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
+    if (slot.weavers < 2 && R.chance(0.28)) return (slot.weavers++), 'replicator_weaver';
+    return slot.brutes < (slot.bruteCap || 1) && R.chance(0.32) ? ((slot.brutes++), 'replicator_brute') : 'replicator';
   }
   // jaffa: a lone lane-holding sniper turns up in ~1 room in 3
   if (slot.snipers < 1 && R.chance(0.36)) return (slot.snipers++), 'jaffa_sniper';
@@ -1694,7 +1735,7 @@ function populateWorld(g) {
           g.pylons.push(py2);
         }
       }
-      const guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 2 : 0);
+      const guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 3 : 0);
       for (let i = 0; i < guards; i++) {
         const q = placeXY();
         const e = new Enemy(guardKind(fac, R, slot), q.x, q.y, p.threat);
@@ -1707,11 +1748,11 @@ function populateWorld(g) {
 
     // Replicators come as an overwhelming tide — many weak units, more brutes
     const swarm = fac === 'replicator';
-    if (swarm) slot.bruteCap = 2;
+    if (swarm) slot.bruteCap = p.threat >= 5 ? 3 : 2;
     let count = swarm
-      ? Math.min(13, 6 + Math.floor(p.threat / 2) + R.int(1, 3) + heatTier * 2)
+      ? Math.min(17, 8 + Math.floor(p.threat / 2) + R.int(1, 3) + heatTier * 2)
       : Math.min(7, 3 + Math.floor(p.threat / 2) + R.int(0, 1) + heatTier);
-    if (nearGate) count = Math.max(swarm ? 4 : 2, count - (swarm ? 3 : 2)); // lighter garrison by the gate
+    if (nearGate) count = Math.max(swarm ? 5 : 2, count - (swarm ? 3 : 2)); // lighter garrison by the gate
     for (let i = 0; i < count; i++) {
       const kind = pickEnemyKind(fac, R, slot);
       const q = placeXY();
@@ -1719,8 +1760,8 @@ function populateWorld(g) {
       e._room = room;
       if (kind === 'jaffa') e.aggressive = R.chance(nearGate ? 0.1 : 0.28);
       if (kind === 'jaffa_heavy' || kind === 'replicator_brute') e.aggressive = !nearGate;
-      // a swarm presses in — replicators don't hang back and take cover
-      if (kind === 'replicator') e.aggressive = !nearGate && R.chance(0.7);
+      // a swarm presses in hard — every replicator rushes, none hang back
+      if (kind === 'replicator') e.aggressive = !nearGate;
       if (nearGate) e.calmT = 3.5 + R.range(0, 2); // hold post, ignore the player by sight for a beat
       g.enemies.push(e);
     }
@@ -1820,7 +1861,9 @@ function placeHazards(g, room, R, rect, nearGate, placeXY) {
   }
 }
 
-// ------------------------------------------------------------- special rooms
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ special rooms
+// ──────────────────────────────────────────────────────────────────────────
 // worldgen tags one normal room per world with room.special; here we drop the
 // set-piece + its guards. All guards start idle like any other room.
 
@@ -2376,7 +2419,9 @@ function explode(g, gr) {
   if (gr.from === 'player') alertNearby(g, gr.x, gr.y, gr.radius + 120);
 }
 
-// ---------------------------------------------------------------- combat
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ combat
+// ──────────────────────────────────────────────────────────────────────────
 
 function startReload(g, p, wid) {
   const wp = WEAPONS[wid];
@@ -3010,7 +3055,7 @@ function killEnemy(g, e) {
     sfx.death();
     burst(g, e.x, e.y, 20, '#b6f0ff');
     g.hitstop = Math.max(g.hitstop, 2);
-    for (let i = 0; i < 4; i++) g.blocks.push(new Block(e.x + rr(-8, 8), e.y + rr(-8, 8), g.params.threat, e._room));
+    for (let i = 0; i < 5; i++) g.blocks.push(new Block(e.x + rr(-8, 8), e.y + rr(-8, 8), g.params.threat, e._room));
     g.pickups.push(new Pickup('naquadah', e.x, e.y, 5 * worldMods(g).naqMul));
     g.message('Replicator scatters — finish the pieces');
     return;
@@ -3192,7 +3237,9 @@ function collectPickup(g, pk) {
   }
 }
 
-// ---------------------------------------------------------------- enemy AI
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ enemy AI
+// ──────────────────────────────────────────────────────────────────────────
 
 function lineBlocked(g, x0, y0, x1, y1) {
   const dx = x1 - x0;
@@ -3236,7 +3283,9 @@ function keepOutOfGateRoom(g, e) {
 function checkLeash(g, e, dt) {
   if (!e._room || e.hunter) return false;
   const c = e._room.centerPx;
-  if (Math.hypot(e.x - c.x, e.y - c.y) < LEASH_DIST) return false;
+  // replicators are relentless — they'll chase a room or two beyond their nest
+  const leash = e.kind && e.kind.indexOf('replicator') === 0 ? LEASH_DIST * 2.4 : LEASH_DIST;
+  if (Math.hypot(e.x - c.x, e.y - c.y) < leash) return false;
   if (Math.hypot(e.x - g.player.x, e.y - g.player.y) < 130) return false; // player is right here — keep fighting
   e.state = 'dormant';
   e.mode = 'advance';
@@ -3302,6 +3351,12 @@ function idleTick(g, e, dt, sightRange) {
   // a guard just sent back to its post ignores the player by sight for a beat,
   // but still reacts to being shot or to the player getting right on top of it
   let notice = e.hp < e.maxHp || (e.calmT <= 0 && (d < 110 || e.alertT > 0));
+  // replicators hunt — they track prey by motion/EM, not just clean line of
+  // sight, and they wake the instant you share a room with them
+  const repl = e.kind && e.kind.indexOf('replicator') === 0;
+  if (repl && e.calmT <= 0) {
+    if (d < 240 || (e._room && e._room === g.curRoom) || d < sightRange * 0.7) notice = true;
+  }
   if (!notice && e.calmT <= 0 && d < sightRange) {
     e.senseT -= dt;
     if (e.senseT <= 0) {
@@ -3721,14 +3776,16 @@ function updateWraithDrone(g, e, dt) {
   }
 }
 
-// swarm unit (also drives the brute): rush and bite
+// swarm unit (also drives the brute): rush, pounce and bite. regular replicators
+// pounce a short dash to close the last gap; brutes telegraph a long lunging
+// charge that knocks the player flying.
 function updateReplicator(g, e, dt, brute) {
   const p = g.player;
   if (e.stun > 0) {
     e.stun -= dt;
     return;
   }
-  if (e.state === 'idle' && idleTick(g, e, dt, brute ? 300 : 260)) return;
+  if (e.state === 'idle' && idleTick(g, e, dt, brute ? 620 : 700)) return;
   if (e.state === 'dormant') {
     dormantTick(g, e, dt);
     return;
@@ -3742,25 +3799,84 @@ function updateReplicator(g, e, dt, brute) {
   const dist = Math.hypot(dx, dy) || 1;
   e.facing = Math.atan2(dy, dx);
   e.wobble += dt * 12;
+  e.cool -= dt;
+  e.lungeCd -= dt;
+  const los = !lineBlocked(g, e.x, e.y, p.x, p.y);
+
+  // --- brute charge: windup (rooted, flashing) -> long straight lunge ---------
+  if (brute) {
+    if (e.windT > 0) {
+      e.windT -= dt;
+      if (Math.random() < 0.5) spark(g, e.x + rr(-14, 14), e.y + rr(-14, 14), '#b6f0ff');
+      if (e.windT <= 0) {
+        e.lungeT = 0.5;
+        e.lungeDir = Math.atan2(dy, dx);
+        sfx.bossWindup && sfx.bossWindup();
+      }
+      return;
+    }
+    if (e.lungeT > 0) {
+      e.lungeT -= dt;
+      const cx = Math.cos(e.lungeDir);
+      const cy = Math.sin(e.lungeDir);
+      const nn = circleVsGrid(g.world, e, e.x + cx * e.speed * 2.5 * dt, e.y + cy * e.speed * 2.5 * dt);
+      if (Math.abs(nn.x - e.x) < 0.5 && Math.abs(nn.y - e.y) < 0.5) e.lungeT = 0; // hit a wall
+      e.x = nn.x;
+      e.y = nn.y;
+      if (dist < e.r + p.r + 8 && e.cool <= 0) {
+        damagePlayer(g, 24, dx, dy);
+        p.kx += (dx / dist) * 340;
+        p.ky += (dy / dist) * 340;
+        e.cool = 1.1;
+        e.lungeT = 0;
+      }
+      return;
+    }
+    if (e.lungeCd <= 0 && los && dist > 120 && dist < 380) {
+      e.windT = 0.42;
+      e.lungeCd = 3.4 + Math.random() * 1.6;
+      return;
+    }
+  }
+
+  // --- regular replicator pounce --------------------------------------------
+  if (!brute) {
+    if (e.lungeT > 0) e.lungeT -= dt;
+    else if (e.lungeCd <= 0 && los && dist > 70 && dist < 230) {
+      e.lungeT = 0.3;
+      e.lungeDir = Math.atan2(dy, dx);
+      e.lungeCd = 1.8 + Math.random() * 1.4;
+    }
+  }
+
   const [fx, fy] = flowDir(g, e);
-  const jit = brute ? 0 : Math.sin(e.wobble) * 0.35;
-  let mvx = fx + -fy * jit;
-  let mvy = fy + fx * jit;
-  if (fx === 0 && fy === 0) {
-    mvx = dx / dist;
-    mvy = dy / dist;
+  let mvx;
+  let mvy;
+  if (e.lungeT > 0 && !brute) {
+    // committed dash straight at where the player was when it leapt
+    mvx = Math.cos(e.lungeDir);
+    mvy = Math.sin(e.lungeDir);
+  } else {
+    const jit = brute ? 0 : Math.sin(e.wobble) * 0.35;
+    mvx = fx + -fy * jit;
+    mvy = fy + fx * jit;
+    if (fx === 0 && fy === 0) {
+      mvx = dx / dist;
+      mvy = dy / dist;
+    }
   }
   const l = Math.hypot(mvx, mvy) || 1;
-  e.x += (mvx / l) * e.speed * dt;
-  e.y += (mvy / l) * e.speed * dt;
-  e.cool -= dt;
+  const spd = e.speed * (e.lungeT > 0 && !brute ? 2.5 : 1);
+  const nn = circleVsGrid(g.world, e, e.x + (mvx / l) * spd * dt, e.y + (mvy / l) * spd * dt);
+  e.x = nn.x;
+  e.y = nn.y;
   if (dist < e.r + p.r + 4 && e.cool <= 0) {
     damagePlayer(g, brute ? 14 : 7, dx, dy);
     if (brute) {
       p.kx += (dx / dist) * 150;
       p.ky += (dy / dist) * 150;
     }
-    e.cool = brute ? 1.0 : 0.6;
+    e.cool = brute ? 1.0 : 0.55;
   }
 }
 
@@ -3815,7 +3931,9 @@ function updateGrenadier(g, e, dt) {
   }
 }
 
-// ---------------------------------------------------------------- new enemy kinds
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ new enemy kinds
+// ──────────────────────────────────────────────────────────────────────────
 
 // small fx when a stalker blinks in / out
 function blinkFx(g, x, y) {
@@ -4006,7 +4124,7 @@ function updateWeaver(g, e, dt) {
     e.stun -= dt;
     return;
   }
-  if (e.state === 'idle' && idleTick(g, e, dt, 300)) return;
+  if (e.state === 'idle' && idleTick(g, e, dt, 560)) return;
   if (e.state === 'dormant') {
     dormantTick(g, e, dt);
     return;
@@ -4043,7 +4161,7 @@ function updateWeaver(g, e, dt) {
         bl.mergeT = 2.2 + Math.random() * 0.6; // short-lived; spaced so they never re-merge
         g.blocks.push(bl);
       }
-      e.weaveCd = (e.weaveLife || 4.5) + 3;
+      e.weaveCd = (e.weaveLife || 4.5) + 1.5;
       spark(g, e.x, e.y, '#9fe8ff');
     }
     return;
@@ -4119,7 +4237,9 @@ function updateScavenger(g, e, dt) {
   }
 }
 
-// ---------------------------------------------------------------- squad AI
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ squad AI
+// ──────────────────────────────────────────────────────────────────────────
 // Rebuilt once per frame: group active, non-neutral jaffa + wraith by their
 // room into squads (cap 4) and set per-enemy modifier fields the individual AI
 // fns already read (squadRole / flankDir / regroup / lastSeen* / suppressT).
@@ -4250,7 +4370,9 @@ function updateSquads(g, dt) {
   }
 }
 
-// ---------------------------------------------------------------- traps
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ traps
+// ──────────────────────────────────────────────────────────────────────────
 function updateTraps(g, dt) {
   const p = g.player;
   for (const tp of g.traps) {
@@ -4556,106 +4678,9 @@ function bossVolley(g, e, v) {
   e.attackT = (v === 'wraith' ? 1.6 : 1.3) * (e.phase2 ? 0.66 : 1);
 }
 
-// ---------------------------------------------------------------- particles
-
-function spark(g, x, y, color) {
-  for (let i = 0; i < 5; i++) {
-    g.particles.push(new Particle(x, y, rr(-110, 110), rr(-110, 110), rr(0.15, 0.35), color, rr(1.5, 3)));
-  }
-}
-function burst(g, x, y, n, color) {
-  for (let i = 0; i < n; i++) {
-    const a = rr(0, TAU);
-    const s = rr(40, 260);
-    g.particles.push(new Particle(x, y, Math.cos(a) * s, Math.sin(a) * s, rr(0.3, 0.7), color, rr(1.5, 3.5)));
-  }
-}
-function kawoosh(g, x, y) {
-  for (let i = 0; i < 46; i++) {
-    const a = rr(0, TAU);
-    const s = rr(120, 420);
-    const r0 = rr(6, 22);
-    g.particles.push(
-      new Particle(x + Math.cos(a) * r0, y + Math.sin(a) * r0, Math.cos(a) * s, Math.sin(a) * s, rr(0.3, 0.6), '#7cc6ff', rr(1.4, 2.8))
-    );
-  }
-  g.shake = 16;
-}
-
-// directional screen shake — mag + a unit-ish (dx,dy) the kick comes from
-function addShake(g, mag, dx, dy) {
-  g.shake = Math.min(28, g.shake + mag);
-  const l = Math.hypot(dx || 0, dy || 0);
-  if (l > 1e-4) {
-    g.shakeX = dx / l;
-    g.shakeY = dy / l;
-  }
-}
-
-// battlefield marks — capped ring buffer, drawn under everything
-function addDecal(g, kind, x, y, r, color, ang) {
-  if (g.hub) return;
-  // local density cap — don't pile marks on the same spot
-  if (kind !== 'casing') {
-    let near = 0;
-    for (let i = g.decals.length - 1; i >= 0 && i > g.decals.length - 40; i--) {
-      const o = g.decals[i];
-      if (o.kind === kind && (o.x - x) ** 2 + (o.y - y) ** 2 < 15 * 15) near++;
-    }
-    if (near >= 2) return;
-  }
-  const d = new Decal(kind, x, y, r, color, ang);
-  d.born = g.time;
-  g.decals.push(d);
-  if (g.decals.length > 500) g.decals.splice(0, g.decals.length - 500);
-}
-function scorch(g, x, y, r) {
-  addDecal(g, 'scorch', x, y, r, 'rgba(8,6,5,0.42)');
-}
-function ejectCasing(g, x, y, aim) {
-  const a = aim + Math.PI + rr(-0.9, 0.9);
-  addDecal(g, 'casing', x + Math.cos(a) * rr(12, 30), y + Math.sin(a) * rr(12, 30), rr(2.2, 3.4), 'rgba(224,192,120,0.7)', rr(0, TAU));
-}
-function splat(g, x, y, color, n) {
-  for (let i = 0; i < (n || 3); i++) {
-    addDecal(g, 'splat', x + rr(-11, 11), y + rr(-11, 11), rr(3, 6.5), color, rr(0, TAU));
-  }
-}
-
-function factionSplatColor(kind) {
-  if (kind.startsWith('wraith')) return 'rgba(120,240,150,0.34)';
-  if (kind.startsWith('replicator')) return 'rgba(140,230,255,0.28)';
-  if (kind === 'boss') return 'rgba(255,160,110,0.34)';
-  return 'rgba(255,150,90,0.28)'; // jaffa
-}
-
-// per-biome impact debris: mote colour, floor-mark rgba, hot = throws sparks
-// + a scorch. keyed by g.params.biome; ruins is the fallback.
-const BIOME_IMPACT = {
-  ruins: { spark: '#9fb8cc', mark: 'rgba(58,68,82,0.30)', hot: false },
-  temple: { spark: '#d8b98a', mark: 'rgba(120,92,54,0.32)', hot: false },
-  jungle: { spark: '#7c5a36', mark: 'rgba(36,30,18,0.36)', hot: false },
-  desert: { spark: '#e8d0a0', mark: 'rgba(150,120,74,0.28)', hot: false },
-  ice: { spark: '#dff4ff', mark: 'rgba(182,222,242,0.24)', hot: false },
-  foundry: { spark: '#ffb066', mark: 'rgba(8,6,5,0.42)', hot: true },
-  hive: { spark: '#9dff6a', mark: 'rgba(120,240,150,0.26)', hot: false },
-  atlantis: { spark: '#cfe8ff', mark: 'rgba(92,142,182,0.26)', hot: false },
-  catacomb: { spark: '#a8a08a', mark: 'rgba(40,44,36,0.32)', hot: false },
-};
-function biomeImpact(g) {
-  return BIOME_IMPACT[(g.params && g.params.biome) || 'ruins'] || BIOME_IMPACT.ruins;
-}
-// a few biome-tinted motes at an impact point; returns the palette entry so
-// callers can add a scorch on hot biomes. keep n small — this is a hot path.
-function biomeDust(g, x, y, n, spd) {
-  const bi = biomeImpact(g);
-  for (let i = 0; i < n; i++) {
-    g.particles.push(new Particle(x, y, rr(-spd, spd), rr(-spd, spd), rr(0.12, 0.3), bi.spark, rr(1.3, 2.7)));
-  }
-  return bi;
-}
-
-// ---------------------------------------------------------------- camera
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ camera
+// ──────────────────────────────────────────────────────────────────────────
 
 function clampCam(g) {
   const wpx = g.world.W * TILE;
@@ -4671,7 +4696,9 @@ function clampCam(g) {
   g.cam.y = hpx > (halfH - ovY) * 2 ? clamp(g.cam.y, halfH - ovY, hpx - halfH + ovY) : hpx / 2;
 }
 
-// ---------------------------------------------------------------- render
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ render
+// ──────────────────────────────────────────────────────────────────────────
 
 function render(g, dt) {
   const { ctx, view } = g;
@@ -4689,7 +4716,7 @@ function render(g, dt) {
   g.buttons = [];
   cbTags = !!(g.save && g.save.settings && g.save.settings.cbPalette);
   try {
-    const arrow = g.panelOpen || g.station || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead';
+    const arrow = g.paused || g.panelOpen || g.station || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead';
     g.ctx.canvas.style.cursor = arrow ? 'default' : 'none';
   } catch (e) {
     /* headless */
@@ -4739,181 +4766,6 @@ function render(g, dt) {
         `particles ${g.particles.length}\nhop ${g.hop} threat ${g.params ? g.params.threat : '-'}`;
     }
   }
-}
-
-// ---------------------------------------------------------------- line of sight
-
-function raySeg(px, py, dx, dy, ax, ay, bx, by) {
-  const sx = bx - ax;
-  const sy = by - ay;
-  const rxs = dx * sy - dy * sx;
-  if (rxs > -1e-9 && rxs < 1e-9) return Infinity;
-  const qx = ax - px;
-  const qy = ay - py;
-  const t = (qx * sy - qy * sx) / rxs;
-  const u = (qx * dy - qy * dx) / rxs;
-  if (t >= 0 && u >= -0.0006 && u <= 1.0006) return t;
-  return Infinity;
-}
-
-// wall edges facing open ground within R of a point, as a flat [x1,y1,x2,y2,...]
-function gatherSegments(g, px, py, R) {
-  const w = g.world;
-  const t = TILE;
-  const segs = [];
-  const x0 = Math.max(0, Math.floor((px - R) / t) - 1);
-  const x1 = Math.min(w.W - 1, Math.floor((px + R) / t) + 1);
-  const y0 = Math.max(0, Math.floor((py - R) / t) - 1);
-  const y1 = Math.min(w.H - 1, Math.floor((py + R) / t) + 1);
-  const wall = (x, y) => x < 0 || y < 0 || x >= w.W || y >= w.H || w.grid[y * w.W + x] === 1;
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      if (w.grid[ty * w.W + tx] !== 1) continue;
-      const X = tx * t;
-      const Y = ty * t;
-      if (!wall(tx, ty - 1)) segs.push(X, Y, X + t, Y);
-      if (!wall(tx, ty + 1)) segs.push(X, Y + t, X + t, Y + t);
-      if (!wall(tx - 1, ty)) segs.push(X, Y, X, Y + t);
-      if (!wall(tx + 1, ty)) segs.push(X + t, Y, X + t, Y + t);
-    }
-  }
-  return segs;
-}
-
-function circlePoly(px, py, R, n) {
-  const poly = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * TAU;
-    poly.push(px + Math.cos(a) * R, py + Math.sin(a) * R);
-  }
-  return poly;
-}
-
-// 360° visibility polygon: cast rays at every wall-corner (plus a fan) and keep
-// the nearest hit. Doorways, pillars and corners occlude naturally.
-function computeVisPoly(g, R) {
-  const p = g.player;
-  if (!g.visEnabled) return circlePoly(p.x, p.y, R, 28);
-  const segs = gatherSegments(g, p.x, p.y, R);
-  const angs = [];
-  for (let i = 0; i < segs.length; i += 4) {
-    for (let k = 0; k < 2; k++) {
-      const ex = segs[i + k * 2];
-      const ey = segs[i + k * 2 + 1];
-      const a = Math.atan2(ey - p.y, ex - p.x);
-      angs.push(a - 0.0006, a, a + 0.0006);
-    }
-  }
-  for (let i = 0; i < 50; i++) angs.push(-Math.PI + (i / 50) * TAU);
-  angs.sort((a, b) => a - b);
-  const poly = [];
-  for (let j = 0; j < angs.length; j++) {
-    const a = angs[j];
-    const dx = Math.cos(a);
-    const dy = Math.sin(a);
-    let best = R;
-    for (let i = 0; i < segs.length; i += 4) {
-      const tt = raySeg(p.x, p.y, dx, dy, segs[i], segs[i + 1], segs[i + 2], segs[i + 3]);
-      if (tt < best) best = tt;
-    }
-    poly.push(p.x + dx * best, p.y + dy * best);
-  }
-  return poly;
-}
-
-function inPoly(x, y, poly) {
-  let inside = false;
-  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
-    const xi = poly[i];
-    const yi = poly[i + 1];
-    const xj = poly[j];
-    const yj = poly[j + 1];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
-
-function polyBox(poly) {
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (let i = 0; i < poly.length; i += 2) {
-    if (poly[i] < x0) x0 = poly[i];
-    if (poly[i] > x1) x1 = poly[i];
-    if (poly[i + 1] < y0) y0 = poly[i + 1];
-    if (poly[i + 1] > y1) y1 = poly[i + 1];
-  }
-  return [x0, y0, x1, y1];
-}
-
-function litAt(g, x, y) {
-  const p = g.player;
-  const dx = x - p.x;
-  const dy = y - p.y;
-  if (dx * dx + dy * dy < 6400) return true;
-  if (!g.visPoly) return false;
-  // the polygon's bounds reject most callers before the point-in-poly walk
-  const bb = g.visBox;
-  if (bb && (x < bb[0] || x > bb[2] || y < bb[1] || y > bb[3])) return false;
-  return inPoly(x, y, g.visPoly);
-}
-
-// the unlit area beyond line of sight, tinted toward the current biome so a
-// temple fades to warm shadow and a hive to violet murk
-function fogRGB(g) {
-  const pal = BIOMES[(g.params && g.params.biome) || 'ruins'] || BIOMES.ruins;
-  const hex = (pal.fog || '#030409').replace('#', '');
-  const n = parseInt(hex.length === 3 ? hex.replace(/(.)/g, '$1$1') : hex, 16);
-  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
-}
-
-function isOutdoor(g) {
-  const pal = BIOMES[(g.params && g.params.biome) || 'ruins'];
-  return !!(pal && pal.outdoor);
-}
-
-function drawFog(ctx, g, R) {
-  const p = g.player;
-  const poly = g.visPoly;
-  if (!poly || poly.length < 6) return;
-  const rgb = fogRGB(g);
-  // outdoors under open sky: the unseen area is dusk-dim, not pitch black
-  const out = isOutdoor(g);
-  const outerA = out ? 0.8 : 0.95;
-  const edgeA = out ? 0.66 : 0.92;
-  const pad = 2600;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(p.x - pad, p.y - pad, pad * 2, pad * 2);
-  ctx.moveTo(poly[0], poly[1]);
-  for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
-  ctx.closePath();
-  ctx.fillStyle = `rgba(${rgb},${outerA})`;
-  ctx.fill('evenodd');
-
-  ctx.beginPath();
-  ctx.moveTo(poly[0], poly[1]);
-  for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
-  ctx.closePath();
-  ctx.clip();
-  const grd = ctx.createRadialGradient(p.x, p.y, R * 0.32, p.x, p.y, R * 1.02);
-  grd.addColorStop(0, `rgba(${rgb},0)`);
-  grd.addColorStop(1, `rgba(${rgb},${edgeA})`);
-  ctx.fillStyle = grd;
-  ctx.fillRect(p.x - R - 4, p.y - R - 4, R * 2 + 8, R * 2 + 8);
-  // a faint sky-light wash lifts the lit ground on surface worlds
-  if (out) {
-    const amb = (BIOMES[g.params.biome] && BIOMES[g.params.biome].ambient) || '#dfe8f0';
-    ctx.globalCompositeOperation = 'lighter';
-    const sg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
-    sg.addColorStop(0, hexA(amb, 0.06));
-    sg.addColorStop(1, hexA(amb, 0));
-    ctx.fillStyle = sg;
-    ctx.fillRect(p.x - R, p.y - R, R * 2, R * 2);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-  ctx.restore();
 }
 
 function renderPlay(g, dim) {
@@ -5166,32 +5018,71 @@ function drawArenaFloor(ctx, g) {
   ctx.restore();
 }
 
+// the canonical Milky Way DHD: a squat mushroom pedestal, a sloped console face
+// ringed with two rows of glyph keys, and a domed red command crystal at the
+// centre. Drawn in the world's fake-3d top-down: everything is an ellipse.
 function drawDHD(ctx, c, t, active) {
   ctx.save();
   ctx.translate(c.x, c.y);
-  const col = active ? '#5ef' : '#a44';
-  ctx.shadowBlur = active ? 18 : 6;
-  ctx.shadowColor = col;
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 3;
+  const glow = active ? '#5eefff' : '#c8532e';
+  const key = active ? '#7ff0ff' : '#e08a3c';
+  const keyDim = active ? 'rgba(120,220,240,0.28)' : 'rgba(150,86,44,0.4)';
+  const pulse = 0.5 + 0.5 * Math.sin(t * (active ? 5 : 2));
+
+  // ground shadow + squat pedestal stem
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
   ctx.beginPath();
-  ctx.arc(0, 0, 20, 0, TAU);
-  ctx.stroke();
-  ctx.fillStyle = active ? `rgba(90,240,255,${0.3 + 0.2 * Math.sin(t * 4)})` : 'rgba(160,60,60,0.2)';
-  ctx.beginPath();
-  ctx.arc(0, 0, 14, 0, TAU);
+  ctx.ellipse(3, 7, 26, 15, 0, 0, TAU);
   ctx.fill();
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * TAU;
-    ctx.beginPath();
-    ctx.arc(Math.cos(a) * 16, Math.sin(a) * 16, 2, 0, TAU);
-    ctx.fillStyle = col;
-    ctx.fill();
+  ctx.fillStyle = '#2a2622';
+  ctx.beginPath();
+  ctx.ellipse(0, 3, 15, 9, 0, 0, TAU);
+  ctx.fill();
+
+  // console slab — dark cast body with a lit rim
+  const grd = ctx.createLinearGradient(0, -18, 0, 14);
+  grd.addColorStop(0, '#4a4038');
+  grd.addColorStop(1, '#211d1a');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.ellipse(0, -3, 23, 15, 0, 0, TAU);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = active ? 'rgba(94,239,255,0.75)' : 'rgba(120,70,44,0.7)';
+  ctx.shadowBlur = active ? 14 : 5;
+  ctx.shadowColor = glow;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // two rings of glyph keys on the sloped face (squashed on Y for perspective)
+  for (const ring of [{ rx: 18, ry: 11, n: 13, s: 1.9 }, { rx: 11, ry: 6.6, n: 8, s: 1.6 }]) {
+    for (let i = 0; i < ring.n; i++) {
+      const a = (i / ring.n) * TAU + t * 0.05;
+      const lit = (Math.floor(t * 3) % ring.n) === i;
+      ctx.fillStyle = lit ? key : keyDim;
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(a) * ring.rx, Math.sin(a) * ring.ry - 2, ring.s, ring.s * 0.62, 0, 0, TAU);
+      ctx.fill();
+    }
   }
+
+  // central command crystal — a red dome that lifts and brightens when live
+  ctx.shadowBlur = active ? 20 : 8;
+  ctx.shadowColor = active ? '#5eefff' : '#ff5a3a';
+  const cg = ctx.createRadialGradient(-2, -6, 1, 0, -4, 9);
+  cg.addColorStop(0, active ? '#dffbff' : '#ffb59a');
+  cg.addColorStop(0.5, active ? '#5eefff' : '#ff5a3a');
+  cg.addColorStop(1, active ? 'rgba(40,120,140,0.6)' : 'rgba(120,30,20,0.7)');
+  ctx.fillStyle = cg;
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 6.5, 5.2 + pulse * 1.2, 0, 0, TAU);
+  ctx.fill();
   ctx.restore();
 }
 
-// ---------------------------------------------------------------- fake-3d light
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ fake-3d light
+// ──────────────────────────────────────────────────────────────────────────
 
 // one fixed key light, high and to the north-west, so every shadow in the
 // scene falls the same way and the world reads as a single lit space
@@ -5235,7 +5126,9 @@ function drawShadow(ctx, x, y, r, z, alpha) {
   ctx.restore();
 }
 
-// ---------------------------------------------------------------- lights
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ lights
+// ──────────────────────────────────────────────────────────────────────────
 
 // one cached radial sprite per colour, composited additively onto the floor
 const lightCache = new Map();
@@ -5259,12 +5152,6 @@ function lightSprite(color) {
   }
   lightCache.set(color, sp);
   return sp;
-}
-
-function addFlash(g, x, y, r, color, life) {
-  if (!g.flashes) return;
-  g.flashes.push({ x, y, r, color, t: life, max: life });
-  if (g.flashes.length > 40) g.flashes.shift();
 }
 
 // every emitter in the world spills coloured light on the floor it stands on,
@@ -6152,53 +6039,9 @@ function drawPickup(ctx, pk, playerNear) {
   ctx.fillText(lmap[pk.kind] || '?', pk.x, y + 3);
 }
 
-function hexA(hex, a) {
-  const h = hex.replace('#', '');
-  const n = parseInt(h.length === 3 ? h.replace(/(.)/g, '$1$1') : h, 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
-// reset canvas text state so a block that forgot to set alignment can't inherit
-// 'center'/'right' from whatever drew last frame
-function textReset(ctx) {
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-}
-
-// split `text` into lines that each fit `maxW` at the ctx's current font.
-// measure-only — caller draws. long unbreakable tokens are hard-cut.
-function wrapLines(ctx, text, maxW) {
-  const out = [];
-  let line = '';
-  for (const w of String(text).split(/\s+/)) {
-    const test = line ? line + ' ' + w : w;
-    if (ctx.measureText(test).width <= maxW || !line) {
-      line = test;
-    } else {
-      out.push(line);
-      line = w;
-    }
-    // a single word wider than the box: chop it
-    while (ctx.measureText(line).width > maxW && line.length > 1) {
-      let cut = line.length - 1;
-      while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxW) cut--;
-      out.push(line.slice(0, cut));
-      line = line.slice(cut);
-    }
-  }
-  if (line) out.push(line);
-  return out;
-}
-
-// draw `text` wrapped to `maxW` from (x,y); returns the y past the last line.
-function wrapText(ctx, text, x, y, maxW, lineH) {
-  let yy = y;
-  for (const l of wrapLines(ctx, text, maxW)) {
-    ctx.fillText(l, x, yy);
-    yy += lineH;
-  }
-  return yy;
-}
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ HUD — crosshair, health/ammo, minimap, messages, boss intro
+// ──────────────────────────────────────────────────────────────────────────
 
 function drawCrosshair(g) {
   const { ctx } = g;
@@ -6415,6 +6258,10 @@ function renderHotbar(g) {
 }
 
 // shared geometry for the inventory panel — used by both render and hit-testing
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ loadout panel — the grid, drag/drop, gear slots, stash
+// ──────────────────────────────────────────────────────────────────────────
+
 function panelLayout(g) {
   const { view } = g;
   const S = 50;
@@ -6525,6 +6372,14 @@ function scrapValue(stack) {
 
 function panelPick(g) {
   if (g.drag) return;
+  // the panel eats the DOM `click` event (it drives drag/drop off mousedown), so
+  // any button() drawn by renderPanel — the AUTO-SORT chip — has to be picked here.
+  for (const b of g.buttons) {
+    if (g.pmouse.x >= b.x && g.pmouse.x <= b.x + b.w && g.pmouse.y >= b.y && g.pmouse.y <= b.y + b.h) {
+      b.fn();
+      return;
+    }
+  }
   const lay = panelLayout(g);
   // BACKPACK <-> STASH toggle
   if (lay.stashToggle) {
@@ -7016,7 +6871,9 @@ function button(g, label, x, y, w, h, fn, enabled = true) {
   }
 }
 
-// ---------------------------------------------------------------- pause + settings
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ pause + settings
+// ──────────────────────────────────────────────────────────────────────────
 
 const CONTROLS = [
   ['Move', 'W A S D'],
@@ -7134,7 +6991,9 @@ function renderPause(g) {
   }
 }
 
-// ---------------------------------------------------------------- front-of-house UI
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ front-of-house UI
+// ──────────────────────────────────────────────────────────────────────────
 // main menu, the shared Settings / Key-bindings / Codex sub-screens, and the
 // first-run tutorial. everything here overlays g.state 'menu' (uiRoot 'menu') or
 // the pause overlay (uiRoot 'pause'); g.state itself is never a new string.
@@ -7904,7 +7763,9 @@ function renderStationPanel(g) {
   else g.station = null;
 }
 
-// ---------------------------------------------------------------- roster
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ roster
+// ──────────────────────────────────────────────────────────────────────────
 // The recovered SG teams — one permanent passive each, freed from the holding
 // cells that show up on some worlds. Purely informational; the passive is
 // automatic (folded in fx via applyRoster).
@@ -7953,7 +7814,9 @@ function renderRosterPanel(g) {
   });
 }
 
-// ---------------------------------------------------------------- base ops
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ base ops
+// ──────────────────────────────────────────────────────────────────────────
 // A naquadah sink: permanent SGC upgrades bought once.
 function renderBasePanel(g) {
   const { ctx } = g;
@@ -8282,7 +8145,9 @@ function renderInfirmaryPanel(g) {
 // (the standalone Requisitions console was folded into the Armory loadout
 // panel — see the requisition strip in renderPanel / panelPick.)
 
-// ---------------------------------------------------------------- operations
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ operations
+// ──────────────────────────────────────────────────────────────────────────
 // The Incursion war-room: active operation, objectives, reward, war-map.
 function renderOperationsPanel(g) {
   const { ctx } = g;
@@ -8461,7 +8326,9 @@ function drawWarMap(g, fr, y) {
   ctx.textBaseline = 'alphabetic';
 }
 
-// ---------------------------------------------------------------- workbench
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ workbench
+// ──────────────────────────────────────────────────────────────────────────
 // Weapon mastery, mods and the salvage counter.
 function renderWorkbenchPanel(g) {
   const { ctx } = g;
@@ -8863,6 +8730,10 @@ function renderGateMap(g) {
     button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah  +  ${g.runIntel} intel`, cx - 210, view.h - 68, 420, 40, () =>
       dialHome(g)
     );
+    // an out — the DHD is not a commitment; you can always step away
+    button(g, '‹ STAY ON THIS FLOOR  (Esc)', 24, 40, 230, 30, () => {
+      g.state = 'play';
+    });
   }
 }
 
@@ -8882,7 +8753,9 @@ function fmtMMSS(s) {
   return (s / 60 | 0) + ':' + String(s % 60).padStart(2, '0');
 }
 
-// ---- floating combat text --------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────
+// ▸ debrief — floating combat text, boss bar, unlock cards, run debrief
+// ──────────────────────────────────────────────────────────────────────────
 function reduceFlash(g) {
   return !!(g.save && g.save.settings && g.save.settings.reduceFlash);
 }

@@ -398,8 +398,6 @@ function corridorsAndSigns(c, world) {
   // level marker, repeated where a corridor eye would catch it
   stencil(c, 'LEVEL 28', P(16) + 8, P(2) - 9, 11, '#c9a227', 0.32, 'left');
   stencil(c, 'LEVEL 28', P(46) - 4, P(25) + 26, 11, '#c9a227', 0.22, 'right');
-  stencil(c, 'NO SMOKING', P(3), P(13) + 24, 10, '#c9a227', 0.2, 'left');
-  stencil(c, 'AUTHORISED PERSONNEL ONLY', P(24), P(26) - 8, 11, '#8fc0e0', 0.18);
 }
 
 // ---- 1. embarkation room -------------------------------------------------
@@ -528,17 +526,15 @@ function embarkDecor(c, r, world) {
 
   // a MALP parked off the ramp, waiting for its next recon
   malp(c, R.x + 96, bot + 6);
-  // equipment carts and cases staged along the east wall
-  for (let i = 0; i < 3; i++) {
-    const y = R.y + 150 + i * 74;
+  // a single equipment cart staged along the east wall
+  {
+    const y = R.y + 178;
     box(c, R.x + R.w - 60, y, 40, 30, 'rgba(30,38,30,0.95)', 'rgba(150,175,120,0.35)', 2);
     c.fillStyle = 'rgba(201,162,39,0.25)';
     c.fillRect(R.x + R.w - 56, y + 12, 32, 3);
   }
-  // benches for teams waiting on a go
-  for (const bx2 of [R.x + 40, R.x + R.w - 116]) {
-    box(c, bx2, R.y + 92, 76, 16, 'rgba(34,40,50,0.9)', 'rgba(130,160,190,0.28)', 3);
-  }
+  // one bench for a team waiting on a go
+  box(c, R.x + 40, R.y + 92, 76, 16, 'rgba(34,40,50,0.9)', 'rgba(130,160,190,0.28)', 3);
   // cable trunk clipped down the west wall, running to the control room
   c.save();
   c.strokeStyle = 'rgba(90,110,130,0.3)';
@@ -563,9 +559,9 @@ function embarkDecor(c, r, world) {
 
   // conduit along the east wall + ceiling lighting pools down the room
   pipes(c, R.x + R.w - 14, R.y + 20, R.x + R.w - 14, R.y + R.h - 20, 3);
-  for (let i = 0; i < 3; i++) {
-    pool(c, R.x + 62, R.y + 90 + i * 130, 92, '#dce8f4', 0.10);
-    pool(c, R.x + R.w - 62, R.y + 90 + i * 130, 92, '#dce8f4', 0.10);
+  for (let i = 0; i < 2; i++) {
+    pool(c, R.x + 62, R.y + 120 + i * 190, 92, '#dce8f4', 0.10);
+    pool(c, R.x + R.w - 62, R.y + 120 + i * 190, 92, '#dce8f4', 0.10);
   }
   pool(c, gc.x, gc.y + 40, 190, '#5aa8ff', 0.10);
   pool(c, gc.x, bot + 40, 150, '#cfe0f0', 0.07);
@@ -721,8 +717,8 @@ function controlDecor(c, r, world) {
   c.restore();
 
   // a bank of dialling consoles facing the window
-  for (let i = 0; i < 5; i++) {
-    const x = R.x + 54 + i * 96;
+  for (let i = 0; i < 3; i++) {
+    const x = R.x + 90 + i * 128;
     const y = R.y + 46;
     box(c, x - 34, y - 16, 68, 32, 'rgba(20,27,36,0.95)', 'rgba(130,175,215,0.45)', 3);
     screen(c, x - 28, y - 12, 56, 18, '#4fa8d8');
@@ -760,7 +756,7 @@ function controlDecor(c, r, world) {
   c.restore();
 
   // filing bank and a printer against the south-west wall
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 2; i++) {
     box(c, R.x + 60 + i * 40, R.y + R.h - 92, 34, 44, 'rgba(24,30,40,0.95)', 'rgba(120,160,200,0.3)', 2);
     c.fillStyle = 'rgba(180,210,235,0.14)';
     c.fillRect(R.x + 66 + i * 40, R.y + R.h - 78, 22, 2);
@@ -777,14 +773,13 @@ function controlDecor(c, r, world) {
   screen(c, bx, by, 340, 26, '#4fa8d8');
 
   // side racks of humming equipment
-  for (let i = 0; i < 3; i++) {
-    box(c, R.x + 14, R.y + 150 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
-    box(c, R.x + R.w - 40, R.y + 150 + i * 52, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
+  for (let i = 0; i < 2; i++) {
+    box(c, R.x + 14, R.y + 158 + i * 66, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
+    box(c, R.x + R.w - 40, R.y + 158 + i * 66, 26, 42, 'rgba(18,24,32,0.95)', 'rgba(120,160,200,0.35)', 2);
   }
   pipes(c, R.x + 8, R.y + 16, R.x + 8, R.y + R.h - 16, 2);
   pool(c, R.x + R.w / 2, R.y + 48, 190, '#7fc8f0', 0.09);
-  pool(c, R.x + 220, R.y + 190, 96, '#cfe0f0', 0.06);
-  pool(c, R.x + 350, R.y + 190, 96, '#cfe0f0', 0.06);
+  pool(c, R.x + 285, R.y + 190, 96, '#cfe0f0', 0.06);
   pool(c, world.dialer.x, world.dialer.y, 96, '#e8a33c', 0.09);
 }
 
@@ -1644,33 +1639,66 @@ export function drawHubLive(ctx, world, t, p, save) {
   ctx.restore();
 }
 
-// DHD-styled dialling pedestal in the control room
+// a real Milky Way DHD standing in the control room: mushroom pedestal, a
+// sloped face with two rings of amber glyph keys, and a domed red command
+// crystal. `near` energises it to cyan.
 export function drawDialer(ctx, d, t, near) {
   ctx.save();
   ctx.translate(d.x, d.y);
-  ctx.fillStyle = 'rgba(22,18,26,0.95)';
-  rr(ctx, -24, -18, 48, 36, 8);
-  ctx.fill();
-  ctx.strokeStyle = near ? 'rgba(160,235,255,0.9)' : 'rgba(150,120,90,0.6)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * TAU;
-    const lit = (Math.floor(t * 2.2) % 12) === i;
-    ctx.fillStyle = lit ? 'rgba(255,150,90,0.95)' : 'rgba(150,100,70,0.5)';
-    ctx.beginPath();
-    ctx.arc(Math.cos(a) * 15, Math.sin(a) * 11, 2, 0, TAU);
-    ctx.fill();
-  }
-  ctx.fillStyle = `rgba(255,90,50,${0.5 + 0.4 * Math.sin(t * 3)})`;
+  const glow = near ? '#5eefff' : '#c8532e';
+  const key = near ? '#7ff0ff' : '#e8a33c';
+  const keyDim = near ? 'rgba(120,220,240,0.3)' : 'rgba(150,100,60,0.45)';
+  const pulse = 0.5 + 0.5 * Math.sin(t * (near ? 4 : 2.2));
+
+  // shadow + stem
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
-  ctx.arc(0, 0, 5, 0, TAU);
+  ctx.ellipse(3, 8, 30, 17, 0, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(26,22,20,0.95)';
+  ctx.beginPath();
+  ctx.ellipse(0, 4, 17, 10, 0, 0, TAU);
+  ctx.fill();
+
+  // console slab
+  const grd = ctx.createLinearGradient(0, -20, 0, 16);
+  grd.addColorStop(0, 'rgba(74,64,56,0.98)');
+  grd.addColorStop(1, 'rgba(28,24,22,0.98)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.ellipse(0, -3, 26, 17, 0, 0, TAU);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = near ? 'rgba(94,239,255,0.85)' : 'rgba(150,120,90,0.6)';
+  ctx.stroke();
+
+  // two rings of glyph keys
+  for (const ring of [{ rx: 20, ry: 12, n: 13, s: 2.1 }, { rx: 12, ry: 7, n: 8, s: 1.7 }]) {
+    for (let i = 0; i < ring.n; i++) {
+      const a = (i / ring.n) * TAU + t * 0.06;
+      const lit = (Math.floor(t * 2.6) % ring.n) === i;
+      ctx.fillStyle = lit ? key : keyDim;
+      ctx.beginPath();
+      ctx.ellipse(Math.cos(a) * ring.rx, Math.sin(a) * ring.ry - 2, ring.s, ring.s * 0.6, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // central command crystal dome
+  const cg = ctx.createRadialGradient(-2, -6, 1, 0, -4, 10);
+  cg.addColorStop(0, near ? '#dffbff' : '#ffc4a8');
+  cg.addColorStop(0.5, near ? '#5eefff' : '#ff5a3a');
+  cg.addColorStop(1, near ? 'rgba(40,120,140,0.6)' : 'rgba(120,30,20,0.75)');
+  ctx.fillStyle = cg;
+  ctx.beginPath();
+  ctx.ellipse(0, -4, 7, 5.6 + pulse * 1.4, 0, 0, TAU);
   ctx.fill();
   ctx.restore();
+
   ctx.fillStyle = near ? '#8ef' : 'rgba(170,200,225,0.6)';
   ctx.font = 'bold 9px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('DIALLING CONSOLE', d.x, d.y - 26);
+  ctx.fillText('DIAL-HOME DEVICE', d.x, d.y - 30);
 }
 
 // ---------------------------------------------------------------- personnel

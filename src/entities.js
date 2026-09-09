@@ -87,11 +87,14 @@ export const ENEMY_KIND = {
   // blinks out (phaseT > 0 == intangible + untargetable) on a cooldown to slip
   // through cover / crossfire and reappear on the player's flank.
   wraith_stalker: { r: 12, hp: (t) => 34 + t * 5, speed: 250 },
-  replicator: { r: 9, hp: (t) => 14 + t * 2, speed: 172 },
-  replicator_brute: { r: 16, hp: (t) => 54 + t * 6, speed: 116 },
+  // relentless swarm unit — fast, senses prey through walls, pounces to close
+  // the last gap. Individually weak; lethal in a tide.
+  replicator: { r: 9, hp: (t) => 18 + t * 3, speed: 208 },
+  // slower but heavy — telegraphs a lunging charge that knocks you flying
+  replicator_brute: { r: 16, hp: (t) => 64 + t * 7, speed: 140 },
   // support replicator: on weaveCd it extrudes a short-lived wall of Blocks
   // (weaveT counts the active weave down) to sever the player's sightlines.
-  replicator_weaver: { r: 10, hp: (t) => 26 + t * 3, speed: 150 },
+  replicator_weaver: { r: 10, hp: (t) => 28 + t * 3, speed: 168 },
   // non-hostile ambient critter: wanders, flees the player, never attacks;
   // killing it drops extra naquadah / loot. flagged this.neutral on the Enemy.
   scavenger: { r: 8, hp: (t) => 12, speed: 150 },
@@ -154,6 +157,11 @@ export class Enemy {
     // block-weave state (replicator_weaver)
     this.weaveCd = 0; // time until the next wall is spun up
     this.weaveT = 0; // remaining life of the current weave
+    // replicator lunge state — pounce (regular) / charge (brute)
+    this.lungeCd = 1 + Math.random() * 1.5; // time before the first lunge
+    this.lungeT = 0; // >0 while mid-lunge (fast, straight-line dash)
+    this.lungeDir = 0; // committed heading for the current lunge
+    this.windT = 0; // brute charge telegraph (stands still, flashing)
 
     // squad / smarter-AI state — behaviour lives in game.js, these just reserve
     // the fields so every kind still constructs. safe inert defaults.
@@ -293,7 +301,7 @@ export class Block {
     this.r = 6;
     this.threat = threat;
     this.room = room;
-    this.mergeT = 3.4 + Math.random() * 0.6;
+    this.mergeT = 2.1 + Math.random() * 0.5;
     this.spin = Math.random() * Math.PI;
     this.alive = true;
   }

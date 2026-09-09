@@ -819,6 +819,14 @@ function mRamp(param, v, t, dur) {
   } else mAt(param, v, t);
 }
 
+// stable one-pole glide toward v — safe to call repeatedly on the same param
+// (unlike mRamp, which stacks a setValueAtTime + linearRamp each call). Use this
+// for anything nudged often, or for a param that also has a live LFO wired in.
+function mTarget(param, v, t, tc) {
+  if (param && typeof param.setTargetAtTime === 'function') param.setTargetAtTime(v, t, tc);
+  else mAt(param, v, t);
+}
+
 function mImpulse(dur, decay) {
   const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
   const b = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -860,21 +868,16 @@ function mBuild() {
     bus.connect(cv);
   }
 
+  // static lowpass — deliberately NOT automated and NOT LFO-modulated. An
+  // oscillator wired into a lowpass's .frequency (the old "glacial cutoff LFO")
+  // makes Chrome's biquad report "state is bad … fast parameter automation" and
+  // emit a buzz — that was the noise on load and after a few seconds in a run.
+  // The music still evolves via the drone-voice root changes in mEvolve().
   const filter = ctx.createBiquadFilter();
   filter.type = 'lowpass';
-  filter.frequency.value = 320;
-  filter.Q.value = 5;
+  filter.frequency.value = 380;
+  filter.Q.value = 0.7;
   filter.connect(bus);
-
-  // glacial cutoff LFO
-  const lfo = ctx.createOscillator();
-  lfo.type = 'sine';
-  lfo.frequency.value = 0.032;
-  const lfoDepth = ctx.createGain();
-  lfoDepth.gain.value = 130;
-  lfo.connect(lfoDepth).connect(filter.frequency);
-  lfo.start(t);
-  stop.push(lfo);
 
   // detuned drone chord
   const voices = [];
@@ -927,24 +930,29 @@ function mBuild() {
   master.gain.setValueAtTime(0.0001, t);
   master.gain.linearRampToValueAtTime(0.08, t + 5);
 
-  mNodes = { master, filter, lfoDepth, voices, shimmer, pulseDepth, stop, rootIdx: 0, step: 0 };
+  mNodes = { master, filter, voices, shimmer, pulseDepth, stop, rootIdx: 0, step: 0 };
 }
 
 function mEvolve() {
   mTimer = null;
   if (!mNodes || !ctx) return;
-  const t = ctx.currentTime;
-  const m = mNodes;
-  m.step++;
-  m.rootIdx = (m.rootIdx + 1 + Math.floor(Math.random() * (M_ROOTS.length - 1))) % M_ROOTS.length;
-  const root = M_ROOTS[m.rootIdx];
-  const glide = 9 + Math.random() * 12;
-  for (let i = 0; i < m.voices.length; i++) {
-    mRamp(m.voices[i].frequency, root * M_VOICES[i] * (1 + (i - 1.5) * 0.004), t, glide);
+  try {
+    const t = ctx.currentTime;
+    const m = mNodes;
+    m.step++;
+    m.rootIdx = (m.rootIdx + 1 + Math.floor(Math.random() * (M_ROOTS.length - 1))) % M_ROOTS.length;
+    const root = M_ROOTS[m.rootIdx];
+    const glide = 9 + Math.random() * 12;
+    for (let i = 0; i < m.voices.length; i++) {
+      mRamp(m.voices[i].frequency, root * M_VOICES[i] * (1 + (i - 1.5) * 0.004), t, glide);
+    }
+    mRamp(m.shimmer.frequency, root * (m.step % 2 ? 12.01 : 8.005), t, glide);
+    // the drone-voice root change above is the evolution; the lowpass cutoff is
+    // left static on purpose (automating it destabilised the biquad).
+  } catch (e) {
+    try { console.error('[audio] music evolve failed:', e); } catch (_) {}
   }
-  mRamp(m.shimmer.frequency, root * (m.step % 2 ? 12.01 : 8.005), t, glide);
-  mRamp(m.filter.frequency, 240 + Math.random() * 240 + mIntensity * 900, t, glide);
-  mRamp(m.lfoDepth.gain, 90 + Math.random() * 110, t, glide);
+  // always reschedule — one bad step must not stop the music evolving
   mTimer = setTimeout(mEvolve, (15 + Math.random() * 25) * 1000);
 }
 
@@ -984,13 +992,18 @@ export const music = {
     mNodes = null;
   },
   setIntensity(x) {
-    mIntensity = Math.max(0, Math.min(1, x || 0));
+    const nx = Math.max(0, Math.min(1, x || 0));
+    // gameplay calls this ~2x/sec. Ignore micro-moves, and only ever touch GAIN
+    // params with a stable one-pole glide. The lowpass cutoff is left alone —
+    // automating a biquad frequency this often is what drove it unstable ("state
+    // is bad") and buzzed / cut the audio out a few seconds into a run.
+    if (Math.abs(nx - mIntensity) < 0.03) return;
+    mIntensity = nx;
     if (!mNodes || !ctx) return;
     const t = ctx.currentTime;
     const m = mNodes;
-    mRamp(m.filter.frequency, 260 + mIntensity * 1100, t, 1.5);
-    mRamp(m.pulseDepth.gain, 0.0001 + mIntensity * 0.05, t, 1.2);
-    mRamp(m.master.gain, (0.08 + mIntensity * 0.03) * mVol, t, 2);
+    mTarget(m.pulseDepth.gain, 0.0001 + mIntensity * 0.05, t, 0.6);
+    mTarget(m.master.gain, (0.08 + mIntensity * 0.03) * mVol, t, 0.9);
   },
   setVolume(v) {
     mVol = Math.max(0, Math.min(1, v));
@@ -1017,11 +1030,29 @@ const AMB_LEVEL = 0.55; // crossfade target for a bed's own gain (layers are qui
 let ambMaster = null;
 let ambCur = null; // active bed: { biome, gain, oscs:[], timers:[], alive }
 
+// the shared ambient output gain — beds fade in/out under it, and it rides the
+// music-volume scalar via ambApplyVol(). Straight to the destination: no filter
+// or compressor on this bus (an earlier lowpass/limiter experiment here is what
+// caused the "tone then all audio cuts out" on deploy).
+function ambEnsureMaster() {
+  if (ambMaster || !ctx) return;
+  ambMaster = ctx.createGain();
+  ambMaster.gain.value = mVol;
+  ambMaster.connect(ctx.destination);
+}
+
 function ambApplyVol() {
   if (ambMaster && ctx) ambMaster.gain.setTargetAtTime(mVol, ctx.currentTime, 0.1);
 }
 
-// a sustained filtered-noise layer, with an optional slow LFO on gain or cutoff
+// a sustained filtered-noise layer, with an optional slow LFO.
+//
+// NOTE: the LFO only ever modulates the layer GAIN. An earlier `lfoTarget:
+// 'cutoff'` mode wired the LFO straight into the biquad's .frequency — a-rate
+// modulation of a filter cutoff makes Chrome's biquad report "state is bad …
+// unstable filter caused by fast parameter automation" and emit a buzz. Callers
+// still pass a 'cutoff' target + a Hz-scale depth; we reinterpret it as a gentle
+// gain wobble (the layer breathes instead of sweeping) so the bed stays stable.
 function ambNoiseLayer(bed, dest, t, type, freq, Q, level, lfoRate, lfoDepth, lfoTarget) {
   const src = ctx.createBufferSource();
   src.buffer = noiseBuffer(2.7);
@@ -1040,22 +1071,35 @@ function ambNoiseLayer(bed, dest, t, type, freq, Q, level, lfoRate, lfoDepth, lf
     lfo.type = 'sine';
     lfo.frequency.value = lfoRate;
     const d = ctx.createGain();
-    d.gain.value = lfoDepth;
-    lfo.connect(d).connect(lfoTarget === 'cutoff' ? bq.frequency : g.gain);
+    // 'cutoff' depths are in Hz (hundreds) — scale them down to a gain wobble
+    // that's a fraction of the layer level; 'gain' depths are already correct.
+    d.gain.value = lfoTarget === 'cutoff' ? level * 0.6 : lfoDepth;
+    lfo.connect(d).connect(g.gain);
     lfo.start(t);
     bed.oscs.push(lfo);
   }
   return { g, bq };
 }
 
-// a sustained oscillator drone with an optional slow gain LFO
-function ambDrone(bed, dest, t, type, freq, level, lfoRate, lfoDepth) {
+// a sustained oscillator drone with an optional slow gain LFO. `cut` (Hz), when
+// given, drops a gentle lowpass in front so a raw sawtooth reads as a warm hum
+// rather than a buzzy edge.
+function ambDrone(bed, dest, t, type, freq, level, lfoRate, lfoDepth, cut) {
   const o = ctx.createOscillator();
   o.type = type;
   o.frequency.value = freq;
   const g = ctx.createGain();
   g.gain.value = level;
-  o.connect(g).connect(dest);
+  if (cut) {
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = cut;
+    lp.Q.value = 0.5;
+    g.connect(lp).connect(dest);
+  } else {
+    g.connect(dest);
+  }
+  o.connect(g);
   o.start(t);
   bed.oscs.push(o);
   if (lfoRate) {
@@ -1107,7 +1151,10 @@ function ambEvery(bed, minS, maxS, fn) {
     if (!bed.alive || !ctx) return;
     try {
       fn(ctx.currentTime);
-    } catch (e) {}
+    } catch (e) {
+      // don't swallow silently — a throwing one-shot is a real bug worth seeing
+      try { console.error('[audio] ambient one-shot failed:', e); } catch (_) {}
+    }
     bed.timers.push(setTimeout(tick, (minS + Math.random() * (maxS - minS)) * 1000));
   };
   bed.timers.push(setTimeout(tick, (minS + Math.random() * (maxS - minS)) * 1000));
@@ -1182,8 +1229,8 @@ function bedIce(bed, g, t) {
   });
 }
 function bedFoundry(bed, g, t) {
-  ambDrone(bed, g, t, 'sawtooth', 50, 0.035, 0, 0); // mains hum
-  ambDrone(bed, g, t, 'sawtooth', 100, 0.014, 0, 0); // octave buzz
+  ambDrone(bed, g, t, 'sawtooth', 50, 0.035, 0, 0, 700); // mains hum
+  ambDrone(bed, g, t, 'sawtooth', 100, 0.014, 0, 0, 1200); // octave buzz
   ambDrone(bed, g, t, 'sine', 150, 0.008, 0.11, 0.004); // 3rd-harmonic flicker
   ambNoiseLayer(bed, g, t, 'bandpass', 2400, 6, 0.012, 0.05, 0.006, 'gain'); // metallic room tone
   ambNoiseLayer(bed, g, t, 'lowpass', 180, 0.6, 0.03, 0.04, 0.015, 'gain'); // machine-floor rumble
@@ -1241,33 +1288,14 @@ function bedCatacomb(bed, g, t) {
     ambPing(g, tt + 0.14, 'sine', 78, 50, 0.1, 0.003, 0.16, 0.02);
   });
 }
-function bedSgc(bed, g, t) {
-  ambDrone(bed, g, t, 'sawtooth', 120, 0.02, 0, 0); // fluorescent-ballast hum
-  ambDrone(bed, g, t, 'sine', 60, 0.014, 0, 0); // mains fundamental
-  ambNoiseLayer(bed, g, t, 'lowpass', 320, 0.6, 0.045, 0.05, 0.02, 'gain'); // HVAC air
-  ambNoiseLayer(bed, g, t, 'highpass', 4000, 0.7, 0.008, 0.12, 0.005, 'gain'); // vent hiss
-  ambEvery(bed, 10, 26, (tt) => {
-    // distant muffled PA murmur
-    const n = 3 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < n; i++) {
-      ambPing(g, tt + i * 0.22, 'sawtooth', 180 + Math.random() * 120, 160 + Math.random() * 120, 0.18, 0.03, 0.2, 0.012);
-    }
-  });
-  ambEvery(bed, 2.5, 8, (tt) => {
-    // the odd keyboard clack
-    const n = 1 + Math.floor(Math.random() * 5);
-    for (let i = 0; i < n; i++) {
-      ambGrain(g, tt + i * (0.06 + Math.random() * 0.05), 'bandpass', 2200 + Math.random() * 1200, 1600, 4, 0.0005, 0.015, 0.03);
-    }
-  });
-  ambEvery(bed, 15, 40, (tt) => {
-    // a distant door thunk
-    ambPing(g, tt, 'sine', 80, 48, 0.09, 0.003, 0.22, 0.045);
-    ambGrain(g, tt, 'lowpass', 500, 160, 2, 0.001, 0.16, 0.03);
-  });
-}
+// Stargate Command has NO ambient bed. Every version of an SGC room-tone drone
+// buzzed / screeched ("BiquadFilterNode: state is bad") or just kept coming
+// back unwanted, so the hub is deliberately silent apart from footsteps and UI
+// cues. 'hub' / 'sgc' fall through to the no-bed branch in ambient.set(), which
+// fades out whatever the previous room was playing.
 
 const AMB_BEDS = {
+  ruins: bedJungle, // overgrown outdoor ruins — the default biome; forest-floor air
   temple: bedTemple,
   pyramid: bedTemple, // gilded stone hall — same dry stone air as the temple
   jungle: bedJungle,
@@ -1278,8 +1306,6 @@ const AMB_BEDS = {
   hive: bedHive,
   atlantis: bedAtlantis,
   catacomb: bedCatacomb,
-  sgc: bedSgc,
-  hub: bedSgc,
 };
 
 function ambKill(bed, fadeMs) {
@@ -1304,18 +1330,22 @@ function ambKill(bed, fadeMs) {
 
 export const ambient = {
   // crossfade (~1.5s) to the bed for `biome`; the same biome is a no-op.
-  // 'hub' is an alias of 'sgc'; unknown biome names are ignored.
+  // 'hub' / 'sgc' have no bed (see AMB_BEDS) — they fade out and stay silent.
   set(biome) {
     if (!ctx) return;
     const key = biome === 'hub' ? 'sgc' : biome;
     const build = AMB_BEDS[key];
-    if (!build) return;
-    if (ambCur && ambCur.biome === key) return; // already playing this bed
-    if (!ambMaster) {
-      ambMaster = ctx.createGain();
-      ambMaster.gain.value = mVol;
-      ambMaster.connect(ctx.destination);
+    // no bed for this biome: fade out whatever's playing rather than leaving the
+    // previous room's ambience droning under a new world / the hub.
+    if (!build) {
+      if (ambCur) {
+        ambKill(ambCur, 1200);
+        ambCur = null;
+      }
+      return;
     }
+    if (ambCur && ambCur.biome === key) return; // already playing this bed
+    ambEnsureMaster();
     const t = ctx.currentTime;
     const prev = ambCur;
     const gain = ctx.createGain();

@@ -81,19 +81,21 @@ between worlds and runs (saved to `localStorage`).
 
 ## Architecture
 
-Vanilla ES modules, no build step. `src/`:
+Vanilla ES modules, no build step. Full detail — module map, data flow, the
+`g` object, invariants, and a "where to change what" table — is in
+[`ARCHITECTURE.md`](ARCHITECTURE.md). In short, `src/`:
 
 | file | role |
 |---|---|
-| `main.js` | bootstrap |
-| `game.js` | state machine, systems, rendering, HUD |
-| `worldgen.js` | address → room graph → tile map; offscreen bake |
-| `address.js` | glyphs, seed hashing, neighbours, world params |
-| `entities.js` | Player / Enemy / Bullet / Pickup / Particle + collision |
-| `weapons.js` | weapon table |
-| `pathfind.js` | BFS flow field (enemy pathing) |
-| `rng.js` | mulberry32 + string hash |
-| `input.js` `audio.js` `loop.js` `draw.js` | plumbing |
+| `main.js` / `loop.js` | bootstrap + fixed-timestep frame runner |
+| `game.js` | the state machine + every gameplay/UI system (sectioned — search `// ▸ `) |
+| `address.js` / `worldgen.js` / `pathfind.js` | address → params → room graph → tile map + bake; enemy flow field |
+| `entities.js` | Player / Enemy / Bullet / … classes + `circleVsGrid` collision |
+| `weapons.js` / `weaponmods.js` / `items.js` / `inventory.js` | weapon table, mastery/mod maths, gear catalogue, inventory state |
+| `tech.js` / `campaign.js` / `roster.js` | research tree, the Incursion campaign, SG teams + base upgrades |
+| `hub.js` | the walkable SGC (layout, decor, consoles, crew) |
+| `draw.js` / `textures.js` / `icons.js` / `fx.js` / `vis.js` / `postfx.js` | canvas toolkit, procedural art, particles/decals, line of sight, WebGL grade |
+| `audio.js` / `input.js` / `rng.js` | synth audio, input capture, PRNG + hashing |
 
 ## Tests
 

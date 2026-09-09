@@ -789,3 +789,57 @@ export function critter(ctx, x, y, ang, s, color, o) {
   seg(ctx, 0.4, -2, -1.6 + shiver, -4.2 - startle * 1.2);
   ctx.restore();
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Canvas text + colour helpers — shared by game.js render code and the modules
+// split out of it (fx.js, vis.js, …). Pure; no state.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// "#rgb" / "#rrggbb" + alpha  ->  "rgba(r,g,b,a)"
+export function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.replace(/(.)/g, '$1$1') : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// reset canvas text state so a block that forgot to set alignment can't inherit
+// 'center'/'right' from whatever drew last frame
+export function textReset(ctx) {
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+// split `text` into lines that each fit `maxW` at the ctx's current font.
+// measure-only — caller draws. long unbreakable tokens are hard-cut.
+export function wrapLines(ctx, text, maxW) {
+  const out = [];
+  let line = '';
+  for (const w of String(text).split(/\s+/)) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width <= maxW || !line) {
+      line = test;
+    } else {
+      out.push(line);
+      line = w;
+    }
+    // a single word wider than the box: chop it
+    while (ctx.measureText(line).width > maxW && line.length > 1) {
+      let cut = line.length - 1;
+      while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxW) cut--;
+      out.push(line.slice(0, cut));
+      line = line.slice(cut);
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+// draw `text` wrapped to `maxW` from (x,y); returns the y past the last line.
+export function wrapText(ctx, text, x, y, maxW, lineH) {
+  let yy = y;
+  for (const l of wrapLines(ctx, text, maxW)) {
+    ctx.fillText(l, x, yy);
+    yy += lineH;
+  }
+  return yy;
+}

@@ -469,13 +469,13 @@ function embarkDecor(c, r, world) {
   c.setLineDash([22, 14]);
   c.beginPath();
   c.moveTo(gc.x - bw - 40, R.y + 16);
-  c.lineTo(gc.x - bw - 40, bot + 34);
-  c.lineTo(gc.x + bw + 40, bot + 34);
+  c.lineTo(gc.x - bw - 40, bot + 8);
+  c.lineTo(gc.x + bw + 40, bot + 8);
   c.lineTo(gc.x + bw + 40, R.y + 16);
   c.stroke();
   c.setLineDash([]);
   c.restore();
-  stencil(c, 'KEEP CLEAR', gc.x - bw - 40, bot + 50, 9, '#c9a227', 0.35);
+  stencil(c, 'KEEP CLEAR', gc.x - bw - 40, bot + 24, 9, '#c9a227', 0.35);
 
   // floor grating either side of the ramp base
   grate(c, R.x + 18, bot - 44, 96, 74);

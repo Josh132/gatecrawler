@@ -1,6 +1,6 @@
 import { keys, mouse, pressed, endFrameInput } from './input.js';
 import { WEAPONS } from './weapons.js';
-import { sfx, music, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
+import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute } from './audio.js';
 import { TAU, clamp, glowCircle } from './draw.js';
 import { makeRng, rngHelpers } from './rng.js';
 import { HOME, neighbors, worldParams } from './address.js';
@@ -348,6 +348,7 @@ function enterHub(g) {
   g._hubRoom = g.curRoom;
   g.state = 'hub';
   g.log = [];
+  if (ambient && ambient.set) ambient.set('hub');
   persist(g.save);
   g.message(g.save.runs > 0 ? 'Welcome back to Stargate Command — Level 28' : 'Stargate Command — Level 28');
 }
@@ -371,6 +372,7 @@ function launchRun(g, addr) {
   }
   g.hub = false;
   g.launching = false;
+  g._hubDecor = null; // drop the baked SGC dressing canvas for the run
   g.runNaq = 0;
   g.runIntel = 0;
   g.heat = 0;
@@ -383,6 +385,8 @@ function startWorld(g, addr, hop) {
   g.params = worldParams(addr, hop);
   g.world = buildWorld(g.params);
   g.worldCanvas = bakeWorld(g.world);
+  if (ambient && ambient.set) ambient.set(g.params.biome);
+  if (sfx.wormholeOpen) sfx.wormholeOpen();
   g.flow = makeFlowField(g.world.grid, g.world.W, g.world.H);
   g.enemies = [];
   g.bullets = [];
@@ -707,7 +711,11 @@ function updatePlay(g, dt) {
   if (p.stimT > 0) p.stimT -= dt;
   if (p.shieldMax > 0) {
     p.shieldRegenT += dt;
-    if (p.shieldRegenT > 3 && p.shield < p.shieldMax) p.shield = Math.min(p.shieldMax, p.shield + 12 * dt);
+    if (p.shieldRegenT > 3 && p.shield < p.shieldMax) {
+      const was = p.shield;
+      p.shield = Math.min(p.shieldMax, p.shield + 12 * dt);
+      if (was <= 0.01 && p.shield > 0.01 && sfx.shieldRecharge) sfx.shieldRecharge();
+    }
   }
   const stim = p.stimT > 0;
 
@@ -1301,7 +1309,9 @@ function useHotbar(g, i) {
     p.shieldRegenT = 0;
     g.message('Shield up');
   }
-  sfx.pickup();
+  if (def.use === 'heal' && (def.amount || 0) >= 40 && sfx.healBig) sfx.healBig();
+  else if (sfx.heal) sfx.heal();
+  else sfx.pickup();
   for (let k = 0; k < 8; k++) {
     g.particles.push(new Particle(p.x, p.y, rr(-70, 70), rr(-70, 70), 0.4, def.color, 2));
   }
@@ -1394,7 +1404,10 @@ function finishReload(p) {
   const take = Math.max(0, Math.min(wp.mag - cur, p.ammo[wid] || 0));
   p.mag[wid] = cur + take;
   p.ammo[wid] = (p.ammo[wid] || 0) - take;
-  if (take > 0) sfx.reloadDone();
+  if (take > 0) {
+    if (sfx.reloadMag) sfx.reloadMag(wid);
+    else sfx.reloadDone();
+  }
 }
 
 function cancelReload(p) {
@@ -1692,6 +1705,7 @@ function damagePlayer(g, amount, vx, vy) {
     p.shield -= absorbed;
     dmg -= absorbed;
     p.shieldRegenT = 0;
+    if (p.shield <= 0 && sfx.shieldBreak) sfx.shieldBreak();
   }
   p.hp -= dmg;
   p.flash = 0.12;
@@ -1848,7 +1862,9 @@ function collectPickup(g, pk) {
     for (let i = 0; i < 6; i++) {
       g.particles.push(new Particle(pk.x, pk.y, rr(-60, 60), rr(-60, 60), 0.4, def ? def.color : '#7ef', 2));
     }
-    sfx.pickup();
+    const tier = pk.item.rarity ? normRarity(pk.item.rarity) : 'common';
+    if (tier !== 'common' && sfx.pickupRare) sfx.pickupRare(tier);
+    else sfx.pickup();
     return;
   }
   pk.alive = false;
@@ -2713,7 +2729,14 @@ function render(g, dt) {
   if (g.state === 'menu') {
     renderMenu(g);
   } else if (g.state === 'gatemap') {
-    renderPlay(g, true);
+    // dialling out of the hub keeps SGC behind the launch overlay, not a bare grid
+    if (g.hub) {
+      renderHub(g);
+      ctx.fillStyle = 'rgba(4,6,12,0.72)';
+      ctx.fillRect(0, 0, view.w, view.h);
+    } else {
+      renderPlay(g, true);
+    }
     renderGateMap(g);
   } else if (g.state === 'hub') {
     renderHub(g);

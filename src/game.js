@@ -45,7 +45,38 @@ const rr = (a, b) => a + Math.random() * (b - a);
 const ZOOM = 1.4;
 
 function defaultSave() {
-  return { naquadah: 0, intel: 0, tech: [], maxHpBonus: 0, deepestThreat: 0, runs: 0, known: [HOME], inv: null };
+  return {
+    naquadah: 0,
+    intel: 0,
+    salvage: 0, // workbench currency from scrapping weapons; kept in full on death
+    tech: [],
+    maxHpBonus: 0,
+    deepestThreat: 0,
+    runs: 0,
+    known: [HOME],
+    inv: null,
+    // per-weapon mastery + mods: { [weaponId]: { level: 1, xp: 0, mods: [] } }
+    weapons: {},
+    // the Incursion campaign: { op, progress: {}, completed: [], milestone: 0, won: false }
+    campaign: { op: null, progress: {}, completed: [], milestone: 0, won: false },
+    // { [enemyKind]: { seen: n, killed: n } }
+    bestiary: {},
+    // key rebinds + a couple of toggles; audio volume persists separately
+    settings: { binds: {} },
+  };
+}
+
+// fill in any nested shape an older save is missing so downstream code never
+// hits an undefined branch
+function normalizeSave(s) {
+  const d = defaultSave();
+  for (const k of Object.keys(d)) {
+    if (s[k] == null) s[k] = d[k];
+    else if (typeof d[k] === 'object' && !Array.isArray(d[k])) s[k] = Object.assign({}, d[k], s[k]);
+  }
+  if (!s.campaign.progress) s.campaign.progress = {};
+  if (!Array.isArray(s.campaign.completed)) s.campaign.completed = [];
+  return s;
 }
 
 // merged tech-tree effects — replaced by tech.js's techEffects() once that lands
@@ -146,7 +177,7 @@ function worldMods(g) {
 function loadSave() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) return Object.assign(defaultSave(), JSON.parse(raw));
+    if (raw) return normalizeSave(Object.assign(defaultSave(), JSON.parse(raw)));
   } catch (e) {
     /* ignore */
   }

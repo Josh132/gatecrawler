@@ -1113,6 +1113,20 @@ function updatePlay(g, dt) {
 
   const coolMul = stim ? 0.6 : 1;
 
+  // alt-fire (right mouse) — a mod-unlocked special shot per weapon
+  if (p._altCd > 0) p._altCd -= dt;
+  if (p._chargeT != null) {
+    // staff charge-bolt: hold to charge, release to fire
+    if (mouse.right) p._chargeT = Math.min(1, p._chargeT + dt);
+    else {
+      altFireCharge(g, p, wp, wid, p._chargeT);
+      p._chargeT = null;
+    }
+  } else if (mouse.rightEdge && p._altCd <= 0 && p.reloadT <= 0 && p.stun <= 0 && p.dodge <= 0) {
+    const mode = wsFor(g, wid).altFire;
+    if (mode) doAltFire(g, p, wp, wid, mode);
+  }
+
   if (wp.hitscan) {
     fireBeam(g, p, wp, dt);
   } else {
@@ -2492,6 +2506,110 @@ const MUZZLE = {
   launcher: { fr: 90, fc: '#c98a4a', fl: 0.09, sparks: 3, recoil: 150, shake: 4.5, shells: 1 },
   beam: { fr: 74, fc: '#8ff4ff', fl: 0.06, sparks: 2, recoil: 22, shake: 1, shells: 0 },
 };
+
+// ---- weapon alt-fires (right mouse, mod-unlocked) --------------------------
+function altBolt(g, p, a, spd, dmg, opt) {
+  g.bullets.push(
+    new Bullet(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, Math.cos(a) * spd, Math.sin(a) * spd, dmg, 'player', opt || {})
+  );
+}
+function altFireCharge(g, p, wp, wid, chg) {
+  const c = Math.max(0.15, chg || 0);
+  const dmg = wp.damage * (2 + c * 5) * activeWeaponRarityMul(g);
+  altBolt(g, p, p.aim, wp.speed * 1.1, dmg, { color: '#ffd27a', energy: true, r: 8, life: 2.4, knockback: 220, stun: 0.3 });
+  addShake(g, 6, Math.cos(p.aim), Math.sin(p.aim));
+  p.kx -= Math.cos(p.aim) * 160;
+  p.ky -= Math.sin(p.aim) * 160;
+  sfx.fire('staff');
+  p._altCd = 3;
+  if ((p.mag[wid] || 0) > 0) p.mag[wid] = Math.max(0, p.mag[wid] - 3);
+}
+function doAltFire(g, p, wp, wid, mode) {
+  const rar = activeWeaponRarityMul(g);
+  const near = (n, ex) => {
+    let best = null,
+      bd = 1e9;
+    for (const e of g.enemies) {
+      if (!e.alive || e === ex || (ex && ex._hit && ex._hit.has(e))) continue;
+      const d = (e.x - (ex ? ex.x : p.x)) ** 2 + (e.y - (ex ? ex.y : p.y)) ** 2;
+      if (d < bd && d < 340 * 340) {
+        bd = d;
+        best = e;
+      }
+    }
+    return best;
+  };
+  if (mode === 'dump') {
+    const n = Math.min(p.mag[wid] || 6, 8);
+    for (let i = 0; i < n; i++) {
+      const a = p.aim + rr(-0.5, 0.5);
+      altBolt(g, p, a, wp.speed, wp.damage * rar, { color: wp.color, r: 3, life: 1 });
+    }
+    p.mag[wid] = 0;
+    addShake(g, 4, Math.cos(p.aim), Math.sin(p.aim));
+    sfx.fire('p90');
+    p._altCd = 3.5;
+    startReload(g, p, wid);
+  } else if (mode === 'charge') {
+    p._chargeT = 0;
+  } else if (mode === 'chain') {
+    let tgt = near();
+    let dmg = wp.damage * 1.4 * rar;
+    const hit = new Set();
+    for (let i = 0; i < 3 && tgt; i++) {
+      hitEnemy(g, tgt, { x: tgt.x, y: tgt.y, vx: 0, vy: 0, dmg, energy: true, stun: 1, color: '#7dd3fc' });
+      hit.add(tgt);
+      spark(g, tgt.x, tgt.y, '#7dd3fc');
+      dmg *= 0.6;
+      const nx = { x: tgt.x, y: tgt.y, _hit: hit };
+      tgt = near(null, nx);
+    }
+    sfx.fire('zat');
+    p._altCd = 3;
+  } else if (mode === 'slug') {
+    altBolt(g, p, p.aim, wp.speed * 1.3, wp.damage * (wp.pellets || 6) * 0.7 * rar, {
+      color: '#ffe0a0',
+      r: 6,
+      life: 1.6,
+      knockback: 400,
+      clearShots: true,
+    });
+    addShake(g, 6, Math.cos(p.aim), Math.sin(p.aim));
+    p.kx -= Math.cos(p.aim) * 200;
+    p.ky -= Math.sin(p.aim) * 200;
+    sfx.fire('shotgun');
+    if ((p.mag[wid] || 0) > 0) p.mag[wid]--;
+    p._altCd = 2.5;
+  } else if (mode === 'single') {
+    altBolt(g, p, p.aim, wp.speed * 1.6, wp.damage * 3 * rar, { color: '#e8f0ff', r: 4, life: 3, pierce: 1 });
+    sfx.fire('burst');
+    if ((p.mag[wid] || 0) > 0) p.mag[wid]--;
+    p._altCd = 2.5;
+  } else if (mode === 'airburst') {
+    const d = Math.min(Math.hypot(g.mouse.wx - p.x, g.mouse.wy - p.y), 420);
+    const bx = p.x + Math.cos(p.aim) * d;
+    const by = p.y + Math.sin(p.aim) * d;
+    explode(g, { x: bx, y: by, dmg: (wp.blastDmg || 60) * 1.2 * rar, radius: (wp.blastRadius || 90) * 1.3, from: 'player' });
+    if ((p.ammo[wid] || 0) > 0) p.ammo[wid]--;
+    p._altCd = 4;
+  } else if (mode === 'lance') {
+    // a short piercing overcharged beam sweep
+    const a = p.aim;
+    for (let s = 20; s < 520; s += 26) {
+      const x = p.x + Math.cos(a) * s;
+      const y = p.y + Math.sin(a) * s;
+      for (const e of g.enemies) {
+        if (e.alive && (e.x - x) ** 2 + (e.y - y) ** 2 < (e.r + 10) ** 2) {
+          hitEnemy(g, e, { x, y, vx: Math.cos(a), vy: Math.sin(a), dmg: 14 * rar, energy: true, color: '#8ff4ff' });
+        }
+      }
+      g.particles.push(new Particle(x, y, 0, 0, 0.18, '#8ff4ff', 3));
+    }
+    addFlash(g, p.x + Math.cos(a) * 40, p.y + Math.sin(a) * 40, 90, '#8ff4ff', 0.12);
+    sfx.fire('beam');
+    p._altCd = 4;
+  }
+}
 
 function fireWeapon(g, p, wp, wid) {
   const muzzle = 18;
@@ -5910,6 +6028,14 @@ function renderHUD(g) {
     bx,
     wLineY
   );
+  // alt-fire ready pip — only shows once a weapon has its alt mod unlocked
+  if (wsFor(g, wid).altFire) {
+    const chg = p._chargeT;
+    const rdy = (p._altCd || 0) <= 0;
+    ctx.font = '9px monospace';
+    ctx.fillStyle = chg != null ? '#ffd27a' : rdy ? '#8ff4ff' : 'rgba(143,244,255,0.3)';
+    ctx.fillText(chg != null ? `ALT ${Math.round(chg * 100)}%` : rdy ? 'ALT ▸RMB' : 'ALT …', bx, wLineY + 13);
+  }
   if (p.reloadT > 0 && p.reloadWid === wid) {
     const rf = clamp(1 - p.reloadT / (p.reloadDur || 1), 0, 1);
     ctx.fillStyle = '#ffd54a';

@@ -1,5 +1,5 @@
 export const keys = new Set();
-export const mouse = { x: 0, y: 0, down: false };
+export const mouse = { x: 0, y: 0, down: false, right: false, rightEdge: false };
 const justPressed = new Set();
 
 let inputCanvas = null;
@@ -37,13 +37,16 @@ export function initInput(canvas) {
   canvas.addEventListener('mousedown', (e) => {
     setPos(e);
     if (e.button === 0) mouse.down = true;
+    if (e.button === 2) { mouse.right = true; mouse.rightEdge = true; }
   });
   addEventListener('mouseup', (e) => {
     if (e.button === 0) mouse.down = false;
+    if (e.button === 2) mouse.right = false;
   });
   addEventListener('blur', () => {
     keys.clear();
     mouse.down = false;
+    mouse.right = false;
     padKeys.clear();
     padMouseDown = false;
   });
@@ -62,6 +65,7 @@ export function injectPress(code) {
 
 export function endFrameInput() {
   justPressed.clear();
+  mouse.rightEdge = false;
   pollGamepad();
 }
 

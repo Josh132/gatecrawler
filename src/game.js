@@ -26,6 +26,7 @@ import {
   invAdd,
   invHasSpace,
   moveStack,
+  sortInventory,
   takeFromHot,
   takeGrenade,
   activeWeaponId,
@@ -4975,12 +4976,12 @@ function renderHotbar(g) {
 // shared geometry for the inventory panel — used by both render and hit-testing
 function panelLayout(g) {
   const { view } = g;
-  const S = 44;
-  const gap = 6;
+  const S = 50;
+  const gap = 7;
   const gridW = GRID_COLS * S + (GRID_COLS - 1) * gap;
   const gridH = GRID_ROWS * S + (GRID_ROWS - 1) * gap;
-  const panelW = 410 + gridW; // left region: doll + requisition strip
-  const panelH = Math.max(gridH + 116, 384);
+  const panelW = 470 + gridW; // left region: doll + requisition strip + stats
+  const panelH = Math.max(gridH + 190, 468);
   const px = (view.w - panelW) / 2;
   const py = (view.h - panelH) / 2;
 
@@ -5154,6 +5155,11 @@ function renderPanel(g) {
   ctx.fillStyle = '#678';
   ctx.font = '11px monospace';
   ctx.fillText('drag items between the grid, your gear slots and the hotbar   ·   TAB / ESC to close', lay.px + 24, lay.py + 52);
+  button(g, 'AUTO-SORT', lay.px + lay.panelW - 128, lay.py + 16, 104, 26, () => {
+    sortInventory(g.inv);
+    saveInv(g);
+    g.message('Backpack sorted');
+  });
 
   // derived resistance readout
   const dr = regionDR(g.inv);
@@ -5164,6 +5170,39 @@ function renderPanel(g) {
     lay.dollX,
     lay.hbY + lay.S + 22
   );
+
+  // --- character stats — a strip along the bottom of the panel ---
+  {
+    const p = g.player;
+    const eff = fx(g);
+    const sx = lay.px + 24;
+    const sy0 = lay.gy + lay.S * GRID_ROWS + (GRID_ROWS - 1) * 7 + 66;
+    ctx.fillStyle = '#8ef';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText('STATS', sx, sy0);
+    ctx.font = '10px monospace';
+    const pairs = [
+      ['HP', `${Math.ceil(p ? p.hp : 100)}/${p ? p.maxHp : 100}`],
+      ['Move', `${Math.round(100 * (eff.moveSpeedMul || 1))}%`],
+      ['Dodge', `${p ? p.dodgeMax || 1 : eff.dodgeCharges || 1}x`],
+      ['Crit', `${Math.round(100 * (eff.critChance || 0))}%`],
+      ['Wpn dmg', `x${(eff.weaponDmgMul || 1).toFixed(2)}`],
+      ['DR torso', `${(regionDR(g.inv).torso * 100) | 0}%`],
+      ['Naquadah', g.save.naquadah | 0],
+      ['Intel', g.save.intel | 0],
+      ['Salvage', g.save.salvage | 0],
+    ];
+    pairs.forEach(([k, v], i) => {
+      const col = i % 5;
+      const rowN = (i / 5) | 0;
+      const bx = sx + 70 + col * 128;
+      const byy = sy0 + rowN * 15;
+      ctx.fillStyle = '#9ab';
+      ctx.fillText(k, bx, byy);
+      ctx.fillStyle = '#dff';
+      ctx.fillText(String(v), bx + 62, byy);
+    });
+  }
 
   const labels = {
     head: 'HEAD',

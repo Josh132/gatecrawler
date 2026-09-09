@@ -43,6 +43,48 @@ export function itemDef(id) {
   return ITEMS[id] || null;
 }
 
+const TYPE_ORDER = { weapon: 0, armor: 1, grenade: 2, consumable: 3 };
+const RAR_ORDER = { legendary: 0, epic: 1, rare: 1, good: 2, uncommon: 2, common: 3 };
+
+// merge same id+rarity stacks, then order by type/name/rarity and compact to the
+// front. mutates `arr` (a grid or stash array of {id,count,rarity}|null) in place.
+export function sortGridArray(arr) {
+  const items = arr.filter(Boolean);
+  const merged = [];
+  for (const it of items) {
+    const max = (ITEMS[it.id] && ITEMS[it.id].stack) || 1;
+    const key = it.id + '|' + (it.rarity || '');
+    let slot = merged.find((m) => m._k === key && m.count < max);
+    while (it.count > 0) {
+      if (!slot || slot.count >= max) {
+        slot = { id: it.id, count: 0, _k: key };
+        if (it.rarity) slot.rarity = it.rarity;
+        merged.push(slot);
+      }
+      const take = Math.min(max - slot.count, it.count);
+      slot.count += take;
+      it.count -= take;
+    }
+  }
+  merged.sort((a, b) => {
+    const ta = TYPE_ORDER[(ITEMS[a.id] || {}).type] ?? 9;
+    const tb = TYPE_ORDER[(ITEMS[b.id] || {}).type] ?? 9;
+    if (ta !== tb) return ta - tb;
+    if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+    return (RAR_ORDER[a.rarity] ?? 3) - (RAR_ORDER[b.rarity] ?? 3);
+  });
+  for (let i = 0; i < arr.length; i++) {
+    if (merged[i]) {
+      delete merged[i]._k;
+      arr[i] = merged[i];
+    } else arr[i] = null;
+  }
+}
+
+export function sortInventory(inv) {
+  sortGridArray(inv.grid);
+}
+
 // add `count` of item `id`, stacking where possible. returns leftover count.
 export function invAdd(inv, id, count = 1, rarity = null) {
   const def = ITEMS[id];

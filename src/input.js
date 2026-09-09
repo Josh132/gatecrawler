@@ -4,9 +4,23 @@ const justPressed = new Set();
 
 let inputCanvas = null;
 
+// key-rebinding capture: game.js arms this from the rebind screen; the very next
+// keydown is swallowed (not fed to keys / justPressed) and handed to the callback.
+let captureCb = null;
+export function captureNextKey(cb) {
+  captureCb = cb;
+}
+
 export function initInput(canvas) {
   inputCanvas = canvas;
   addEventListener('keydown', (e) => {
+    if (captureCb) {
+      const cb = captureCb;
+      captureCb = null;
+      if (e.preventDefault) e.preventDefault();
+      cb(e.code);
+      return;
+    }
     if (!e.repeat) justPressed.add(e.code);
     keys.add(e.code);
     if (['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -64,6 +78,15 @@ export const gamepad = {
 
 const DEAD = 0.25;
 const MOVE_ON = 0.35; // post-deadzone magnitude that latches a WASD key
+
+// gamepad aim-assist: game.js feeds a fresh list of on-screen enemy points (in
+// canvas pixels) each frame while the setting is on, and null / [] when it is
+// off. the pad-aim path nudges the synthetic cursor toward the nearest one that
+// falls inside a cone of the stick's direction.
+let aaTargets = null;
+export function setAimAssistTargets(list) {
+  aaTargets = list && list.length ? list : null;
+}
 const padKeys = new Set(); // movement codes we are currently holding
 let padMouseDown = false; // did we force mouse.down this poll?
 let padAimHeld = false; // is the synthetic cursor currently ours to steer?
@@ -164,6 +187,25 @@ export function pollGamepad() {
     const reach = Math.min(cw, ch) * 0.42;
     mouse.x = cw / 2 + rx * reach;
     mouse.y = ch / 2 + ry * reach;
+    if (aaTargets) {
+      const aimAng = Math.atan2(ry, rx);
+      let best = null;
+      let bestScore = Infinity;
+      for (const t of aaTargets) {
+        const ang = Math.atan2(t.y - ch / 2, t.x - cw / 2);
+        const off = Math.abs(((ang - aimAng + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+        if (off > 0.45) continue; // ~26deg acquisition cone
+        const score = off * 240 + Math.hypot(t.x - mouse.x, t.y - mouse.y);
+        if (score < bestScore) {
+          bestScore = score;
+          best = t;
+        }
+      }
+      if (best) {
+        mouse.x += (best.x - mouse.x) * 0.5;
+        mouse.y += (best.y - mouse.y) * 0.5;
+      }
+    }
   }
 
   // right trigger / R1 -> fire

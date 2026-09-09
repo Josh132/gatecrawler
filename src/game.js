@@ -5994,14 +5994,21 @@ function panelLayout(g) {
     cells.push({ loc: { kind: 'hot', i }, x: dollX + i * (S + gap), y: hbY, w: S, h: S });
   }
 
-  // inventory grid on the right
+  // inventory grid on the right — swaps to the between-runs STASH chest at the
+  // SGC once Base Stores is built and the player toggles it
   const gx = px + panelW - gridW - 40;
   const gy = py + 70;
-  for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) {
+  const sCap = stashCap(g);
+  const stashOn = !!g.hub && !!g.stashView && sCap > 0;
+  const rightKind = stashOn ? 'stash' : 'grid';
+  const rightN = stashOn ? sCap : GRID_COLS * GRID_ROWS;
+  for (let i = 0; i < rightN; i++) {
     const cx = gx + (i % GRID_COLS) * (S + gap);
     const cy = gy + Math.floor(i / GRID_COLS) * (S + gap);
-    cells.push({ loc: { kind: 'grid', i }, x: cx, y: cy, w: S, h: S });
+    cells.push({ loc: { kind: rightKind, i }, x: cx, y: cy, w: S, h: S });
   }
+  // BACKPACK <-> STASH toggle — only in the SGC, only once Base Stores is built
+  const stashToggle = g.hub && sCap > 0 ? { x: gx, y: py + 16, w: 150, h: 22 } : null;
 
   // requisition strip in the middle gap — draw one of each weapon unlocked in
   // Research (folded in from the old Requisitions console)
@@ -6017,19 +6024,35 @@ function panelLayout(g) {
   const scrap = { x: gx, y: gy + gridH + 10, w: gridW, h: 30 };
   cells.push({ loc: { kind: 'scrap' }, x: scrap.x, y: scrap.y, w: scrap.w, h: scrap.h });
 
-  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells, scrap };
+  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells, scrap, stashToggle, stashOn };
 }
 
 function invRef(g, loc) {
   if (loc.kind === 'grid') return g.inv.grid[loc.i];
   if (loc.kind === 'hot') return g.inv.hotbar[loc.i];
   if (loc.kind === 'equip') return g.inv.equip[loc.key];
+  if (loc.kind === 'stash') return (g.save.stash || [])[loc.i] || null;
   return null;
 }
 function invSet(g, loc, stack) {
   if (loc.kind === 'grid') g.inv.grid[loc.i] = stack;
   else if (loc.kind === 'hot') g.inv.hotbar[loc.i] = stack;
   else if (loc.kind === 'equip') g.inv.equip[loc.key] = stack;
+  else if (loc.kind === 'stash') {
+    if (!Array.isArray(g.save.stash)) g.save.stash = [];
+    g.save.stash[loc.i] = stack || null;
+    persist(g.save);
+  }
+}
+// move/swap a held stack when the STASH chest is one end of the drag — plain
+// swap, no merge; equip slots stay out of the stash path (bounce to origin)
+function stashMove(g, from, to) {
+  const ok = (k) => k === 'stash' || k === 'grid' || k === 'hot';
+  if (!ok(from.kind) || !ok(to.kind)) return;
+  const held = invRef(g, from); // panelDrop already parked the held stack here
+  const dst = invRef(g, to);
+  invSet(g, to, held || null);
+  invSet(g, from, dst || null);
 }
 
 // naquadah returned for breaking a stack down at the SCRAP bar
@@ -6049,6 +6072,14 @@ function scrapValue(stack) {
 function panelPick(g) {
   if (g.drag) return;
   const lay = panelLayout(g);
+  // BACKPACK <-> STASH toggle
+  if (lay.stashToggle) {
+    const b = lay.stashToggle;
+    if (g.pmouse.x >= b.x && g.pmouse.x <= b.x + b.w && g.pmouse.y >= b.y && g.pmouse.y <= b.y + b.h) {
+      g.stashView = !g.stashView;
+      return;
+    }
+  }
   // requisition strip: click a chip to draw one of that unlocked weapon
   for (const rc of lay.reqCells) {
     if (g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h) {
@@ -6111,8 +6142,12 @@ function panelDrop(g) {
   // temporarily place the held stack back at origin, then use moveStack
   invSet(g, d.from, d.rarity ? { id: d.id, count: d.count, rarity: d.rarity } : { id: d.id, count: d.count });
   if (target && !(target.kind === 'equip' && target.key === 'weapon3' && (fx(g).weaponSlots || 2) < 3)) {
-    const cap = target.kind === 'equip' && target.key === 'grenade' ? fx(g).grenadeCap : 0;
-    moveStack(g.inv, d.from, target, cap);
+    if (d.from.kind === 'stash' || target.kind === 'stash') {
+      stashMove(g, d.from, target); // moveStack only knows g.inv locations
+    } else {
+      const cap = target.kind === 'equip' && target.key === 'grenade' ? fx(g).grenadeCap : 0;
+      moveStack(g.inv, d.from, target, cap);
+    }
   }
   // ensure a valid active weapon slot
   if (!g.inv.equip[g.inv.active]) {
@@ -6147,6 +6182,35 @@ function renderPanel(g) {
     saveInv(g);
     g.message('Backpack sorted');
   });
+
+  // STASH: the between-runs chest, unlocked by the Base Stores upgrade
+  if (g.hub) {
+    ctx.textAlign = 'left';
+    if (stashCap(g) > 0) {
+      const tg = lay.stashToggle;
+      if (tg) {
+        const over = g.pmouse.x >= tg.x && g.pmouse.x <= tg.x + tg.w && g.pmouse.y >= tg.y && g.pmouse.y <= tg.y + tg.h;
+        ctx.fillStyle = over ? 'rgba(40,90,140,0.5)' : 'rgba(20,28,40,0.7)';
+        ctx.fillRect(tg.x, tg.y, tg.w, tg.h);
+        ctx.strokeStyle = '#6cf';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(tg.x + 0.5, tg.y + 0.5, tg.w - 1, tg.h - 1);
+        ctx.fillStyle = '#dff';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(lay.stashOn ? 'VIEW BACKPACK' : 'VIEW STASH', tg.x + 8, tg.y + 15);
+      }
+      if (lay.stashOn) {
+        const used = (g.save.stash || []).filter(Boolean).length;
+        ctx.fillStyle = '#8cf';
+        ctx.font = '9px monospace';
+        ctx.fillText('STASH  ·  ' + used + ' / ' + stashCap(g) + ' slots  ·  survives death', lay.gx, lay.gy - 8);
+      }
+    } else {
+      ctx.fillStyle = '#567';
+      ctx.font = '9px monospace';
+      ctx.fillText('Base Stores upgrade unlocks a storage chest', lay.gx, lay.gy - 7);
+    }
+  }
 
   // derived resistance readout
   const dr = regionDR(g.inv);

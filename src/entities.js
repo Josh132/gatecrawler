@@ -96,6 +96,8 @@ export const ENEMY_KIND = {
   // killing it drops extra naquadah / loot. flagged this.neutral on the Enemy.
   scavenger: { r: 8, hp: (t) => 12, speed: 150 },
   boss: { r: 22, hp: (t) => 240 + t * 22, speed: 120 },
+  // campaign finale super-boss — see the (kind === 'nexus') block for the fight
+  nexus: { r: 30, hp: (t) => 900 + t * 45, speed: 66 },
 };
 
 export class Enemy {
@@ -153,6 +155,19 @@ export class Enemy {
     this.weaveCd = 0; // time until the next wall is spun up
     this.weaveT = 0; // remaining life of the current weave
 
+    // squad / smarter-AI state — behaviour lives in game.js, these just reserve
+    // the fields so every kind still constructs. safe inert defaults.
+    this.squad = null; // id of the squad this unit belongs to
+    this.squadRole = null; // 'anchor' | 'flanker' | 'support'
+    this.suppressT = 0; // firing a suppression burst while a squadmate repositions
+    this.flankDir = 0; // -1 / 0 / +1 — which way this unit is arcing round cover
+    this.regroup = false; // fall back toward the squad anchor
+    this.lastSeenX = 0; // last known player position, for searching after LOS breaks
+    this.lastSeenY = 0;
+    this.alertShareT = 0; // throttle on shouting a fresh contact to the squad
+    this.peekT = 0; // lean-out-of-cover timer
+    this.repathT = 0; // throttle on recomputing a path
+
     const k = ENEMY_KIND[kind] || ENEMY_KIND.jaffa;
     this.r = k.r;
     this.hp = Math.round(k.hp(threat) * (opts.hpMul || 1));
@@ -165,6 +180,8 @@ export class Enemy {
       this.holdY = y;
       this.aimT = 0;
       this.aimDur = 1.3 + Math.random() * 0.4; // seconds to charge the heavy shot
+      // stays in support: calls contacts + charges heavy shots, never flanks
+      this.squadRole = 'support';
     }
     if (kind === 'wraith_stalker') {
       this.phaseCd = 2.5 + Math.random() * 2;
@@ -174,6 +191,10 @@ export class Enemy {
     if (kind === 'replicator_weaver') {
       this.weaveCd = 3.5 + Math.random() * 3;
       this.weaveLife = 4.5; // seconds a spun wall stands before it crumbles
+    }
+    if (kind === 'jaffa_heavy') {
+      // the wall of the squad — holds ground, rarely arcs round
+      this.squadRole = 'anchor';
     }
 
     if (kind === 'boss') {
@@ -186,6 +207,24 @@ export class Enemy {
       this.immuneType = 'kinetic';
       this.immuneT = 0;
       if (this.variant === 'wraith') this.speed *= 1.25;
+    }
+
+    if (kind === 'nexus') {
+      // campaign finale. shielded and untouchable until its NexusPylons are down;
+      // while shielded it rotates a damage-immunity type (immuneType), so the
+      // player must switch weapons to keep chipping. three phases stepped by
+      // phaseAt hp fractions: p1 = pylons + beamT bursts, p2 adds a slow rotating
+      // sweep beam, p3 enrages (faster timers) and spawns replicator adds.
+      this.phase = 1;
+      this.phaseAt = [0.66, 0.33]; // hp fractions that trip phase 2 / phase 3
+      this.pylons = 3; // live pylons feeding the shield this phase
+      this.beamT = 3; // countdown to the next aimed beam burst
+      this.sweepT = 6; // countdown to / progress of the phase-2 rotating sweep
+      this.spawnT = 4; // countdown to the next phase-3 replicator add wave
+      this.immuneType = 'kinetic'; // damage type currently shrugged off
+      this.immuneCycleT = 0; // timer that rotates immuneType while shielded
+      this.shield = 240; // shield pool, refilled at the top of each phase
+      this.enraged = false; // set true in phase 3 — tighter timers, more adds
     }
     this.maxHp = this.hp;
     this.alive = true;
@@ -353,5 +392,79 @@ export class Trap {
     this.tick = 0; // free-running clock for the telegraph
     this.phase = Math.random() * Math.PI * 2;
     this.alive = true;
+  }
+}
+
+// recoverable campaign objective — an Ancient data core sitting on a pedestal.
+// game.js flips taken when the player walks over it; bob/glow are render-only.
+export class DataCore {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.r = 12;
+    this.taken = false;
+    this.bob = Math.random() * Math.PI * 2;
+    this.glow = 0;
+    this.born = 0; // set by the game clock for a spawn-in fade
+  }
+}
+
+// seals a reward alcove until a room condition is met; openT (0..1) slides it.
+export class VaultDoor {
+  constructor(x, y, w, h) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.locked = true;
+    this.openT = 0; // slide progress once game.js unlocks it
+    this.alive = true;
+  }
+}
+
+// a captured SG teammate. once freed they follow the player and have to reach
+// the gate room alive (atGate). hp/vx/vy/facing are for the follow sim in game.js.
+export class Captive {
+  constructor(x, y, name) {
+    this.x = x;
+    this.y = y;
+    this.r = 11;
+    this.name = name;
+    this.freed = false;
+    this.atGate = false;
+    this.follow = false;
+    this.hp = 60;
+    this.vx = 0;
+    this.vy = 0;
+    this.facing = 0;
+    this.bob = Math.random() * Math.PI * 2;
+  }
+}
+
+// mid-run black-market NPC. stock is an array of { id, price, rarity };
+// greetT gates a one-off bark, t is a free-running render clock.
+export class Vendor {
+  constructor(x, y, stock) {
+    this.x = x;
+    this.y = y;
+    this.r = 14;
+    this.stock = stock || [];
+    this.t = Math.random() * Math.PI * 2;
+    this.greetT = 0;
+    this.alive = true;
+  }
+}
+
+// destroy to strip one phase of the nexus boss's shield. flash pulses on a hit.
+export class NexusPylon {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.r = 14;
+    this.hp = 120;
+    this.maxHp = 120;
+    this.alive = true;
+    this.flash = 0;
+    this.phase = Math.random() * Math.PI * 2;
   }
 }

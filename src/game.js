@@ -1025,7 +1025,12 @@ function updatePlay(g, dt) {
     iy /= l;
   }
 
-  const spd = p.speed * (stim ? 1.35 : 1) * (p._slow || 1);
+  const spd =
+    p.speed *
+    (stim ? 1.35 : 1) *
+    (p._slow || 1) *
+    (fx(g).moveSpeedMul || 1) *
+    (1 - Math.min(0.22, armourWeight(g.inv)));
   if (p.dodge > 0) {
     p.x += p.ddx * 470 * dt;
     p.y += p.ddy * 470 * dt;
@@ -2457,6 +2462,17 @@ function activeWeaponRarityMul(g) {
   const inv = g.inv;
   const st = inv.equip[inv.active] || inv.equip.weapon1 || inv.equip.weapon2 || inv.equip.weapon3;
   return rarityMul(st);
+}
+
+// equipped-armour drag: heavier plate slows you (still worth it for the DR)
+function armourWeight(inv) {
+  let w = 0;
+  for (const k of ['head', 'torso', 'legs', 'feet']) {
+    const s = inv.equip[k];
+    const dr = s && ITEMS[s.id] ? ITEMS[s.id].dr || 0 : 0;
+    w += dr >= 0.4 ? 0.09 : dr >= 0.25 ? 0.04 : 0;
+  }
+  return w;
 }
 
 // folded mastery-level + installed-mod modifiers for a weapon key
@@ -4361,6 +4377,7 @@ function render(g, dt) {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic'; // never inherit a stray alignment across frames
   g.buttons = [];
+  cbTags = !!(g.save && g.save.settings && g.save.settings.cbPalette);
   try {
     const arrow = g.panelOpen || g.station || g.state === 'menu' || g.state === 'gatemap' || g.state === 'dead';
     g.ctx.canvas.style.cursor = arrow ? 'default' : 'none';
@@ -5464,8 +5481,18 @@ function drawEnemy(ctx, e, t) {
     ctx.fillStyle = e.kind.startsWith('wraith') ? '#7ef77e' : e.kind.startsWith('replicator') ? '#7fe0ff' : '#ff9a3c';
     ctx.fillRect(e.x - w / 2, e.y - e.r - 10, w * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
+  // colour-blind faction tag: shape + letter above the head, palette-independent
+  if (cbTags && !idle) {
+    const boss = kind === 'boss' || kind === 'nexus';
+    const tag = boss ? '★B' : fam === 'wraith' ? '●W' : fam === 'replicator' ? '■R' : '▲J';
+    ctx.fillStyle = boss ? '#ffd166' : fam === 'wraith' ? '#8bf0a0' : fam === 'replicator' ? '#8fe4ff' : '#ffb347';
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(tag, e.x, e.y - e.r - 16);
+  }
   ctx.globalAlpha = 1;
 }
+let cbTags = false;
 
 function drawBullet(ctx, b) {
   // threat tiering: player bolts read as crisp tracers, heavy enemy fire

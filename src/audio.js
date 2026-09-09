@@ -769,6 +769,25 @@ export const sfx = {
     });
     noiseVoice(t, 0.7, 'bandpass', 400, 2000, 3, 0.1, 0.6, 0.03, 0.08);
   },
+  // soft UI tick for a button press in any menu / panel
+  uiClick() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    toneVoice(t, 'square', 660, 660, 0, 0.001, 0.035, 0.035, 0.02);
+    toneVoice(t + 0.015, 'sine', 990, 990, 0, 0.001, 0.05, 0.02, 0.02);
+  },
+  // quieter tick for hover / selection change
+  uiHover() {
+    if (!ctx) return;
+    toneVoice(ctx.currentTime, 'sine', 1180, 1180, 0, 0.001, 0.03, 0.012, 0.01);
+  },
+  // a dull footfall — call on alternating feet as the player moves
+  footstep(hard) {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    noiseVoice(t, hard ? 0.05 : 0.04, 'lowpass', hard ? 520 : 380, hard ? 180 : 150, null, 0.001, 0.04, hard ? 0.05 : 0.03, 0.01);
+    toneVoice(t, 'sine', 90, 55, 0.04, 0.002, 0.05, hard ? 0.05 : 0.03, 0.02);
+  },
 };
 
 // ---------------------------------------------------------------------------

@@ -208,14 +208,15 @@ function hazard(c, x, y, w, h, a, step) {
   c.restore();
 }
 
-// painted floor / wall lettering
+// painted floor / wall lettering — background dressing, kept quiet so rooms
+// read clean rather than cluttered
 function stencil(c, txt, x, y, size, color, a, align, rot) {
   c.save();
   c.translate(x, y);
   if (rot) c.rotate(rot);
-  c.globalAlpha = a;
+  c.globalAlpha = a * 0.6;
   c.fillStyle = color;
-  c.font = `bold ${size}px monospace`;
+  c.font = `bold ${Math.max(7, size - 1)}px monospace`;
   c.textAlign = align || 'center';
   c.textBaseline = 'middle';
   c.fillText(txt, 0, 0);

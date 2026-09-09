@@ -75,14 +75,26 @@ export class Player {
   }
 }
 
-const ENEMY_KIND = {
+export const ENEMY_KIND = {
   jaffa: { r: 12, hp: (t) => 38 + t * 6, speed: 96 },
   jaffa_heavy: { r: 16, hp: (t) => 66 + t * 8, speed: 62 },
   jaffa_grenadier: { r: 13, hp: (t) => 42 + t * 6, speed: 84 },
+  // fragile long-range lane-holder: anchors on a firing spot (holdX/holdY), spends
+  // aimT charging a heavy telegraphed shot, then returns to its anchor. barely moves.
+  jaffa_sniper: { r: 11, hp: (t) => 30 + t * 4, speed: 54 },
   wraith: { r: 12, hp: (t) => 26 + t * 4, speed: 240 },
   wraith_drone: { r: 10, hp: (t) => 18 + t * 3, speed: 268 },
+  // blinks out (phaseT > 0 == intangible + untargetable) on a cooldown to slip
+  // through cover / crossfire and reappear on the player's flank.
+  wraith_stalker: { r: 12, hp: (t) => 34 + t * 5, speed: 250 },
   replicator: { r: 9, hp: (t) => 14 + t * 2, speed: 172 },
   replicator_brute: { r: 16, hp: (t) => 54 + t * 6, speed: 116 },
+  // support replicator: on weaveCd it extrudes a short-lived wall of Blocks
+  // (weaveT counts the active weave down) to sever the player's sightlines.
+  replicator_weaver: { r: 10, hp: (t) => 26 + t * 3, speed: 150 },
+  // non-hostile ambient critter: wanders, flees the player, never attacks;
+  // killing it drops extra naquadah / loot. flagged this.neutral on the Enemy.
+  scavenger: { r: 8, hp: (t) => 12, speed: 150 },
   boss: { r: 22, hp: (t) => 240 + t * 22, speed: 120 },
 };
 
@@ -126,11 +138,43 @@ export class Enemy {
     this.hunter = !!opts.hunter;
     this.variant = opts.variant || 'jaffa';
     this._reformed = !!opts.reformed;
+    // non-hostile ambient critter — game code treats neutrals specially (flee, loot)
+    this.neutral = kind === 'scavenger';
+
+    // ranged lane-holder state (jaffa_sniper) — safe defaults for every kind
+    this.aimT = 0; // charge-up accumulator before a heavy shot
+    this.holdX = x; // firing anchor it drifts back to
+    this.holdY = y;
+    // phase-blink state (wraith_stalker) — >0 phaseT means phased / intangible
+    this.phaseT = 0;
+    this.phaseCd = 0; // time left before it may phase again
+    this.nextPhase = 0; // rolled interval between phases
+    // block-weave state (replicator_weaver)
+    this.weaveCd = 0; // time until the next wall is spun up
+    this.weaveT = 0; // remaining life of the current weave
 
     const k = ENEMY_KIND[kind] || ENEMY_KIND.jaffa;
     this.r = k.r;
     this.hp = Math.round(k.hp(threat) * (opts.hpMul || 1));
     this.speed = k.speed * (opts.speedMul || 1);
+
+    if (kind === 'jaffa_sniper') {
+      // starts anchored on its spawn tile, holding the lane rather than advancing
+      this.mode = 'hold';
+      this.holdX = x;
+      this.holdY = y;
+      this.aimT = 0;
+      this.aimDur = 1.3 + Math.random() * 0.4; // seconds to charge the heavy shot
+    }
+    if (kind === 'wraith_stalker') {
+      this.phaseCd = 2.5 + Math.random() * 2;
+      this.nextPhase = this.phaseCd;
+      this.phaseDur = 0.7; // how long a blink lasts
+    }
+    if (kind === 'replicator_weaver') {
+      this.weaveCd = 3.5 + Math.random() * 3;
+      this.weaveLife = 4.5; // seconds a spun wall stands before it crumbles
+    }
 
     if (kind === 'boss') {
       this.shield = this.variant === 'jaffa' ? 90 : this.variant === 'replicator' ? 70 : 0;

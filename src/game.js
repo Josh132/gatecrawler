@@ -705,6 +705,8 @@ function startWorld(g, addr, hop) {
   g.panelOpen = false;
   g.drag = null;
   g.hunterSpawned = false;
+  g._siege = null; // DHD siege reinforcement state — per world
+  g._dhdKind = null;
   // arriving on a fresh world vents most of the accumulated hunt, so a run gets
   // a sawtooth intensity curve instead of pinning at SWARM from world 2 on.
   // world 1 has heat 0 already; a deep-dial then re-adds a bump (gate-map handler).
@@ -1342,6 +1344,13 @@ function updateFlowAndRoom(g, dt) {
       g.bossIntroT = 3.4;
       addShake(g, 14, 0, 1);
       sfx.bossSting(g.params.faction || g.params.primary);
+      if (g._dhdKind === 'siege') {
+        g.message('DHD SIEGE — reinforcements inbound until you dial');
+        hint(g, 'dhd_siege', 'A siege at the DHD: guards keep arriving from the gate until you dial out. Kill the commander and its garrison to bring the DHD online, then leave — don’t linger.');
+      } else if (g._dhdKind === 'vanguard') {
+        g.message('DHD VANGUARD — the champion is already moving');
+        hint(g, 'dhd_vanguard', 'A vanguard: the DHD champion is buffed and pushes you from the start, with a heavier guard. Use cover and the room’s pillars.');
+      }
     }
   }
   if (g.bossIntroT > 0) g.bossIntroT -= dt;
@@ -1863,8 +1872,21 @@ function populateWorld(g) {
     if (room.kind === 'dhd') {
       const c = room.centerPx;
       const isFinale = g.params.address === FINALE_ADDRESS;
-      const boss = new Enemy(isFinale ? 'nexus' : 'boss', c.x, c.y - 80, p.threat, isFinale ? {} : { variant: fac });
+      // deterministic DHD encounter type (never the finale): standard 60% /
+      // siege 20% (reinforcements arrive until you dial) / vanguard 20% (a
+      // buffed, already-advancing boss + a bigger guard). every type still has
+      // ONE boss so a clean run kills exactly one boss per world.
+      const dhdKind = isFinale ? 'finale' : R.pick(['standard', 'standard', 'standard', 'siege', 'vanguard']);
+      g._dhdKind = dhdKind;
+      const vanguard = dhdKind === 'vanguard';
+      const bossOpt = isFinale ? {} : vanguard ? { variant: fac, hpMul: 1.25 } : { variant: fac };
+      const boss = new Enemy(isFinale ? 'nexus' : 'boss', c.x, c.y - 80, p.threat, bossOpt);
       boss._room = room;
+      if (vanguard) {
+        boss.aggressive = true;
+        boss.state = 'active';
+        boss.mode = 'advance';
+      }
       g.enemies.push(boss);
       if (isFinale) {
         // three shield pylons ringing the core — down them to open a damage window
@@ -1881,13 +1903,20 @@ function populateWorld(g) {
           g.pylons.push(py2);
         }
       }
-      const guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 3 : 0);
+      let guards = 1 + Math.min(2, Math.floor(p.threat / 2)) + (fac === 'replicator' ? 3 : 0);
+      if (dhdKind === 'vanguard') guards += 2;
       for (let i = 0; i < guards; i++) {
         const q = placeXY();
         const e = new Enemy(guardKind(fac, R, slot), q.x, q.y, p.threat);
         e._room = room;
         e.aggressive = true;
         g.enemies.push(e);
+      }
+      if (dhdKind === 'siege') {
+        // reinforcements keep arriving from the gate every ~14s until the DHD is
+        // dialed. They are NOT room-bound (like the hunter / scavenger) so they
+        // can't gate the room-clear that unlocks the dial.
+        g._siege = { t: 0, next: 12, cap: 5, spawn: (g.world.gateRoom || room).centerPx };
       }
       continue;
     }
@@ -2286,6 +2315,33 @@ function updateSpecials(g, dt) {
       spawnArenaReward(g, rm);
       g.message('Containment cleared');
     }
+  }
+
+  // ---- DHD siege: reinforcements until the dial is live ----
+  if (g._siege && !g.dhdActive && g.curRoom === w.dhdRoom) {
+    const S = g._siege;
+    S.t += dt;
+    if (S.t >= S.next) {
+      S.t = 0;
+      let live = 0;
+      for (let k = 0; k < g.enemies.length; k++) if (g.enemies[k].alive && g.enemies[k]._siege) live++;
+      if (live < S.cap) {
+        const fac = g.params.faction || g.params.primary;
+        const kindOf = fac === 'wraith' ? 'wraith' : fac === 'replicator' ? 'replicator' : 'jaffa';
+        for (let n = 0; n < 2 && live + n < S.cap; n++) {
+          const e = new Enemy(kindOf, S.spawn.x + rr(-24, 24), S.spawn.y + rr(-24, 24), g.params.threat, { speedMul: 1.15 });
+          e._room = null; // not room-bound — can't block the DHD-room clear
+          e._siege = true;
+          e.aggressive = true;
+          e.state = 'active';
+          e.mode = 'advance';
+          g.enemies.push(e);
+        }
+        if (sfx.wormholeOpen) sfx.wormholeOpen();
+      }
+    }
+  } else if (g._siege && g.dhdActive) {
+    g._siege = null; // dial is live — stop the tide
   }
 
   // ---- vendors ----

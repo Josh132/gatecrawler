@@ -27,7 +27,7 @@
 import { keys, mouse, injectPress } from './input.js';
 
 const MOVE_ON = 0.30; // stick magnitude that latches a direction key
-const STICK_R = 62; // px travel that = full deflection
+let STICK_R = 62; // px travel that = full deflection — scaled to the viewport by layout()
 const AIM_DIR = { x: 1, y: 0 }; // last aim direction (kept after release)
 const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
 
@@ -70,47 +70,99 @@ function el(tag, css, txt) {
 }
 
 const BTN_CSS =
-  'position:fixed;display:none;align-items:center;justify-content:center;' +
-  'width:56px;height:56px;border-radius:50%;pointer-events:auto;' +
-  'font:600 13px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.03em;' +
-  'color:#bfefff;background:rgba(10,22,30,.42);border:1px solid rgba(94,239,255,.42);' +
-  'box-shadow:0 0 12px rgba(0,0,0,.35);user-select:none;-webkit-user-select:none;' +
-  'text-align:center;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);' +
+  'position:fixed;display:none;align-items:center;justify-content:center;box-sizing:border-box;' +
+  'border-radius:50%;pointer-events:auto;line-height:1;letter-spacing:.02em;' +
+  'font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700;' +
+  'color:#dff4ff;background:rgba(10,22,30,.5);border:1px solid rgba(94,239,255,.5);' +
+  'box-shadow:0 2px 14px rgba(0,0,0,.45);user-select:none;-webkit-user-select:none;' +
+  'text-align:center;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);' +
   'transition:background .08s,transform .08s;touch-action:none;';
 
-// [code, label, side, slot, onlyPlay]
-//   side: 'tl' 'tr' top corners · 'rc' right-edge column · 'lc' left-edge column
+// [code, label, cluster, slot, onlyPlay]
+//   cluster: 'pause' top-left · 'menu' top-right · 'right' right-edge column ·
+//            'left' left-edge column  (columns are vertically centred, clear of
+//            the bottom corners where stick thumbs rest)
 const BUTTONS = [
-  ['Escape', '❚❚', 'tl', 0, false],
-  ['Tab', 'BAG', 'tr', 0, false],
-  ['_alt', 'ALT', 'tr', 1, true], // RMB alt-fire (dump / charge / chain / slug / lance)
-  ['Space', 'ROLL', 'rc', 0, true],
-  ['KeyR', 'RLD', 'rc', 1, true],
-  ['KeyQ', 'MED', 'rc', 2, true],
-  ['KeyG', 'NADE', 'lc', 0, true],
-  ['KeyX', 'SWAP', 'lc', 1, true],
-  ['KeyE', 'USE', 'lc', 2, false],
+  ['Escape', '❚❚', 'pause', 0, false],
+  ['Tab', 'BAG', 'menu', 0, false],
+  ['_alt', 'ALT', 'menu', 1, true], // RMB alt-fire (dump / charge / chain / slug / lance)
+  ['Space', 'ROLL', 'right', 0, true],
+  ['KeyR', 'RLD', 'right', 1, true],
+  ['KeyQ', 'MED', 'right', 2, true],
+  ['KeyG', 'NADE', 'left', 0, true],
+  ['KeyX', 'SWAP', 'left', 1, true],
+  ['KeyE', 'USE', 'left', 2, false],
 ];
 
-function placeButton(e, side, slot) {
-  const m = 12;
-  const step = 64;
-  e.style.left = e.style.right = e.style.top = e.style.bottom = 'auto';
-  if (side === 'tl') {
-    e.style.left = m + 'px';
-    e.style.top = m + 'px';
-  } else if (side === 'tr') {
-    e.style.right = m + 'px';
-    e.style.top = m + slot * step + 'px';
-  } else if (side === 'rc') {
-    // right edge, a column starting a little above vertical centre — clear of
-    // where a thumb naturally rests to work the aim stick (bottom-right)
-    e.style.right = m + 'px';
-    e.style.top = `calc(42% + ${slot * step}px)`;
-  } else {
-    e.style.left = m + 'px';
-    e.style.top = `calc(42% + ${slot * step}px)`;
+// current adaptive metrics — recomputed by layout() on every viewport change
+const LM = { S: 56, gap: 66, m: 12, font: 13, stickPx: 116, dotPx: 44 };
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+// size + place every control from the live viewport. small landscape phones get
+// smaller, tighter controls; tablets get bigger ones. called on build + resize.
+function layout() {
+  if (!root) return;
+  const w = window.innerWidth || 960;
+  const h = window.innerHeight || 600;
+  const mn = Math.min(w, h);
+
+  const S = Math.round(clamp(mn * 0.145, 44, 68)); // button diameter (>=44 tap target)
+  const gap = Math.round(S + clamp(mn * 0.022, 5, 14)); // centre-to-centre in a column
+  const m = Math.round(clamp(mn * 0.03, 8, 18)); // edge margin
+  const font = Math.round(clamp(S * 0.26, 9.5, 15));
+  LM.S = S; LM.gap = gap; LM.m = m; LM.font = font;
+  LM.stickPx = Math.round(clamp(mn * 0.30, 84, 150)); // stick ring visual
+  LM.dotPx = Math.round(LM.stickPx * 0.38);
+  STICK_R = Math.round(clamp(mn * 0.16, 38, 74)); // deflection travel
+
+  // edge columns sit in a safe vertical band — below the corner buttons, above
+  // the bottom edge — and spread evenly, tightening on short screens
+  const topSafeR = m + 2 * (S + 8) + 8; // clear of BAG + ALT (top-right)
+  const topSafeL = m + S + 12; // clear of ❚❚ (top-left)
+  const botSafe = h - m - S;
+  for (const [code, , cluster, slot] of BUTTONS) {
+    const b = btnEls[code];
+    if (!b) continue;
+    b.style.width = b.style.height = S + 'px';
+    b.style.fontSize = font + 'px';
+    b.style.left = b.style.right = b.style.top = b.style.bottom = 'auto';
+    if (cluster === 'pause') {
+      b.style.left = m + 'px';
+      b.style.top = m + 'px';
+    } else if (cluster === 'menu') {
+      b.style.right = m + 'px';
+      b.style.top = m + slot * (S + 8) + 'px';
+    } else {
+      const topSafe = cluster === 'right' ? topSafeR : topSafeL;
+      const span = Math.max(S, botSafe - topSafe);
+      const g3 = Math.min(gap, span / 2); // 3 buttons in the column -> 2 gaps
+      const yc = topSafe + span / 2 + (slot - 1) * g3 - S / 2;
+      b.style.top = clamp(yc, topSafe, botSafe) + 'px';
+      b.style[cluster === 'right' ? 'right' : 'left'] = m + 'px';
+    }
   }
+
+  // stick knob + dot + home-ring visuals
+  for (const st of [root._lStick, root._rStick]) {
+    st.style.width = st.style.height = LM.stickPx + 'px';
+    st.style.margin = `${-LM.stickPx / 2}px 0 0 ${-LM.stickPx / 2}px`;
+    st._dot.style.width = st._dot.style.height = LM.dotPx + 'px';
+    st._dot.style.margin = `${-LM.dotPx / 2}px 0 0 ${-LM.dotPx / 2}px`;
+  }
+  const ringD = Math.round(LM.stickPx * 0.94);
+  for (const hr of root._hints2) {
+    hr.style.width = hr.style.height = ringD + 'px';
+    hr.style.bottom = Math.round(m * 1.6) + 'px';
+    hr.style[hr._side] = Math.round(m * 1.6) + 'px';
+  }
+  root._hint.style.bottom = Math.round(h * 0.32) + 'px';
+  root._hint.style.fontSize = clamp(font - 1, 10, 13) + 'px';
+
+  // FULLSCREEN button
+  root._fs.style.top = m + 'px';
+  root._fs.style.fontSize = clamp(font, 11, 14) + 'px';
+  root._fs.style.padding = `${Math.round(S * 0.22)}px ${Math.round(S * 0.42)}px`;
 }
 
 function buildOverlay() {
@@ -123,18 +175,19 @@ function buildOverlay() {
   root.id = 'touch';
 
   const ringCss =
-    'position:fixed;bottom:24px;width:116px;height:116px;border-radius:50%;' +
-    'border:1px dashed rgba(120,200,225,.20);pointer-events:none;';
-  root.appendChild(el('div', ringCss + 'left:24px;'));
-  root.appendChild(el('div', ringCss + 'right:24px;'));
+    'position:fixed;border-radius:50%;border:1px dashed rgba(120,200,225,.20);pointer-events:none;';
+  root._hints2 = [el('div', ringCss), el('div', ringCss)];
+  root._hints2[0]._side = 'left';
+  root._hints2[1]._side = 'right';
+  root._hints2.forEach((r) => root.appendChild(r));
 
   const knobCss =
-    'position:fixed;width:116px;height:116px;margin:-58px 0 0 -58px;border-radius:50%;' +
-    'border:1px solid rgba(94,239,255,.38);background:rgba(10,22,30,.26);' +
+    'position:fixed;border-radius:50%;' +
+    'border:1px solid rgba(94,239,255,.42);background:rgba(10,22,30,.3);' +
     'pointer-events:none;display:none;';
   const dotCss =
-    'position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;' +
-    'border-radius:50%;background:rgba(94,239,255,.26);border:1px solid rgba(94,239,255,.6);';
+    'position:absolute;left:50%;top:50%;' +
+    'border-radius:50%;background:rgba(94,239,255,.3);border:1px solid rgba(94,239,255,.65);';
   root._lStick = el('div', knobCss);
   root._rStick = el('div', knobCss);
   root._lStick._dot = el('div', dotCss);
@@ -144,38 +197,41 @@ function buildOverlay() {
   root.appendChild(root._lStick);
   root.appendChild(root._rStick);
 
-  for (const [code, label, side, slot] of BUTTONS) {
+  for (const [code, label] of BUTTONS) {
     const b = el('div', BTN_CSS, label);
     b.dataset.code = code;
-    placeButton(b, side, slot);
     btnEls[code] = b;
     root.appendChild(b);
   }
 
   root._hint = el(
     'div',
-    'position:fixed;left:50%;bottom:150px;transform:translateX(-50%);pointer-events:none;' +
+    'position:fixed;left:50%;transform:translateX(-50%);pointer-events:none;' +
       'display:none;font:500 12px/1.4 ui-monospace,Menlo,monospace;color:#bfefff;' +
-      'text-align:center;background:rgba(8,16,22,.6);border:1px solid rgba(94,239,255,.3);' +
+      'text-align:center;background:rgba(8,16,22,.66);border:1px solid rgba(94,239,255,.3);' +
       'border-radius:6px;padding:6px 12px;transition:opacity .6s;white-space:nowrap;',
-    'left thumb: move   ·   right thumb: aim + auto-fire'
+    'left thumb: move   ·   right thumb: aim + fire'
   );
   root.appendChild(root._hint);
 
-  // FULLSCREEN — a real <button> so requestFullscreen() sees a user gesture
+  // FULLSCREEN — a real <button> so requestFullscreen() sees a user gesture.
+  // touchend fires it directly (a definite activation); click covers desktop.
   root._fs = el(
     'button',
-    'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:22;' +
+    'position:fixed;left:50%;transform:translateX(-50%);z-index:22;' +
       'display:none;align-items:center;justify-content:center;pointer-events:auto;' +
       'cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;' +
-      'font:600 13px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;' +
-      'color:#bfefff;background:rgba(10,22,30,.66);border:1px solid rgba(94,239,255,.5);' +
-      'border-radius:8px;padding:11px 18px;',
+      'font:700 13px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;' +
+      'color:#dff4ff;background:rgba(10,22,30,.78);border:1px solid rgba(94,239,255,.6);' +
+      'box-shadow:0 2px 16px rgba(0,0,0,.5);border-radius:9px;min-height:44px;',
     '⛶  FULLSCREEN'
   );
   root._fs.setAttribute('data-ui', '');
-  // one handler: onTouchEnd leaves [data-ui] taps alone (no preventDefault), so
-  // the compat click fires normally and this covers touch + mouse + keyboard
+  root._fs.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    goFullscreen();
+  }, { passive: false });
   root._fs.addEventListener('click', goFullscreen);
   root.appendChild(root._fs);
 
@@ -198,37 +254,74 @@ function buildOverlay() {
   root.appendChild(root._rot);
 
   document.body.appendChild(root);
+  layout();
 }
 
 // ---------------------------------------------------------------- fullscreen
 function fsEl() {
   return document.fullscreenElement || document.webkitFullscreenElement || null;
 }
-function fsSupported() {
-  const d = document.documentElement;
-  return !!(document.fullscreenEnabled || d.requestFullscreen || d.webkitRequestFullscreen);
+function reqFsOn(el) {
+  return el && (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen);
 }
-function goFullscreen() {
+function fsSupported() {
+  // element fullscreen — NOT iPhone Safari (there it's video-only, so this is false
+  // and the button hides; Add-to-Home-Screen is the route there)
+  return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled || reqFsOn(document.documentElement));
+}
+let _fsTried = 0;
+let _fsAuto = false; // have we auto-attempted fullscreen on the first gameplay touch?
+function goFullscreen(silent) {
   if (fsEl()) return;
-  const d = document.documentElement;
-  const req = d.requestFullscreen || d.webkitRequestFullscreen || d.mozRequestFullScreen;
-  if (!req) return;
-  try {
-    const r = req.call(d);
-    if (r && r.then) r.then(lockLandscape, () => {});
-    else lockLandscape();
-  } catch (e) {
-    /* user-gesture / not-supported — nothing to do */
+  _fsTried = Date.now();
+  // try <html>, then <body> — some Android browsers only honour one
+  for (const target of [document.documentElement, document.body]) {
+    const req = reqFsOn(target);
+    if (!req) continue;
+    try {
+      const r = req.call(target);
+      if (r && r.then) r.then(afterFs, () => {});
+      else afterFs();
+      break;
+    } catch (e) {
+      /* fall through to the next target */
+    }
+  }
+  // if nothing took hold, tell the user how to do it manually (unless auto-tried)
+  if (!silent) {
+    setTimeout(() => {
+      if (!fsEl() && Date.now() - _fsTried < 2500) fsToast();
+    }, 900);
   }
 }
-function lockLandscape() {
+function afterFs() {
   try {
     const o = screen.orientation;
     if (o && o.lock) o.lock('landscape').catch(() => {});
   } catch (e) {
-    /* orientation lock unsupported (iOS, desktop) */
+    /* orientation lock unsupported (iOS, desktop) — harmless */
   }
-  setTimeout(() => dispatchEvent(new Event('resize')), 120);
+  // the viewport takes a beat to settle after entering fullscreen; re-fit a few times
+  for (const d of [40, 180, 450]) setTimeout(() => { dispatchEvent(new Event('resize')); layout(); }, d);
+}
+function fsToast() {
+  if (!root) return;
+  let t = root._fsToast;
+  if (!t) {
+    t = root._fsToast = el(
+      'div',
+      'position:fixed;left:50%;top:60px;transform:translateX(-50%);z-index:23;pointer-events:none;' +
+        'max-width:80vw;font:500 12px/1.4 ui-monospace,Menlo,monospace;color:#ffe;text-align:center;' +
+        'background:rgba(8,14,22,.92);border:1px solid rgba(255,200,110,.5);border-radius:7px;padding:8px 14px;' +
+        'transition:opacity .5s;'
+    );
+    root.appendChild(t);
+  }
+  t.textContent =
+    "Fullscreen isn't available in this browser — use its ⋮ menu, or Add to Home Screen for a chrome-free window.";
+  t.style.opacity = '1';
+  clearTimeout(t._h);
+  t._h = setTimeout(() => (t.style.opacity = '0'), 5000);
 }
 function isPortrait() {
   return (window.innerHeight || 0) > (window.innerWidth || 0) + 1;
@@ -286,6 +379,12 @@ function onTouchStart(ev) {
   if (!active) {
     // a menu / panel is up — the canvas shim turns this tap into a mouse event
     return;
+  }
+  // first time the player drives the world, quietly bid for fullscreen (this is
+  // a real user gesture); the menu FULLSCREEN button covers the explicit case
+  if (!_fsAuto && fsSupported() && !fsEl()) {
+    _fsAuto = true;
+    goFullscreen(true);
   }
   if (!ev.changedTouches) return;
   for (const t of ev.changedTouches) {
@@ -516,22 +615,30 @@ export function initTouch(cnv, gameApi) {
   addEventListener('mousemove', sawMouse, true);
   addEventListener('mousedown', sawMouse, true);
 
+  // re-fit the controls to the viewport whenever it changes size
+  addEventListener('resize', () => { if (engaged) layout(); });
+
   // entering / leaving fullscreen resizes the viewport and changes the button
   const onFs = () => {
+    if (engaged) layout();
     syncActive();
-    setTimeout(() => dispatchEvent(new Event('resize')), 60);
+    for (const d of [60, 240, 600]) setTimeout(() => { dispatchEvent(new Event('resize')); if (engaged) layout(); }, d);
   };
   addEventListener('fullscreenchange', onFs);
   addEventListener('webkitfullscreenchange', onFs);
 
   // keep the 2D canvas fitted when the mobile URL bar shows / hides / rotates
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => dispatchEvent(new Event('resize')));
+    window.visualViewport.addEventListener('resize', () => {
+      dispatchEvent(new Event('resize'));
+      if (engaged) layout();
+    });
   }
   addEventListener('orientationchange', () => {
     syncActive();
     setTimeout(() => {
       dispatchEvent(new Event('resize'));
+      if (engaged) layout();
       syncActive();
     }, 120);
   });

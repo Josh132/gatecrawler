@@ -94,7 +94,7 @@
       if (near && Math.sqrt(nd) < 210 && p.dodgeCd <= 0) key('Space');
       if (g.dhdActive) key('KeyE');
     } else if (g.state === 'gatemap') {
-      const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+      const node = g.buttons.find((b) => b._node);
       if (node) node.fn();
     } else if (g.state === 'hub') {
       g.player.x = g.world.gateCenter.x;

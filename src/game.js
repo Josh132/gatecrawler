@@ -403,7 +403,7 @@ export function persist(s) {
 
 export function createGame(canvas) {
   const ctx = canvas.getContext('2d');
-  const view = { w: 960, h: 600, dpr: 1 };
+  const view = { w: 960, h: 600, dpr: 1, zoom: ZOOM, hud: 1 };
 
   function resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -413,6 +413,11 @@ export function createGame(canvas) {
     canvas.width = Math.floor(view.w * dpr);
     canvas.height = Math.floor(view.h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // on a big desktop screen the world was a postage stamp and the HUD was
+    // lost in the corners — scale both up with the viewport (clamped so a
+    // laptop / phone is unchanged: both factors are 1 at <=1280x800 / <=720h)
+    view.zoom = ZOOM * clamp(view.h / 720, 1, 1.7);
+    view.hud = clamp(Math.min(view.w / 1280, view.h / 800), 1, 1.6);
   }
   addEventListener('resize', resize);
   resize();
@@ -1032,8 +1037,8 @@ function updateHub(g, dt) {
   }
   if (keyHit(g, 'heal', 'KeyQ')) quickHeal(g);
 
-  g.mouse.wx = (mouse.x - g.view.w / 2) / ZOOM + g.cam.x;
-  g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
+  g.mouse.wx = (mouse.x - g.view.w / 2) / g.view.zoom + g.cam.x;
+  g.mouse.wy = (mouse.y - g.view.h / 2) / g.view.zoom + g.cam.y;
   let ix = (keyHeld(g, 'right', 'KeyD') ? 1 : 0) - (keyHeld(g, 'left', 'KeyA') ? 1 : 0);
   let iy = (keyHeld(g, 'down', 'KeyS') ? 1 : 0) - (keyHeld(g, 'up', 'KeyW') ? 1 : 0);
   if (ix || iy) {
@@ -1151,8 +1156,8 @@ function updatePlayerMovement(g, dt, eff) {
   }
   const stim = p.stimT > 0;
 
-  g.mouse.wx = (mouse.x - g.view.w / 2) / ZOOM + g.cam.x;
-  g.mouse.wy = (mouse.y - g.view.h / 2) / ZOOM + g.cam.y;
+  g.mouse.wx = (mouse.x - g.view.w / 2) / g.view.zoom + g.cam.x;
+  g.mouse.wy = (mouse.y - g.view.h / 2) / g.view.zoom + g.cam.y;
   p.aim = Math.atan2(g.mouse.wy - p.y, g.mouse.wx - p.x);
 
   let ix = (keyHeld(g, 'right', 'KeyD') ? 1 : 0) - (keyHeld(g, 'left', 'KeyA') ? 1 : 0);
@@ -4931,8 +4936,8 @@ function bossVolley(g, e, v) {
 function clampCam(g) {
   const wpx = g.world.W * TILE;
   const hpx = g.world.H * TILE;
-  const halfW = g.view.w / 2 / ZOOM;
-  const halfH = g.view.h / 2 / ZOOM;
+  const halfW = g.view.w / 2 / g.view.zoom;
+  const halfH = g.view.h / 2 / g.view.zoom;
   // let the camera overscan the world edge so the player stays near centre at
   // the map border instead of pinned to the screen edge (the void past the
   // wall shows briefly, which reads fine)
@@ -5035,7 +5040,7 @@ function renderPlay(g, dim, cbTags) {
   const shy = -(g.shakeY || 0) * kick + (Math.random() - 0.5) * sh * 0.4;
   ctx.save();
   ctx.translate(view.w / 2 + shx, view.h / 2 + shy);
-  ctx.scale(ZOOM, ZOOM);
+  ctx.scale(g.view.zoom, g.view.zoom);
   ctx.translate(-g.cam.x, -g.cam.y);
 
   // the bake is taller than the world — wall tops overhang the first row
@@ -5142,8 +5147,8 @@ function drawWallTops(ctx, g, R, dim) {
   const off = g.worldCanvas.offsetY || 0;
   const w = g.world;
   const p = g.player;
-  const halfW = g.view.w / 2 / ZOOM + TILE * 2;
-  const halfH = g.view.h / 2 / ZOOM + TILE * 2;
+  const halfW = g.view.w / 2 / g.view.zoom + TILE * 2;
+  const halfH = g.view.h / 2 / g.view.zoom + TILE * 2;
   const x0 = Math.max(0, Math.floor((g.cam.x - halfW) / TILE));
   const x1 = Math.min(w.W - 1, Math.ceil((g.cam.x + halfW) / TILE));
   const y0 = Math.max(0, Math.floor((g.cam.y - halfH) / TILE));
@@ -5794,13 +5799,17 @@ function renderHUD(g) {
   const { ctx, view } = g;
   const p = g.player;
   const eff = fx(g);
+  // one scale factor drives the whole HUD so it stays readable on a big
+  // desktop screen and unchanged (s=1) on a laptop or phone
+  const s = view.hud || 1;
+  const fnt = (px, w) => `${w ? w + ' ' : ''}${Math.round(px * s)}px monospace`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
 
-  const bx = 20;
-  const by = view.h - 58;
-  const bw = 220;
-  const bh = 16;
+  const bx = 20 * s;
+  const by = view.h - 58 * s;
+  const bw = 220 * s;
+  const bh = 16 * s;
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(bx, by, bw, bh);
   const hpf = clamp(p.hp / p.maxHp, 0, 1);
@@ -5809,24 +5818,24 @@ function renderHUD(g) {
   ctx.strokeStyle = 'rgba(255,255,255,0.3)';
   ctx.strokeRect(bx, by, bw, bh);
   ctx.fillStyle = '#fff';
-  ctx.font = '11px monospace';
-  ctx.fillText(`${Math.ceil(Math.max(0, p.hp))} / ${p.maxHp}`, bx + 6, by + 12);
+  ctx.font = fnt(11);
+  ctx.fillText(`${Math.ceil(Math.max(0, p.hp))} / ${p.maxHp}`, bx + 6 * s, by + 12 * s);
 
   // overshield bar
   if (p.shieldMax > 0) {
     const sf = clamp(p.shield / p.shieldMax, 0, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(bx, by - 8, bw, 5);
+    ctx.fillRect(bx, by - 8 * s, bw, 5 * s);
     ctx.fillStyle = '#7dd3fc';
-    ctx.fillRect(bx, by - 8, bw * sf, 5);
+    ctx.fillRect(bx, by - 8 * s, bw * sf, 5 * s);
   }
 
   const wid = activeWeaponId(g.inv);
   const wp = WEAPONS[wid];
   const witem = ITEMS[weaponItemId(g.inv)];
   ctx.fillStyle = wp.color;
-  ctx.font = 'bold 13px monospace';
-  const wLineY = by - (p.shieldMax > 0 ? 16 : 8);
+  ctx.font = fnt(13, 'bold');
+  const wLineY = by - (p.shieldMax > 0 ? 16 : 8) * s;
   let ammoStr;
   if (wp.ammoMax === Infinity) ammoStr = '∞';
   else if (wp.mag != null) ammoStr = `${Math.ceil(p.mag[wid] != null ? p.mag[wid] : magCap(g, wid))} / ${p.ammo[wid] || 0}`;
@@ -5840,19 +5849,19 @@ function renderHUD(g) {
   if (wsFor(g, wid).altFire) {
     const chg = p._chargeT;
     const rdy = (p._altCd || 0) <= 0;
-    ctx.font = '9px monospace';
+    ctx.font = fnt(9);
     ctx.fillStyle = chg != null ? '#ffd27a' : rdy ? '#8ff4ff' : 'rgba(143,244,255,0.3)';
-    ctx.fillText(chg != null ? `ALT ${Math.round(chg * 100)}%` : rdy ? 'ALT ▸RMB' : 'ALT …', bx, wLineY + 13);
+    ctx.fillText(chg != null ? `ALT ${Math.round(chg * 100)}%` : rdy ? 'ALT ▸RMB' : 'ALT …', bx, wLineY + 13 * s);
   }
   if (p.reloadT > 0 && p.reloadWid === wid) {
     const rf = clamp(1 - p.reloadT / (p.reloadDur || 1), 0, 1);
     ctx.fillStyle = '#ffd54a';
-    ctx.font = '10px monospace';
-    ctx.fillText('RELOADING', bx + 150, wLineY);
+    ctx.font = fnt(10);
+    ctx.fillText('RELOADING', bx + 150 * s, wLineY);
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(bx + 150, wLineY + 3, 62, 4);
+    ctx.fillRect(bx + 150 * s, wLineY + 3 * s, 62 * s, 4 * s);
     ctx.fillStyle = '#ffd54a';
-    ctx.fillRect(bx + 150, wLineY + 3, 62 * rf, 4);
+    ctx.fillRect(bx + 150 * s, wLineY + 3 * s, 62 * s * rf, 4 * s);
   }
 
   // dodge charges — one pip per charge, dim while regenerating
@@ -5860,65 +5869,65 @@ function renderHUD(g) {
   for (let i = 0; i < dmax; i++) {
     const ready = i < (p.dodgeCharge || 0);
     ctx.fillStyle = ready ? '#7fe8ff' : 'rgba(120,230,255,0.2)';
-    ctx.fillRect(bx + bw + 10 + i * 10, by, 7, bh);
+    ctx.fillRect(bx + bw + (10 + i * 10) * s, by, 7 * s, bh);
   }
   if (dmax > 0 && (p.dodgeCharge || 0) < dmax) {
     const rf = clamp((p.dodgeRegenT || 0) / (1.15 * (eff.dodgeCdMul || 1)), 0, 1);
     ctx.fillStyle = 'rgba(127,232,255,0.5)';
-    ctx.fillRect(bx + bw + 10 + Math.floor(p.dodgeCharge || 0) * 10, by + bh - 2, 7 * rf, 2);
+    ctx.fillRect(bx + bw + (10 + Math.floor(p.dodgeCharge || 0) * 10) * s, by + bh - 2 * s, 7 * s * rf, 2 * s);
   }
   if (p.stimT > 0) {
     ctx.fillStyle = '#ffd54a';
-    ctx.font = '10px monospace';
-    ctx.fillText('STIM ' + p.stimT.toFixed(1) + 's', bx + bw + 10 + dmax * 10 + 8, by + 12);
+    ctx.font = fnt(10);
+    ctx.fillText('STIM ' + p.stimT.toFixed(1) + 's', bx + bw + (10 + dmax * 10 + 8) * s, by + 12 * s);
   }
 
   ctx.textAlign = 'right';
-  ctx.font = 'bold 13px monospace';
+  ctx.font = fnt(13, 'bold');
   ctx.fillStyle = '#8ef';
-  ctx.fillText(`NAQUADAH  ${g.runNaq}   (banked ${g.save.naquadah})`, view.w - 20, view.h - 40);
+  ctx.fillText(`NAQUADAH  ${g.runNaq}   (banked ${g.save.naquadah})`, view.w - 20 * s, view.h - 40 * s);
   ctx.fillStyle = '#b6f0ff';
-  ctx.fillText(`INTEL  ${g.runIntel}   (banked ${g.save.intel || 0})`, view.w - 20, view.h - 22);
+  ctx.fillText(`INTEL  ${g.runIntel}   (banked ${g.save.intel || 0})`, view.w - 20 * s, view.h - 22 * s);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#9cf';
-  ctx.font = '12px monospace';
+  ctx.font = fnt(12);
   // truncate the address so a boss bar can never sit on top of it
   let addr = g.params.address;
   const barL = bossBarLeftX(g);
   if (barL != null) {
-    const cap = Math.max(3, Math.floor((barL - 28 - 20) / 7.25)); // 12px monospace ≈ 7.25px/char
+    const cap = Math.max(3, Math.floor((barL - 28 - 20 * s) / (7.25 * s))); // ~7.25px/char at 12px
     if (addr.length > cap) addr = addr.slice(0, Math.max(1, cap - 1)) + '…';
   }
-  ctx.fillText(addr, 20, 22);
+  ctx.fillText(addr, 20 * s, 22 * s);
   ctx.fillStyle = '#f9a';
   ctx.fillText(
     `SECTOR DEPTH ${g.hop}    THREAT ${g.params.threat}    ${(g.params.faction || g.params.primary).toUpperCase()}`,
-    20,
-    42
+    20 * s,
+    42 * s
   );
   // heat as a real meter with a state word
   const hf = clamp(g.heat / 4, 0, 1);
   const hunted = g.hunterSpawned || g.heat >= 2;
   const hName = g.heat >= 3 ? 'SWARM' : g.heat >= 2 ? 'HUNTED' : g.heat >= 0.8 ? 'NOTICED' : 'CALM';
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(20, 51, 120, 9);
+  ctx.fillRect(20 * s, 51 * s, 120 * s, 9 * s);
   ctx.fillStyle = hunted ? `rgba(255,90,70,${0.7 + 0.3 * Math.sin(g.time * 8)})` : '#e88';
-  ctx.fillRect(20, 51, 120 * hf, 9);
+  ctx.fillRect(20 * s, 51 * s, 120 * s * hf, 9 * s);
   ctx.strokeStyle = 'rgba(255,255,255,0.25)';
   ctx.lineWidth = 1;
-  ctx.strokeRect(20, 51, 120, 9);
+  ctx.strokeRect(20 * s, 51 * s, 120 * s, 9 * s);
   ctx.fillStyle = hunted ? '#f77' : '#fb8';
-  ctx.font = '10px monospace';
-  ctx.fillText('HEAT · ' + hName, 148, 60);
+  ctx.font = fnt(10);
+  ctx.fillText('HEAT · ' + hName, 148 * s, 60 * s);
   if (g.params.mods.length) {
     ctx.fillStyle = '#fd6';
-    ctx.font = '12px monospace';
-    ctx.fillText('[ ' + modLabels(g.params.mods).join('   ') + ' ]', 20, 80);
+    ctx.font = fnt(12);
+    ctx.fillText('[ ' + modLabels(g.params.mods).join('   ') + ' ]', 20 * s, 80 * s);
   }
   ctx.fillStyle = '#567';
-  ctx.font = '10px monospace';
-  ctx.fillText('TAB  inventory & gear', 20, g.params.mods.length ? 96 : 78);
+  ctx.font = fnt(10);
+  ctx.fillText('TAB  inventory & gear', 20 * s, (g.params.mods.length ? 96 : 78) * s);
 
   drawMinimap(g);
 }
@@ -5977,18 +5986,19 @@ function drawSlot(ctx, x, y, s, stack, opts) {
 
 function renderHotbar(g) {
   const { ctx, view } = g;
-  const s = 40;
-  const gap = 6;
+  const hud = view.hud || 1;
+  const s = Math.round(40 * hud);
+  const gap = Math.round(6 * hud);
   const totalW = HOTBAR * s + (HOTBAR - 1) * gap;
   const x0 = view.w / 2 - totalW / 2;
-  const y = view.h - s - 12;
+  const y = view.h - s - 12 * hud;
   ctx.textBaseline = 'alphabetic';
   for (let i = 0; i < HOTBAR; i++) {
     const x = x0 + i * (s + gap);
     drawSlot(ctx, x, y, s, g.inv.hotbar[i], { hot: true, label: String(i + 1) });
   }
   // grenade indicator to the right
-  const gx = x0 + totalW + 14;
+  const gx = x0 + totalW + 14 * hud;
   drawSlot(ctx, gx, y, s, g.inv.equip.grenade, { label: 'G', border: 'rgba(255,150,90,0.5)' });
 }
 
@@ -6463,8 +6473,9 @@ function renderPanel(g) {
 
 function drawMinimap(g) {
   const { ctx, view } = g;
-  const cell = 14;
-  const pad = 3;
+  const hud = view.hud || 1;
+  const cell = 14 * hud;
+  const pad = 3 * hud;
   let mgx = 0;
   let mgy = 0;
   for (const r of g.world.rooms) {
@@ -6472,14 +6483,14 @@ function drawMinimap(g) {
     mgy = Math.max(mgy, r.gy);
   }
   const w = (mgx + 1) * cell;
-  const ox = view.w - 20 - w;
-  const oy = 30;
+  const ox = view.w - 20 * hud - w;
+  const oy = 30 * hud;
 
   ctx.textAlign = 'right';
   ctx.textBaseline = 'alphabetic';
-  ctx.font = '9px monospace';
+  ctx.font = `${Math.round(9 * hud)}px monospace`;
   ctx.fillStyle = '#8ab';
-  ctx.fillText('MAP', view.w - 20, oy - 6);
+  ctx.fillText('MAP', view.w - 20 * hud, oy - 6 * hud);
 
   for (const r of g.world.rooms) {
     const x = ox + r.gx * cell;
@@ -6507,9 +6518,10 @@ function drawMinimap(g) {
     const p = g.player;
     const a = Math.atan2(dhd.centerPx.y - p.y, dhd.centerPx.x - p.x);
     ctx.save();
-    ctx.translate(view.w / 2 + Math.cos(a) * 46, view.h / 2 + Math.sin(a) * 46);
+    ctx.translate(view.w / 2 + Math.cos(a) * 46 * hud, view.h / 2 + Math.sin(a) * 46 * hud);
     ctx.rotate(a);
     ctx.fillStyle = 'rgba(140,220,255,0.5)';
+    ctx.scale(hud, hud);
     ctx.beginPath();
     ctx.moveTo(10, 0);
     ctx.lineTo(-6, 5);
@@ -6521,14 +6533,14 @@ function drawMinimap(g) {
 
   // one-line legend
   ctx.textAlign = 'right';
-  ctx.font = '8px monospace';
-  const ly = oy + (mgy + 1) * cell + 8;
+  ctx.font = `${Math.round(8 * hud)}px monospace`;
+  const ly = oy + (mgy + 1) * cell + 8 * hud;
   ctx.fillStyle = '#4a6a9a';
-  ctx.fillText('gate', view.w - 84, ly);
+  ctx.fillText('gate', view.w - 84 * hud, ly);
   ctx.fillStyle = '#4a8a6a';
-  ctx.fillText('clear', view.w - 52, ly);
+  ctx.fillText('clear', view.w - 52 * hud, ly);
   ctx.fillStyle = '#b07a3a';
-  ctx.fillText('DHD', view.w - 20, ly);
+  ctx.fillText('DHD', view.w - 20 * hud, ly);
 }
 
 function renderMessages(g) {
@@ -7253,8 +7265,8 @@ function feedAimAssist(g) {
   for (const e of g.enemies) {
     if (!e.alive || e.state !== 'active' || e.neutral) continue;
     pts.push({
-      x: (e.x - g.cam.x) * ZOOM + g.view.w / 2,
-      y: (e.y - g.cam.y) * ZOOM + g.view.h / 2,
+      x: (e.x - g.cam.x) * g.view.zoom + g.view.w / 2,
+      y: (e.y - g.cam.y) * g.view.zoom + g.view.h / 2,
     });
   }
   setAimAssistTargets(pts);
@@ -7583,7 +7595,7 @@ function renderHub(g) {
   const p = g.player;
   ctx.save();
   ctx.translate(view.w / 2, view.h / 2);
-  ctx.scale(ZOOM, ZOOM);
+  ctx.scale(g.view.zoom, g.view.zoom);
   ctx.translate(-g.cam.x, -g.cam.y);
   const woff = g.worldCanvas.offsetY || 0;
   ctx.drawImage(g.worldCanvas, 0, -woff);

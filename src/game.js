@@ -7439,7 +7439,14 @@ function renderMenu(g) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  const titleY = Math.min(view.h * 0.36, 250);
+  // everything from here is the interactive block — authored for a fixed
+  // ~780×560 natural box and drawn through applyUiScale so it never clips a
+  // small phone (k=1 on any desktop ≥ ~960×600).
+  const NW = 780;
+  const NH = 560;
+  applyUiScale(g, NW, NH);
+  const topY = view.h / 2 - NH / 2;
+  const titleY = topY + 150;
   ctx.textAlign = 'center';
 
   // gate-iris motif behind the wordmark: three concentric chevron rings, turning
@@ -7459,16 +7466,21 @@ function renderMenu(g) {
   ctx.beginPath(); // don't leave the last arc dangling in the path
   ctx.restore();
 
-  // wordmark — heavy serif for contrast against the all-monospace UI, tracked wide
+  // wordmark — heavy serif for contrast against the all-monospace UI, tracked
+  // wide. font shrinks to fit the natural box so it never clips to "ATE CRAWLE".
   ctx.save();
   ctx.shadowBlur = 26;
   ctx.shadowColor = '#39f';
   ctx.fillStyle = '#cfeaff';
-  ctx.font = '900 52px Georgia, "Times New Roman", serif';
   const word = 'GATE CRAWLER';
-  // manual letter-spacing so it reads as an emblem, not a headline
-  const tw = ctx.measureText(word).width;
   const track = 6;
+  let fontPx = 52;
+  ctx.font = '900 ' + fontPx + 'px Georgia, "Times New Roman", serif';
+  while (fontPx > 26 && ctx.measureText(word).width + track * (word.length - 1) > NW - 40) {
+    fontPx -= 2;
+    ctx.font = '900 ' + fontPx + 'px Georgia, "Times New Roman", serif';
+  }
+  const tw = ctx.measureText(word).width;
   let lx = cx - (tw + track * (word.length - 1)) / 2;
   ctx.textAlign = 'left';
   for (const ch of word) {
@@ -7520,17 +7532,20 @@ function renderMenu(g) {
   ctx.font = '11px monospace';
   ctx.fillText((MENU_ITEMS[g.menuSel] || MENU_ITEMS[0]).hint, cx, hintY);
 
-  // small controls hint + career stats along the base
+  // controls hint + career stats along the bottom of the natural box
+  const footY = topY + NH - 22;
   ctx.fillStyle = '#678';
   ctx.font = '11px monospace';
-  ctx.fillText('↑↓ / mouse to choose · Enter to select · full controls & rebinding under Settings', cx, view.h - 44);
+  ctx.fillText('↑↓ / mouse to choose · Enter to select · full controls & rebinding under Settings', cx, footY);
   ctx.fillStyle = '#567';
   ctx.font = '10px monospace';
   ctx.fillText(
     `banked ${g.save.naquadah} N · ${g.save.intel || 0} intel  ·  deepest threat ${g.save.deepestThreat}  ·  sorties ${g.save.runs}  ·  worlds mapped ${g.save.known.length}`,
     cx,
-    view.h - 26
+    footY + 16
   );
+  endUiScale(g);
+
   ctx.textAlign = 'right';
   ctx.fillStyle = '#5a7690';
   ctx.font = '10px monospace';

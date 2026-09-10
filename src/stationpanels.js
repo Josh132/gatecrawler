@@ -12,7 +12,7 @@ import { WEAPONS } from './weapons.js';
 import { ITEMS } from './items.js';
 import { drawItemIcon } from './icons.js';
 import { invAdd } from './inventory.js';
-import { canResearch, nodeById, milestoneFor, TECH } from './tech.js';
+import { canResearch, nodeById, milestoneFor, keystoneSibling, TECH } from './tech.js';
 import {
   activeOperation, operationProgress, claimActiveOperation, campaignStatus,
   objectiveLabel, ensureCampaign, OPERATIONS, FINALE,
@@ -262,12 +262,18 @@ function renderResearchPanel(g) {
     ctx.fillStyle = have ? '#cfe' : ok ? '#eff' : '#889';
     ctx.font = 'bold 10px monospace';
     ctx.textAlign = 'left';
+    const nm = (n.keystone ? '◈ ' : '') + n.name;
     const maxc = Math.floor((rc.w - 14) / 6);
-    ctx.fillText(n.name.length > maxc ? n.name.slice(0, maxc - 1) + '…' : n.name, rc.x + 7, rc.y + 15);
+    ctx.fillText(nm.length > maxc ? nm.slice(0, maxc - 1) + '…' : nm, rc.x + 7, rc.y + 15);
     ctx.font = '9px monospace';
+    const ksSib = !have ? keystoneSibling(g.save, n.id) : null;
     if (have) {
       ctx.fillStyle = '#7c9';
       ctx.fillText('✓ researched', rc.x + 7, rc.y + 30);
+    } else if (ksSib) {
+      ctx.fillStyle = '#c9a24a';
+      const on = '◈ chose ' + ksSib.name;
+      ctx.fillText(on.length > maxc ? on.slice(0, maxc - 1) + '…' : on, rc.x + 7, rc.y + 30);
     } else if (msLocked) {
       ctx.fillStyle = '#c9a24a';
       ctx.fillText('LOCKED · Op ' + ms, rc.x + 7, rc.y + 30);

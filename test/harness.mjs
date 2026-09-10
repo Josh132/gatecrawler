@@ -1408,6 +1408,26 @@ section('tech: tree shape, effects fold, research gating');
   const keystone = techEffects(['ops_hp1', 'ops_dodgecd', 'ops_hp2', 'ops_hp3', 'ops_dodge2', 'ops_revive']);
   assert(keystone.freeRevive === true && keystone.dodgeCharges === 2, 'tech: revive keystone + 2nd dodge charge apply');
 
+  // -- keystone groups: choosing one member permanently locks its siblings
+  {
+    const grp = TECH.filter((n) => n.keystone === 'ops_issue').map((n) => n.id);
+    assert(grp.length >= 3, `tech: the ops_issue keystone group has >=3 members (${grp.length})`);
+    const richKs = { naquadah: 999999, intel: 999, tech: [] };
+    // with prereqs met but no group member owned, each is researchable
+    assert(canResearch({ ...richKs, tech: ['ops_dodgecd'] }, 'ops_startarmor'), 'tech: an unclaimed keystone is researchable');
+    // once a sibling is owned, the others are locked regardless of funds/prereqs
+    assert(
+      canResearch({ ...richKs, tech: ['ops_hp1', 'ops_dodgecd', 'ops_move1', 'ops_startshield'] }, 'ops_startarmor') === false,
+      'tech: a keystone sibling is locked once one in its group is chosen'
+    );
+    assert(
+      canResearch({ ...richKs, tech: ['ops_hp1', 'ops_dodgecd', 'ops_move1', 'ops_startshield'] }, 'ops_dodgedist') === false,
+      'tech: every other keystone sibling is locked too'
+    );
+    // the chosen one still folds its effect
+    assert(techEffects(['ops_startshield']).startShield === 1, 'tech: the chosen keystone still applies');
+  }
+
   // -- canResearch gating
   const richNoIntel = { naquadah: 999999, intel: 0, tech: [] };
   const rich = { naquadah: 999999, intel: 999, tech: [] };

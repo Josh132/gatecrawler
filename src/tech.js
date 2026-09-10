@@ -41,15 +41,17 @@ export const TECH = [
   { id: 'ops_hp2', name: 'Hardened Physiology', branch: 'ops', tier: 1,
     cost: { naquadah: 95 }, requires: ['ops_hp1'],
     desc: '+25 maximum HP.' },
-  { id: 'ops_startshield', name: 'Issued Shield Cell', branch: 'ops', tier: 1,
+  // KEYSTONE 'ops_issue' — pick ONE issued edge per campaign; the others lock.
+  // choosing one also defines which tier-2 ops path (shield / i-frame) opens.
+  { id: 'ops_startshield', name: 'Issued Shield Cell', branch: 'ops', tier: 1, keystone: 'ops_issue',
     cost: { naquadah: 90 }, requires: ['ops_hp1'],
-    desc: 'Begin every run with one charged shield cell.' },
-  { id: 'ops_startarmor', name: 'Issued Kit', branch: 'ops', tier: 1,
+    desc: 'KEYSTONE — begin every run with one charged shield cell.' },
+  { id: 'ops_startarmor', name: 'Issued Kit', branch: 'ops', tier: 1, keystone: 'ops_issue',
     cost: { naquadah: 105 }, requires: ['ops_dodgecd'],
-    desc: 'Begin every run wearing a light armour piece.' },
-  { id: 'ops_dodgedist', name: 'Combat Roll', branch: 'ops', tier: 1,
+    desc: 'KEYSTONE — begin every run wearing a light armour piece.' },
+  { id: 'ops_dodgedist', name: 'Combat Roll', branch: 'ops', tier: 1, keystone: 'ops_issue',
     cost: { naquadah: 110 }, requires: ['ops_move1'],
-    desc: 'Dodge covers +15% distance.' },
+    desc: 'KEYSTONE — dodge covers +15% distance.' },
   { id: 'ops_dodge2', name: 'Reflex Booster', branch: 'ops', tier: 2,
     cost: { naquadah: 130, intel: 3 }, requires: ['ops_dodgecd'],
     desc: 'Gain a second dodge charge.' },
@@ -414,11 +416,24 @@ export function techEffects(ownedIds) {
 }
 
 // ---------------------------------------------------------------- gating
+// the owned node in `id`'s keystone group, if any — a keystone choice locks its
+// siblings. derived purely from save.tech, so a campaign reset fully undoes it.
+export function keystoneSibling(save, id) {
+  const node = BY_ID.get(id);
+  if (!node || !node.keystone) return null;
+  for (const o of (save && save.tech) || []) {
+    const on = BY_ID.get(o);
+    if (on && on !== node && on.keystone === node.keystone) return on;
+  }
+  return null;
+}
+
 export function canResearch(save, id) {
   const node = BY_ID.get(id);
   if (!node) return false;
   const owned = (save && save.tech) || [];
   if (owned.includes(id)) return false;
+  if (keystoneSibling(save, id)) return false; // a mutually-exclusive sibling is chosen
   for (const req of node.requires) {
     if (!owned.includes(req)) return false;
   }

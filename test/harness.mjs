@@ -288,9 +288,25 @@ section('address: determinism');
   const n1 = neighbors('AUR-CRT-VIR-BOO-CEN-SER').join(',');
   const n2 = neighbors('AUR-CRT-VIR-BOO-CEN-SER').join(',');
   assert(n1 === n2 && n1.length > 0, 'neighbors deterministic and non-empty');
-  const w1 = JSON.stringify(buildWorld(a).grid.length);
-  const w2 = JSON.stringify(buildWorld(worldParams('AUR-CRT-VIR-BOO-CEN-SER', 3)).grid.length);
-  assert(w1 === w2, 'buildWorld grid size deterministic for a seed');
+  // deep, not just grid.length — a stray Math.random in worldgen would shift
+  // tile contents / room rects without changing the array size
+  const bw = (hop) => {
+    const w = buildWorld(worldParams('AUR-CRT-VIR-BOO-CEN-SER', hop));
+    return JSON.stringify({
+      grid: Array.from(w.grid),
+      rooms: w.rooms.map((r) => [r.kind, r.gx, r.gy, r.rectPx.x, r.rectPx.y, r.rectPx.w, r.rectPx.h]),
+      W: w.W, H: w.H,
+    });
+  };
+  assert(bw(3) === bw(3), 'buildWorld is byte-for-byte deterministic (grid contents + room rects)');
+
+  // worldgen must never touch the unseeded RNG streams
+  const fs = await import('node:fs');
+  for (const f of ['worldgen.js', 'address.js']) {
+    const src = fs.readFileSync(new URL('../src/' + f, import.meta.url), 'utf8');
+    assert(!/\bMath\.random\s*\(/.test(src), `${f}: no Math.random() in worldgen`);
+    assert(!/\brr\s*\(/.test(src), `${f}: no unseeded rr() in worldgen`);
+  }
 }
 
 // ---------------------------------------------------------------- 3. full play loop

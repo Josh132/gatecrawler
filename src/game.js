@@ -253,7 +253,11 @@ export function normalizeSave(s) {
 // ▸ effects — fx(g): folded tech + roster + base-upgrade stats
 // ──────────────────────────────────────────────────────────────────────────
 
+// folded tech + roster + base-upgrade effects. Pure w.r.t. g.save.tech/roster/
+// base, which only change at the station panels — so cache it and rebuild only
+// when a purchase marks it dirty (markEffDirty). Called 6–12x/frame otherwise.
 function fx(g) {
+  if (g._eff && !g._effDirty) return g._eff;
   const e = techEffects(g.save.tech || []);
   // rescued SG teams stack their passives on top of the tech tree
   applyRoster(e, g.save.roster || []);
@@ -265,7 +269,15 @@ function fx(g) {
   if (hasBase(g.save, 'bestiaryDmgMul')) {
     e.bestiaryDmgMul = (e.bestiaryDmgMul == null ? 1 : e.bestiaryDmgMul) * baseMag(g.save, 'bestiaryDmgMul', 1);
   }
+  e.modCostMul = hasBase(g.save, 'modDiscount') ? baseMag(g.save, 'modDiscount', 1) : 1;
+  e.researchCostMul = hasBase(g.save, 'researchDiscount') ? baseMag(g.save, 'researchDiscount', 1) : 1;
+  g._eff = e;
+  g._effDirty = false;
   return e;
+}
+// call after any tech / roster / base-upgrade purchase (or campaign reset)
+function markEffDirty(g) {
+  g._effDirty = true;
 }
 // base-upgrade effects that aren't folded into the effects object
 function researchCostMul(g) {
@@ -760,6 +772,7 @@ function dialHome(g) {
         const tid = teamForName(cap.name, g.save.roster);
         if (tid && !g.save.roster.includes(tid)) {
           g.save.roster.push(tid);
+          markEffDirty(g);
           const tm = teamById(tid);
           if (tm) showUnlock(g, 'SG TEAM RECOVERED', tm.name + ' — ' + tm.role);
         }
@@ -7559,6 +7572,7 @@ function resetCampaign(g) {
   const d = defaultSave();
   g.save.campaign = d.campaign;
   g.save.tech = [];
+  markEffDirty(g);
   g.save.weapons = {};
   g.save.bestiary = {};
   g.save.known = [HOME];
@@ -7922,6 +7936,7 @@ function renderBasePanel(g) {
         () => {
           const r = buyBase(s, u.id);
           if (!r || !r.ok) return;
+          markEffDirty(g);
           persist(s);
           showUnlock(g, 'SGC UPGRADED', u.name);
           g.message('SGC upgraded — ' + u.name);
@@ -8077,6 +8092,7 @@ function renderResearchPanel(g) {
           g.save.intel = (g.save.intel || 0) - (n.cost.intel || 0);
           g.save.salvage = (g.save.salvage || 0) - (n.cost.salvage || 0);
           g.save.tech = [...(g.save.tech || []), n.id];
+          markEffDirty(g);
           const e = fx(g);
           g.player.maxHp = 100 + g.save.maxHpBonus + e.maxHpBonus;
           g.player.hp = Math.min(g.player.maxHp, g.player.hp);
@@ -8388,6 +8404,8 @@ function renderWorkbenchPanel(g) {
   );
   const eff = fx(g);
   const bonusSlots = eff.weaponModSlots || 0;
+  // Salvage Foundry base upgrade: -20% salvage on mods & upgrades (modCostMul)
+  const salv = (c) => Math.ceil((c.salvage || 0) * (eff.modCostMul || 1));
   if (!g.save.weapons || typeof g.save.weapons !== 'object') g.save.weapons = {};
 
   // every weapon the player holds: equipped slots + w_* stacks in the grid
@@ -8477,7 +8495,7 @@ function renderWorkbenchPanel(g) {
     button(g, `UPGRADE  L${lvl + 1}`, ubx, fr.y + 64, ubw, 24, () => {
       if (!canUpgrade(g.save, key).ok) return;
       const c = upgradeCost(key, lvl + 1);
-      g.save.salvage = (g.save.salvage || 0) - (c.salvage || 0);
+      g.save.salvage = (g.save.salvage || 0) - salv(c);
       g.save.naquadah = (g.save.naquadah || 0) - (c.naquadah || 0);
       state.level = lvl + 1;
       persist(g.save);
@@ -8515,7 +8533,7 @@ function renderWorkbenchPanel(g) {
     ctx.textAlign = 'left';
     ctx.fillText(
       up.ok
-        ? `L${lvl + 1}:  ${ucost.salvage} salvage${ucost.naquadah ? ' + ' + ucost.naquadah + ' naquadah' : ''}`
+        ? `L${lvl + 1}:  ${salv(ucost)} salvage${ucost.naquadah ? ' + ' + ucost.naquadah + ' naquadah' : ''}`
         : `L${lvl + 1} locked — ${up.reason}`,
       rx,
       ry
@@ -8618,7 +8636,7 @@ function renderWorkbenchPanel(g) {
     ctx.font = '8px monospace';
     const dm = Math.floor((rw - 150) / 4.6);
     ctx.fillText(m.desc.length > dm ? m.desc.slice(0, dm - 1) + '…' : m.desc, rx + 6, ry + 22);
-    const cstr = `${c.salvage}s${c.naquadah ? ' +' + c.naquadah + 'n' : ''}`;
+    const cstr = `${salv(c)}s${c.naquadah ? ' +' + c.naquadah + 'n' : ''}`;
     ctx.textAlign = 'right';
     ctx.font = '9px monospace';
     ctx.fillStyle = ci.ok ? '#9cd' : '#778';
@@ -8627,7 +8645,7 @@ function renderWorkbenchPanel(g) {
     button(g, 'FIT', rx + rw - 52, ry + 2, 48, rowH - 8, () => {
       if (!canInstall(g.save, key, m.id, bonusSlots).ok) return;
       const cost = installCost(m.id);
-      g.save.salvage = (g.save.salvage || 0) - (cost.salvage || 0);
+      g.save.salvage = (g.save.salvage || 0) - salv(cost);
       g.save.naquadah = (g.save.naquadah || 0) - (cost.naquadah || 0);
       state.mods = [...state.mods, m.id];
       persist(g.save);

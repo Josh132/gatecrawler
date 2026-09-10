@@ -1031,6 +1031,7 @@ function updatePlay(g, dt) {
   if (p.dodgeCharge == null) p.dodgeCharge = p.dodgeMax;
   const dodgeGap = 1.15 * (eff.dodgeCdMul || 1);
   p.dodgeCd = Math.max(0, p.dodgeCd - dt); // small min gap between rolls
+  if (p._nadeCd > 0) p._nadeCd -= dt; // throw cooldown, keeps grenade count bounded
   if (p.dodgeCharge < p.dodgeMax) {
     p.dodgeRegenT = (p.dodgeRegenT || 0) + dt;
     if (p.dodgeRegenT >= dodgeGap) {
@@ -1445,7 +1446,7 @@ function updatePlay(g, dt) {
   const migrants = g.enemies.filter(
     (e) => e.alive && e.state === 'active' && !e.hunter && e._room !== g.curRoom
   );
-  const migCap = g.curRoom && g.curRoom.kind === 'dhd' ? 2 : 4;
+  const migCap = g.curRoom && g.curRoom.kind === 'dhd' ? 3 : 4;
   if (migrants.length > migCap) {
     migrants.sort((a, b) => Math.hypot(b.x - p.x, b.y - p.y) - Math.hypot(a.x - p.x, a.y - p.y));
     for (let i = 0; i < migrants.length - migCap; i++) {
@@ -1471,12 +1472,16 @@ function updatePlay(g, dt) {
     pt.vy -= pt.vy * Math.min(1, 2 * dt);
     if (pt.life <= 0) pt.alive = false;
   }
+  // hard cap — many simultaneous blasts (grenade spam, a brute shattering in a
+  // crowd) can otherwise spike this into the tens of thousands. keep the newest.
+  if (g.particles.length > 3000) g.particles.splice(0, g.particles.length - 3000);
 
   updateSpecials(g, dt);
 
   g.enemies = g.enemies.filter((e) => e.alive);
   g.bullets = g.bullets.filter((b) => b.alive);
   g.grenades = g.grenades.filter((x) => x.alive);
+  if (g.grenades.length > 40) g.grenades.splice(0, g.grenades.length - 40);
   g.blocks = g.blocks.filter((x) => x.alive);
   g.hazards = g.hazards.filter((x) => x.alive);
   g.traps = g.traps.filter((x) => x.alive);
@@ -1957,7 +1962,7 @@ function spawnArenaWave(g, room, fac, threat, waveNum, active) {
   }
 }
 
-function spawnArenaReward(g, room) {
+function spawnArenaReward(g, room, bailed) {
   const c = room.centerPx;
   const R = rngHelpers(makeRng('arenaReward:' + g.params.seedStr + ':' + room.gx + ':' + room.gy));
   const armour = R.chance(0.5);
@@ -1966,8 +1971,10 @@ function spawnArenaReward(g, room) {
     : R.chance(0.35)
     ? 'w_launcher'
     : R.pick(['w_staff', 'w_beam', 'w_burst', 'w_shotgun']);
-  g.pickups.push(new Pickup('item', c.x, c.y, 0, { id, count: 1, rarity: 'epic' }));
-  g.pickups.push(new Pickup('naquadah', c.x + 16, c.y, 30 * worldMods(g).naqMul));
+  // a clean clear pays an epic; the 40s bail-out failsafe pays a lot less
+  const rarity = bailed ? 'good' : 'epic';
+  g.pickups.push(new Pickup('item', c.x, c.y, 0, { id, count: 1, rarity }));
+  g.pickups.push(new Pickup('naquadah', c.x + 16, c.y, (bailed ? 10 : 30) * worldMods(g).naqMul));
   burst(g, c.x, c.y, 24, '#ffd27a');
   if (sfx.crit) sfx.crit();
 }
@@ -2058,6 +2065,8 @@ function updateSpecials(g, dt) {
   for (let i = 0; i < g.vaultDoors.length; i++) {
     const vd = g.vaultDoors[i];
     if (vd.locked) {
+      const rp = vd._room && vd._room.rectPx;
+      if (rp && p.x >= rp.x && p.x <= rp.x + rp.w && p.y >= rp.y && p.y <= rp.y + rp.h) vd._seen = true;
       let clear = true;
       for (let k = 0; k < g.enemies.length; k++) {
         const e = g.enemies[k];
@@ -2066,9 +2075,11 @@ function updateSpecials(g, dt) {
           break;
         }
       }
-      vd._t = (vd._t || 0) + dt;
-      if (clear || vd._t > 45) {
-        // failsafe: force the seal after 45s so a stalled fight can't lock the vault
+      // the seal only engages once you've actually reached the vault room — no
+      // more idling elsewhere on the map to pop it on a spawn-time timer
+      if (vd._seen) vd._t = (vd._t || 0) + dt;
+      if (vd._seen && (clear || vd._t > 45)) {
+        // failsafe: force the seal after 45s in-room so a stalled fight can't lock the vault
         vd.locked = false;
         g.message('Vault seal released');
         if (sfx.pickup) sfx.pickup();
@@ -2105,7 +2116,7 @@ function updateSpecials(g, dt) {
       if (sfx.bossSting) sfx.bossSting(g.params.faction || g.params.primary);
     }
     if (!a.locked) continue;
-    a.t += dt;
+    if (inside) a.t += dt; // only the wave clock runs while you're actually in it
     let live = 0;
     for (let k = 0; k < g.enemies.length; k++) {
       const e = g.enemies[k];
@@ -2113,7 +2124,8 @@ function updateSpecials(g, dt) {
     }
     if (a.t > 40) {
       // failsafe: a real player finishes 3 waves inside 40s; the bot might not,
-      // so cut it loose rather than trap the run
+      // so cut it loose rather than trap the run — but the cache is downgraded,
+      // no free epic for a fight that didn't actually resolve
       for (let k = 0; k < g.enemies.length; k++) {
         const e = g.enemies[k];
         if (e.alive && e._room === rm) {
@@ -2123,7 +2135,7 @@ function updateSpecials(g, dt) {
       }
       a.done = true;
       a.locked = false;
-      spawnArenaReward(g, rm);
+      spawnArenaReward(g, rm, true);
     } else if (live === 0 && a.wave < a.waves) {
       a.wave++;
       spawnArenaWave(g, rm, g.params.faction || g.params.primary, g.params.threat, a.wave, true);
@@ -2353,12 +2365,14 @@ function useHotbar(g, i) {
 }
 
 function throwGrenade(g) {
+  const p = g.player;
+  if (p._nadeCd > 0) return; // rate-limit so a held key can't flood g.grenades
   const def = takeGrenade(g.inv);
   if (!def) {
     g.message('No grenades — equip one in the grenade slot');
     return;
   }
-  const p = g.player;
+  p._nadeCd = 0.4;
   const sp = 380;
   g.grenades.push(
     new Grenade(

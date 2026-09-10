@@ -290,6 +290,14 @@ export function buildWorld(params) {
     const put2 = (px, py) => {
       if (inRoom(px, py) && !lane(px, py)) grid[at(px, py)] = 1;
     };
+    // strictest guard, for the bold spatial archetypes: keeps the 3-wide centre
+    // cross open (lane) AND a 1-tile walkway all the way round the interior
+    // perimeter — so no archetype can ever box a unit in, and every doorway
+    // stays reachable by hugging the wall as well as through the centre.
+    const putA = (px, py) => {
+      if (px > r.ox + 1 && px < r.ox + ROOM_W - 2 &&
+        py > r.oy + 1 && py < r.oy + ROOM_H - 2 && !lane(px, py)) grid[at(px, py)] = 1;
+    };
 
     if (outdoor) {
       // open-air layouts: scattered trees & boulders that are real cover
@@ -334,7 +342,22 @@ export function buildWorld(params) {
       // while doorway lanes + the centre always stay clear.
       const pool = ['open', 'open', 'pillars', 'columns', 'columns', 'rubble',
         'rubble', 'perimeter', 'cross', 'chokepoint', 'arena', 'bisected'];
-      const shape = r.kind === 'dhd' ? 'bossArena' : R.pick(pool);
+      let shape = r.kind === 'dhd' ? 'bossArena' : R.pick(pool);
+      // spatial archetype: a bolder, address-deterministic reshape of the
+      // interior for ~half of normal rooms. Rolled on its own per-room hash
+      // stream, so it neither consumes nor shifts the layout roll above (the
+      // R.pick(pool) draw always still happens). Every archetype stamps cover
+      // ONLY through putA — the whole 3-wide centre cross plus a 1-tile
+      // perimeter walkway stay open, so every doorway lane and gate->DHD
+      // flood-fill survive intact and nothing can be boxed in.
+      let archRng = null;
+      if (r.kind === 'normal') {
+        archRng = rngHelpers(makeRng('archetype:' + params.seedStr + ':' + r.gx + ':' + r.gy));
+        if (archRng.rand() < 0.35) {
+          shape = archRng.pick(['longhall', 'pillhall', 'chevron', 'pitring', 'antechamber']);
+          r.archetype = shape;
+        }
+      }
       r.shape = shape;
       if (shape === 'open') {
         const n = R.int(2, 4);
@@ -399,6 +422,77 @@ export function buildWorld(params) {
         const wx = cxT + (R.chance(0.5) ? 3 : -3);
         for (let py = r.oy + 2; py <= r.oy + ROOM_H - 3; py++) {
           if (Math.abs(py - cyT) > 1) put(wx, py);
+        }
+
+      // ---- spatial archetypes ------------------------------------------------
+      // All stamp cover through putA: the 3-wide centre cross AND a 1-tile
+      // perimeter walkway stay open, so gate->DHD flood-fill and every doorway
+      // survive, and no unit can be boxed in.
+      } else if (shape === 'longhall') {
+        // squeeze the chamber toward a wide horizontal hall: aprons of cover
+        // banked under the top + bottom walls, a broad central lane between.
+        const deep = archRng.chance(0.5);
+        const rowsT = deep ? [r.oy + 2, r.oy + 3] : [r.oy + 2];
+        const rowsB = deep ? [r.oy + ROOM_H - 4, r.oy + ROOM_H - 3] : [r.oy + ROOM_H - 3];
+        for (const py of [...rowsT, ...rowsB])
+          for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px++) putA(px, py);
+      } else if (shape === 'pillhall') {
+        // formal colonnade: a regular grid of single-tile pillars flanking the
+        // processional aisle. putA drops the middle pillar of each rank, so the
+        // aisle opens itself.
+        for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px += 2) {
+          putA(px, cyT - 3);
+          putA(px, cyT + 3);
+          if (archRng.chance(0.5)) {
+            putA(px, cyT - 2);
+            putA(px, cyT + 2);
+          }
+        }
+      } else if (shape === 'chevron') {
+        // a chevron baffle pointing along one axis; the apex opens at the
+        // centre and the arms stop short of every wall
+        const dir = archRng.pick([-1, 1]);
+        for (let i = 2; i <= 5; i++) {
+          const dy = dir * Math.min(i, 3);
+          putA(cxT - i, cyT + dy);
+          putA(cxT + i, cyT + dy);
+        }
+        if (archRng.chance(0.5)) {
+          for (let i = 2; i <= 4; i++) {
+            putA(cxT - i, cyT - dir * 2);
+            putA(cxT + i, cyT - dir * 2);
+          }
+        }
+      } else if (shape === 'pitring') {
+        // a chunky obstacle massif ringing the centre; the four cardinal lanes
+        // stay open so you fight around it
+        for (let dx = 2; dx <= 3; dx++) {
+          for (let dy = 2; dy <= 3; dy++) {
+            putA(cxT - dx, cyT - dy);
+            putA(cxT + dx, cyT - dy);
+            putA(cxT - dx, cyT + dy);
+            putA(cxT + dx, cyT + dy);
+          }
+        }
+        if (archRng.chance(0.6)) {
+          for (const [dx, dy] of [[5, 2], [5, -2], [-5, 2], [-5, -2]])
+            putA(cxT + dx, cyT + dy);
+        }
+      } else if (shape === 'antechamber') {
+        // a divider set well off-centre, splitting the room into a cramped
+        // antechamber and a main hall; lane() leaves the doorway lane as the
+        // gap through it, and putA keeps the far wall walkable round the end
+        if (archRng.chance(0.5)) {
+          const wx = cxT + archRng.pick([-4, -3, 3, 4]);
+          for (let py = r.oy + 2; py <= r.oy + ROOM_H - 3; py++) putA(wx, py);
+        } else {
+          const wy = cyT + archRng.pick([-3, -2, 2, 3]);
+          for (let px = r.ox + 2; px <= r.ox + ROOM_W - 3; px++) putA(px, wy);
+        }
+        // an L-stub off the divider for a covered pocket
+        if (archRng.chance(0.5)) {
+          const sy = cyT + archRng.pick([-3, 3]);
+          for (let px = r.ox + 3; px <= r.ox + 5; px++) putA(px, sy);
         }
       }
 

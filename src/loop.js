@@ -15,6 +15,8 @@ export function startLoop(update, render) {
       acc -= STEP;
       n++;
     }
+    // hit the substep cap: drop the remainder so a long stall can't fast-forward
+    if (n >= 5) acc = 0;
     render(dt);
     requestAnimationFrame(frame);
   }

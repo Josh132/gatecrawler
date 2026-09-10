@@ -8,6 +8,7 @@
     "test": "node test/harness.mjs",
     "sweep": "for s in 2 999 12345 7 42 88888 314159 31337 777 55; do SEED=$s node test/harness.mjs 2>&1 | grep -E 'RESULT|failsafe'; done",
     "check": "node --check src/game.js && node --check test/harness.mjs",
+    "lint": "node scripts/lint.mjs",
     "serve": "python3 server.py"
   },
   "engines": {

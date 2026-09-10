@@ -11,6 +11,6 @@
 export const VERSION = '0.1.0';
 export const BUILD = 124;
 export const BUILD_DATE = '2026-09-10';
-export const BUILD_REV = 'eb77631';
+export const BUILD_REV = '6fc5d02';
 
 export const versionLine = () => `v${VERSION}  ·  build ${BUILD}  ·  ${BUILD_DATE}  ·  ${BUILD_REV}`;

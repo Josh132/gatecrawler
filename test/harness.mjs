@@ -281,6 +281,9 @@ section('worldgen: connectivity & structure across many seeds');
   }
   let connOk = 0;
   let structOk = 0;
+  let archRooms = 0;
+  let archDetOk = 0;
+  const archKinds = new Set();
   for (let i = 0; i < addrs.length; i++) {
     const params = worldParams(addrs[i], i % 9);
     const world = buildWorld(params);
@@ -297,9 +300,24 @@ section('worldgen: connectivity & structure across many seeds');
     if (ff.dist[dy * world.W + dx] >= 0) connOk++;
     // spawn tiles must be floor
     assert(tileAt(world, gate.centerPx.x, gate.centerPx.y) === 0, `seed ${i}: gate centre is floor`);
+    // spatial archetypes: never on the gate/DHD room, and a rebuild of the
+    // same address must reproduce the exact same tile grid (address-hash only)
+    const rebuilt = buildWorld(worldParams(addrs[i], i % 9));
+    let same = rebuilt.grid.length === world.grid.length;
+    for (let k = 0; same && k < world.grid.length; k++) same = rebuilt.grid[k] === world.grid[k];
+    if (same) archDetOk++;
+    for (const r of world.rooms) {
+      if (!r.archetype) continue;
+      archRooms++;
+      archKinds.add(r.archetype);
+      assert(r.kind === 'normal', `seed ${i}: archetype only on normal rooms (got ${r.kind})`);
+    }
   }
   assert(structOk === addrs.length, `all ${addrs.length} worlds have distinct gate/DHD rooms (${structOk})`);
   assert(connOk === addrs.length, `all ${addrs.length} worlds: DHD reachable from gate (${connOk})`);
+  assert(archDetOk === addrs.length, `buildWorld tile grid is deterministic per address (${archDetOk}/${addrs.length})`);
+  assert(archRooms > 20 && archKinds.size >= 4,
+    `spatial archetypes applied deterministically (${archRooms} rooms, ${archKinds.size} kinds)`);
 }
 
 // ---------------------------------------------------------------- 2. address determinism

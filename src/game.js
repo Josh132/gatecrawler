@@ -297,23 +297,16 @@ function homeHealFull(g) {
 function passiveXpPerSortie(g) {
   return hasBase(g.save, 'passiveXp') ? (baseMag(g.save, 'passiveXp', 0) | 0) : 0;
 }
-// split a passive mastery-XP grant across the weapons the player has touched
+// passive mastery XP goes to the *equipped* weapon only — spreading it across
+// every weapon ever touched punished the experimentation it was meant to reward
 function grantPassiveXp(g, amount) {
   try {
     if (!g.save.weapons || typeof g.save.weapons !== 'object') g.save.weapons = {};
-    let keys = Object.keys(g.save.weapons);
-    if (!keys.length) {
-      const wk = g.inv ? activeWeaponId(g.inv) : null;
-      if (!wk) return;
-      g.save.weapons[wk] = { level: 1, xp: 0, mods: [] };
-      keys = [wk];
-    }
-    const per = Math.max(1, Math.round(amount / keys.length));
-    for (const k of keys) {
-      const ws = g.save.weapons[k] || (g.save.weapons[k] = { level: 1, xp: 0, mods: [] });
-      ws.xp = (ws.xp || 0) + per;
-      ws.level = Math.min(weaponMaxLevel, Math.max(ws.level || 1, levelForXp(ws.xp)));
-    }
+    const wk = g.inv ? activeWeaponId(g.inv) : null;
+    if (!wk) return;
+    const ws = g.save.weapons[wk] || (g.save.weapons[wk] = { level: 1, xp: 0, mods: [] });
+    ws.xp = (ws.xp || 0) + Math.max(1, Math.round(amount));
+    ws.level = Math.min(weaponMaxLevel, Math.max(ws.level || 1, levelForXp(ws.xp)));
   } catch (e) {
     /* odd save.weapons shape — skip the grant */
   }
@@ -676,7 +669,10 @@ function startWorld(g, addr, hop) {
   g.panelOpen = false;
   g.drag = null;
   g.hunterSpawned = false;
-  // (deep-dial heat bump is applied by the gate-map dial handler)
+  // arriving on a fresh world vents most of the accumulated hunt, so a run gets
+  // a sawtooth intensity curve instead of pinning at SWARM from world 2 on.
+  // world 1 has heat 0 already; a deep-dial then re-adds a bump (gate-map handler).
+  g.heat *= 0.4;
   g._firstWorld = false;
   g.save.lastAddress = worldParams(addr, hop).address;
   g.hop = hop;
@@ -1809,7 +1805,7 @@ function populateWorld(g) {
       const q = placeXY();
       const e = new Enemy(kind, q.x, q.y, p.threat);
       e._room = room;
-      if (kind === 'jaffa') e.aggressive = R.chance(nearGate ? 0.1 : 0.28);
+      if (kind === 'jaffa') e.aggressive = R.chance(nearGate ? 0.1 : Math.min(0.5, 0.28 + g.hop * 0.03));
       if (kind === 'jaffa_heavy' || kind === 'replicator_brute') e.aggressive = !nearGate;
       // a swarm presses in hard — every replicator rushes, none hang back
       if (kind === 'replicator') e.aggressive = !nearGate;
@@ -8706,13 +8702,10 @@ function renderGateMap(g) {
     ctx.moveTo(cx, cy);
     ctx.lineTo(x, y);
     ctx.stroke();
-    const col = !canSee
-      ? '#6a7480'
-      : pr.faction === 'wraith'
-      ? '#9df7a0'
-      : pr.faction === 'replicator'
-      ? '#8fe4ff'
-      : '#ffb347';
+    // faction colour + a coarse danger band are always legible off a passive
+    // scan; Forward Telemetry only sharpens it to an exact readout + modifiers
+    const col =
+      pr.faction === 'wraith' ? '#9df7a0' : pr.faction === 'replicator' ? '#8fe4ff' : '#ffb347';
     glowCircle(ctx, x, y, 14, afford ? col : '#556', afford ? 12 : 4);
     ctx.fillStyle = afford ? '#cde' : '#889';
     ctx.font = 'bold 11px monospace';
@@ -8727,9 +8720,10 @@ function renderGateMap(g) {
         ctx.fillText('[ ' + modLabels(pr.mods).join('  ') + ' ]', x, y + 44);
       }
     } else {
-      ctx.fillText('telemetry offline', x, y + 30);
+      const band = pr.threat >= 7 ? 'high threat' : pr.threat >= 4 ? 'moderate threat' : 'low threat';
+      ctx.fillText(`${pr.faction}  ·  ${band}`, x, y + 30);
       ctx.fillStyle = '#678';
-      ctx.fillText('research Forward Telemetry', x, y + 44);
+      ctx.fillText('exact readout: research Forward Telemetry', x, y + 44);
     }
     // campaign markers: an amber flag on worlds that feed the active op, and a
     // red capstone for the fixed finale address once it's unlocked

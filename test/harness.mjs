@@ -171,6 +171,13 @@ function section(name) {
   console.log('\n=== ' + name + ' ===');
 }
 
+// enemies whose centre tile is a wall — a handful can straddle a wall edge by
+// radius during knockback / shove, but a persistent count means the collision
+// clamp is leaking. Threshold verified against the full seed sweep (observed max
+// well under this); see the check in checkInvariants.
+const ENEMY_WALL_SLACK = 2;
+let maxEnemyInWall = 0;
+
 // ---------------------------------------------------------------- helpers
 function keyDown(code) {
   fire(listeners, 'keydown', { code, repeat: false, preventDefault() {} });
@@ -225,6 +232,19 @@ function checkInvariants(g, label) {
         assert(false, `${label}: enemy ${e.kind} pos finite`);
         break;
       }
+    }
+    // enemies must not be embedded in walls either — checkInvariants used to
+    // watch only the player. Count centres sitting on a wall tile; allow a small
+    // slack for a body straddling a wall edge by its radius.
+    if (g.state === 'play') {
+      let inWall = 0;
+      for (const e of g.enemies) {
+        if (e.alive === false) continue;
+        if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) continue;
+        if (tileAt(g.world, e.x, e.y) === 1) inWall++;
+      }
+      if (inWall > maxEnemyInWall) maxEnemyInWall = inWall;
+      assert(inWall <= ENEMY_WALL_SLACK, `${label}: enemies not embedded in walls (${inWall} centres in wall tiles)`);
     }
   }
 }
@@ -576,6 +596,213 @@ section('gameplay: descend hop 0 -> 14 through the real gate map, invariants eac
   assert(deepThreatSeen >= 10, `deep worlds carry high threat (max ${deepThreatSeen})`);
   assert(modsSeen.size >= 2, `multiple modifier types generated at depth (${[...modsSeen].join(',') || 'none'})`);
   checkInvariants(g, 'deep-final');
+}
+
+// ---------------------------------------------------------------- 3b2. reward implies the fight happened
+// The arena/vault timeout failsafes were fixed so an idle bot can't pop a free
+// epic: arena a.t only ticks while the player is inside the rect, and the vault
+// in-room clock (vd._t) only starts once vd._seen. Prove the guard both ways.
+section('special rooms: arena/vault pay out only when the player actually engaged');
+{
+  g.skipHub = true;
+
+  // worldgen's set-piece kind flips distribution when params.campaignTarget is
+  // truthy (worldAdvancesActive). By this point earlier sections have advanced
+  // the campaign by a seed-dependent amount, so which neighbour is an arena/vault
+  // would vary by seed. Park the campaign as "won" for this section so
+  // worldAdvancesActive is a flat false and the special kind is a pure function
+  // of address again — matching the bare buildWorld() probe below. Restored after.
+  g.save.campaign = g.save.campaign || {};
+  const _savedWon = g.save.campaign.won;
+  g.save.campaign.won = true;
+
+  // Start a fresh run, reach the first mid-run gate map, and dial into whichever
+  // neighbour worldgen tags with the wanted set-piece. worldgen is a pure
+  // function of address+hop, so this resolves identically on every seed.
+  const dialToSpecial = (want) => {
+    g.state = 'menu';
+    keyDown('Enter');
+    tick(gApi, g);
+    if (g.state !== 'play') return false;
+    const dhd = g.world.dhdRoom;
+    dhd.spawned = true;
+    g.enemies.length = 0;
+    g.player.hp = g.player.maxHp;
+    g.runNaq = 99999;
+    g.dhdActive = true;
+    g.player.x = dhd.centerPx.x;
+    g.player.y = dhd.centerPx.y;
+    for (let k = 0; k < 30 && g.state === 'play'; k++) {
+      keyDown('KeyE');
+      if (!tick(gApi, g)) break;
+    }
+    if (g.state !== 'gatemap') return false;
+    tick(gApi, g); // render -> populates g.buttons + g.mapNodes
+    const targetHop = g.hop + 1;
+    let idx = -1;
+    for (let i = 0; i < g.mapNodes.length; i++) {
+      const w = buildWorld(worldParams(g.mapNodes[i].addr, targetHop));
+      if (w.rooms.some((r) => r.special === want)) { idx = i; break; }
+    }
+    if (idx < 0) return false;
+    const destBtns = g.buttons.filter((b) => b.w === 124 && b.h === 44); // one per mapNode, in order
+    if (!destBtns[idx]) return false;
+    destBtns[idx].fn();
+    return g.state === 'play';
+  };
+
+  const epicNear = (x, y, rad) =>
+    g.pickups.filter(
+      (pk) => pk.alive && pk.kind === 'item' && pk.item && pk.item.rarity === 'epic' &&
+        Math.hypot(pk.x - x, pk.y - y) < rad
+    );
+
+  // ---- ARENA ----
+  {
+    const dialed = dialToSpecial('arena');
+    assert(dialed && g.arenaRooms.length > 0, `reward-implies-fight: dialed into an arena world (${g.arenaRooms.length} arena rooms)`);
+    if (dialed && g.arenaRooms.length) {
+      const rm = g.arenaRooms[0];
+      const a = rm._arena;
+      const cx = rm.centerPx.x, cy = rm.centerPx.y;
+      const p = g.player;
+
+      // negative: park in the gate room, never step into the arena rect
+      const gc = g.world.gateRoom.centerPx;
+      p.x = gc.x; p.y = gc.y; p.iframe = 1e6; p.hp = p.maxHp;
+      assert(findRoomDbg(g, p.x, p.y) !== rm, 'reward-implies-fight (arena): player parked outside the arena rect');
+      assert(epicNear(cx, cy, 150).length === 0, 'reward-implies-fight (arena): no cache present on arrival');
+      for (let f = 0; f < 60 * 50; f++) {
+        setKeys(new Set());
+        input.mouse.down = false;
+        p.iframe = 1e6;
+        if (!tick(gApi, g)) break;
+        if (f % 600 === 0) checkInvariants(g, 'arena-outside');
+      }
+      assert(a.t === 0, `reward-implies-fight (arena): wave clock never advanced while !inside (a.t=${a.t})`);
+      assert(a.locked === false, 'reward-implies-fight (arena): never locked while the player stayed out');
+      assert(a.done === false, 'reward-implies-fight (arena): not marked done after ~50s parked outside');
+      assert(epicNear(cx, cy, 150).length === 0, 'reward-implies-fight (arena): NO free epic for a fight that never happened');
+
+      // positive: stand inside and clear every wave -> the epic cache DOES drop
+      p.x = cx; p.y = cy; p.iframe = 1e6; p.hp = p.maxHp;
+      let guard = 0;
+      while (!a.done && guard++ < 1500) {
+        for (const e of g.enemies) if (e._room === rm) { e.hp = -1; e.alive = false; }
+        setKeys(new Set());
+        input.mouse.down = false;
+        p.iframe = 1e6;
+        if (!tick(gApi, g)) break;
+      }
+      assert(a.done === true, 'reward-implies-fight (arena): resolves once the player clears the waves from inside');
+      assert(a.wave >= a.waves, `reward-implies-fight (arena): all ${a.waves} waves ran (reached ${a.wave})`);
+      assert(a.t <= 40, `reward-implies-fight (arena): cleared inside the 40s window, not bailed (a.t=${a.t.toFixed(2)})`);
+      assert(epicNear(cx, cy, 150).length >= 1, 'reward-implies-fight (arena): a real clear DOES drop the epic cache');
+    }
+  }
+
+  // ---- VAULT ----
+  {
+    const dialed = dialToSpecial('vault');
+    assert(dialed && g.vaultDoors.length > 0, `reward-implies-fight: dialed into a vault world (${g.vaultDoors.length} vault doors)`);
+    if (dialed && g.vaultDoors.length) {
+      const vd = g.vaultDoors[0];
+      const rm = vd._room;
+      const lx = vd.lootX, ly = vd.lootY;
+      const p = g.player;
+
+      // negative: never enter the vault room
+      const gc = g.world.gateRoom.centerPx;
+      p.x = gc.x; p.y = gc.y; p.iframe = 1e6; p.hp = p.maxHp;
+      assert(findRoomDbg(g, p.x, p.y) !== rm, 'reward-implies-fight (vault): player parked outside the vault room');
+      assert(vd.locked === true, 'reward-implies-fight (vault): starts sealed');
+      assert(epicNear(lx, ly, 170).length === 0, 'reward-implies-fight (vault): no loot present on arrival');
+      for (let f = 0; f < 60 * 50; f++) {
+        setKeys(new Set());
+        input.mouse.down = false;
+        p.iframe = 1e6;
+        if (!tick(gApi, g)) break;
+        if (f % 600 === 0) checkInvariants(g, 'vault-outside');
+      }
+      assert(!vd._seen, 'reward-implies-fight (vault): never marked _seen while the player stayed out');
+      assert((vd._t || 0) === 0, `reward-implies-fight (vault): in-room clock never started (vd._t=${vd._t || 0})`);
+      assert(vd.locked === true, 'reward-implies-fight (vault): stayed sealed after ~50s — the seal only engages once seen');
+      assert(!vd._looted, 'reward-implies-fight (vault): never dispensed its loot');
+      assert(epicNear(lx, ly, 170).length === 0, 'reward-implies-fight (vault): NO epic for a room that was never entered');
+
+      // positive: clear the guards, walk in -> seal releases, loot (incl. epic) drops
+      for (const e of g.enemies) if (e._room === rm) { e.hp = -1; e.alive = false; }
+      p.x = rm.centerPx.x; p.y = rm.centerPx.y; p.iframe = 1e6; p.hp = p.maxHp;
+      let guard = 0;
+      while (!vd._looted && guard++ < 900) {
+        for (const e of g.enemies) if (e._room === rm) { e.hp = -1; e.alive = false; }
+        setKeys(new Set());
+        input.mouse.down = false;
+        p.iframe = 1e6;
+        if (!tick(gApi, g)) break;
+      }
+      assert(vd._seen === true, 'reward-implies-fight (vault): entering the room marks it seen');
+      assert(vd.locked === false, 'reward-implies-fight (vault): seal releases once seen and the room is clear');
+      assert(vd._looted === true, 'reward-implies-fight (vault): a cleared, entered vault dispenses its loot');
+      assert(epicNear(lx, ly, 170).length >= 1, 'reward-implies-fight (vault): real vault loot includes the epic weapon');
+    }
+  }
+
+  setKeys(new Set());
+  input.mouse.down = false;
+  if (_savedWon === undefined) delete g.save.campaign.won;
+  else g.save.campaign.won = _savedWon;
+}
+
+// ---------------------------------------------------------------- 3b3. full-run same-seed sanity snapshot
+// Section 2 deep-compares buildWorld; this complements it at the sim level. We
+// drive the scripted bot ~800 frames from the harness's fixed seed and snapshot
+// the run state. Re-running here in-process is unreliable — module state (RNG
+// cursor, audio beds, campaign/event buffers) persists between runs, so a second
+// "same seed" run diverges. Cross-process same-seed determinism is what the
+// 10-seed sweep checks: each SEED gets its own process and must PASS identically.
+section('determinism: a scripted 800-frame run lands on finite, in-bounds state');
+{
+  g.skipHub = true;
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  assert(g.state === 'play', 'determinism: run started');
+  const bf = botFlowFor(g.world);
+  for (let f = 0; f < 800; f++) {
+    const p = g.player;
+    const tx = Math.max(1, Math.min(g.world.W - 2, Math.floor(p.x / TILE)));
+    const ty = Math.max(1, Math.min(g.world.H - 2, Math.floor(p.y / TILE)));
+    const [mx, my] = bf.dir(tx, ty);
+    const ks = new Set();
+    if (mx > 0.35) ks.add('KeyD');
+    if (mx < -0.35) ks.add('KeyA');
+    if (my > 0.35) ks.add('KeyS');
+    if (my < -0.35) ks.add('KeyW');
+    setKeys(ks);
+    input.mouse.down = f % 2 === 0;
+    let near = null, nd = Infinity;
+    for (const e of g.enemies) {
+      const d2 = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (d2 < nd) { nd = d2; near = e; }
+    }
+    const tgt = near || { x: p.x + 100, y: p.y };
+    input.mouse.x = tgt.x - g.cam.x + g.view.w / 2;
+    input.mouse.y = tgt.y - g.cam.y + g.view.h / 2;
+    if (!tick(gApi, g)) break;
+    if (f % 120 === 0) checkInvariants(g, 'determinism');
+  }
+  const p = g.player;
+  const enemySumX = g.enemies.reduce((s, e) => s + e.x, 0);
+  const snap = { px: p.x, py: p.y, hp: p.hp, enemies: g.enemies.length, enemySumX };
+  const W = g.world.W * TILE, H = g.world.H * TILE;
+  for (const [k, v] of Object.entries(snap)) assert(Number.isFinite(v), `determinism: snapshot field ${k} is finite (${v})`);
+  assert(p.x >= -2 && p.x <= W + 2 && p.y >= -2 && p.y <= H + 2, `determinism: player inside world bounds (${p.x | 0},${p.y | 0})`);
+  assert(snap.hp <= p.maxHp + 1e-6 && snap.hp > -1e-6, `determinism: hp within [0,max] (${snap.hp.toFixed(1)}/${p.maxHp})`);
+  assert(snap.enemies >= 0 && snap.enemies < 4000, `determinism: enemy count sane (${snap.enemies})`);
+  console.log(`  determinism snapshot @800f: pos (${p.x | 0},${p.y | 0}) hp ${snap.hp | 0} enemies ${snap.enemies} sumEnemyX ${snap.enemySumX | 0}`);
+  setKeys(new Set());
+  input.mouse.down = false;
 }
 
 // ---------------------------------------------------------------- 3c. line of sight
@@ -1133,7 +1360,24 @@ section('tech: tree shape, effects fold, research gating');
     supportAirdrop: false, supportStrike: false, enemyAccuracyMul: 1, staffChargeUnlock: false,
   };
   const deepEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  assert(deepEq(techEffects([]), DEFAULTS), 'tech: techEffects([]) equals the documented defaults');
+  // key-by-key so drift names the offending field(s) with expected vs actual,
+  // not just "does not equal the documented defaults". The DEFAULTS mirror above
+  // stays — it's a tripwire for a new tech field that never got a documented base.
+  {
+    const base = techEffects([]);
+    const drift = [];
+    for (const k of new Set([...Object.keys(DEFAULTS), ...Object.keys(base)])) {
+      const exp = JSON.stringify(DEFAULTS[k]);
+      const act = JSON.stringify(base[k]);
+      if (exp !== act) drift.push(`${k}: expected ${exp === undefined ? '(missing from mirror)' : exp}, got ${act === undefined ? '(missing from techEffects)' : act}`);
+    }
+    assert(
+      drift.length === 0,
+      drift.length === 0
+        ? 'tech: techEffects([]) matches the documented DEFAULTS mirror'
+        : `tech: techEffects([]) drifted from the DEFAULTS mirror — ${drift.join(' | ')}`
+    );
+  }
   assert(deepEq(techEffects(['not_a_node']), DEFAULTS), 'tech: unknown owned ids are ignored');
 
   // -- a small chain moves exactly the fields it should
@@ -1589,7 +1833,7 @@ section('panels: every station panel + menu sub-screen renders and its buttons f
 
 // ---------------------------------------------------------------- report
 console.log('\n----------------------------------------');
-console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}`);
+console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}   max enemies-in-wall: ${maxEnemyInWall}`);
 if (failures) {
   console.error('RESULT: FAIL');
   process.exit(1);

@@ -83,6 +83,7 @@ const BTN_CSS =
 const BUTTONS = [
   ['Escape', '❚❚', 'tl', 0, false],
   ['Tab', 'BAG', 'tr', 0, false],
+  ['_alt', 'ALT', 'tr', 1, true], // RMB alt-fire (dump / charge / chain / slug / lance)
   ['Space', 'ROLL', 'rc', 0, true],
   ['KeyR', 'RLD', 'rc', 1, true],
   ['KeyQ', 'MED', 'rc', 2, true],
@@ -100,7 +101,7 @@ function placeButton(e, side, slot) {
     e.style.top = m + 'px';
   } else if (side === 'tr') {
     e.style.right = m + 'px';
-    e.style.top = m + 'px';
+    e.style.top = m + slot * step + 'px';
   } else if (side === 'rc') {
     // right edge, a column starting a little above vertical centre — clear of
     // where a thumb naturally rests to work the aim stick (bottom-right)
@@ -173,12 +174,9 @@ function buildOverlay() {
     '⛶  FULLSCREEN'
   );
   root._fs.setAttribute('data-ui', '');
-  const fsGo = (e) => {
-    if (e) e.preventDefault();
-    goFullscreen();
-  };
-  root._fs.addEventListener('click', fsGo);
-  root._fs.addEventListener('touchend', fsGo, { passive: false });
+  // one handler: onTouchEnd leaves [data-ui] taps alone (no preventDefault), so
+  // the compat click fires normally and this covers touch + mouse + keyboard
+  root._fs.addEventListener('click', goFullscreen);
   root.appendChild(root._fs);
 
   // portrait: the whole game is drawn for landscape — ask for a turn
@@ -272,9 +270,11 @@ function anyAim() {
 
 // ---------------------------------------------------------------- gestures
 function ensureEngaged() {
-  if (engaged) return;
-  engaged = true;
+  if (engaged || root) return;
+  // build first — if buildOverlay throws, `engaged` must stay false so the
+  // refresh() rAF loop below never runs against a half-built overlay
   buildOverlay();
+  engaged = true;
   requestAnimationFrame(refresh);
 }
 
@@ -292,10 +292,16 @@ function onTouchStart(ev) {
     const tgt = t.target;
     const bx = tgt && tgt.closest && tgt.closest('[data-code]');
     if (bx) {
-      pointers.set(t.identifier, { role: 'btn', code: bx.dataset.code });
+      const code = bx.dataset.code;
+      pointers.set(t.identifier, { role: 'btn', code });
       bx.style.background = 'rgba(94,239,255,.3)';
       bx.style.transform = 'scale(.92)';
-      injectPress(bx.dataset.code);
+      if (code === '_alt') {
+        mouse.right = true; // held: drives charge weapons
+        mouse.rightEdge = true; // one-frame: triggers the alt shot (cleared by endFrameInput)
+      } else {
+        injectPress(code);
+      }
       ev.preventDefault();
       continue;
     }
@@ -353,9 +359,11 @@ function onTouchMove(ev) {
 
 function onTouchEnd(ev) {
   if (!ev.changedTouches) return;
+  let handled = false;
   for (const t of ev.changedTouches) {
     const rec = pointers.get(t.identifier);
     if (!rec) continue;
+    handled = true;
     pointers.delete(t.identifier);
     if (rec.role === 'btn') {
       const b = btnEls[rec.code];
@@ -363,6 +371,7 @@ function onTouchEnd(ev) {
         b.style.background = 'rgba(10,22,30,.42)';
         b.style.transform = 'scale(1)';
       }
+      if (rec.code === '_alt') mouse.right = false;
     } else if (rec.role === 'move') {
       for (const k of MOVE_KEYS) keys.delete(k);
       if (root) root._lStick.style.display = 'none';
@@ -374,7 +383,7 @@ function onTouchEnd(ev) {
       }
     }
   }
-  if (ev.cancelable) ev.preventDefault();
+  if (handled && ev.cancelable) ev.preventDefault(); // leave [data-ui] taps for their own click handlers
 }
 
 // ---------------------------------------------------------------- menu shim
@@ -431,6 +440,15 @@ function shimEnd(e) {
 }
 
 // ---------------------------------------------------------------- lifecycle
+// syncActive runs every rAF — only write .style when the value actually changes.
+// (the two stick knobs are driven straight from the gesture handlers, not here.)
+const _disp = new Map();
+function show(elm, val) {
+  if (!elm || _disp.get(elm) === val) return;
+  _disp.set(elm, val);
+  elm.style.display = val;
+}
+
 // decide whether the overlay is shown / capturing. safe to call synchronously
 // from a gesture handler as well as from the rAF poll.
 function syncActive() {
@@ -447,17 +465,13 @@ function syncActive() {
       releaseAll();
     }
   }
-  if (active) {
-    const hub = inHub();
-    for (const [code, , , , onlyPlay] of BUTTONS) {
-      btnEls[code].style.display = onlyPlay && hub ? 'none' : 'flex';
-    }
-  } else {
-    for (const c in btnEls) btnEls[c].style.display = 'none';
+  const hub = active && inHub();
+  for (const [code, , , , onlyPlay] of BUTTONS) {
+    show(btnEls[code], active && !(onlyPlay && hub) ? 'flex' : 'none');
   }
-  root._hint.style.display = active ? 'block' : 'none';
-  root._rot.style.display = !mouseMode && portrait ? 'flex' : 'none';
-  root._fs.style.display = !mouseMode && fsSupported() && !fsEl() ? 'inline-flex' : 'none';
+  show(root._hint, active ? 'block' : 'none');
+  show(root._rot, !mouseMode && portrait ? 'flex' : 'none');
+  show(root._fs, !mouseMode && fsSupported() && !fsEl() ? 'inline-flex' : 'none');
 }
 
 // the game's state changes on its own (a run ends, a panel opens) with no
@@ -477,6 +491,7 @@ function fadeHint() {
 }
 
 export function initTouch(cnv, gameApi) {
+  if (canvas) return; // idempotent — a second call must not double every listener
   canvas = cnv;
   game = gameApi;
 

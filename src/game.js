@@ -5883,7 +5883,14 @@ function renderHUD(g) {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#9cf';
   ctx.font = '12px monospace';
-  ctx.fillText(g.params.address, 20, 24);
+  // truncate the address so a boss bar can never sit on top of it
+  let addr = g.params.address;
+  const barL = bossBarLeftX(g);
+  if (barL != null) {
+    const cap = Math.max(3, Math.floor((barL - 28 - 20) / 7.25)); // 12px monospace ≈ 7.25px/char
+    if (addr.length > cap) addr = addr.slice(0, Math.max(1, cap - 1)) + '…';
+  }
+  ctx.fillText(addr, 20, 22);
   ctx.fillStyle = '#f9a';
   ctx.fillText(
     `SECTOR DEPTH ${g.hop}    THREAT ${g.params.threat}    ${(g.params.faction || g.params.primary).toUpperCase()}`,
@@ -7913,6 +7920,20 @@ function drawFloatText(g) {
 }
 
 // ---- boss / nexus health bar ---------------------------------------------
+// left edge of the on-screen boss bar, or null when none is shown — the HUD
+// address line truncates against this so the two never overlap
+function bossBarLeftX(g) {
+  const { view } = g;
+  if (!g.world || g.state === 'hub' || !g.enemies) return null;
+  let has = false;
+  for (const en of g.enemies) {
+    if (en.alive && (en.kind === 'boss' || en.kind === 'nexus') && en.state !== 'idle') { has = true; break; }
+  }
+  if (!has) return null;
+  const w = view.w < 1200 ? Math.min(320, view.w - 44) : Math.min(560, view.w - 120);
+  return (view.w - w) / 2;
+}
+
 function drawBossBar(g) {
   if (!g.world || g.state === 'hub') return;
   let e = null;
@@ -7926,12 +7947,14 @@ function drawBossBar(g) {
   const name = nexus ? 'THE INCURSION NEXUS' : (BOSS_NAME[v] || 'BOSS').toUpperCase();
   const sub = nexus ? 'ASSIMILATION CORE' : (BOSS_SUB[v] || '').toUpperCase();
   const tint = nexus ? '#8fe4ff' : (BOSS_TINT[v] || '#ffb347');
-  // compact on a small (mobile landscape) viewport — thinner, higher, no subtitle
-  const compact = Math.min(view.w, view.h) < 460;
+  // the tall bar with a subtitle needs vertical room the top-left HUD would
+  // otherwise fight it for — reserve it for a genuinely wide desktop and run
+  // the compact (thin, no-subtitle) bar everywhere else
+  const compact = view.w < 1200;
   const barH = compact ? 5 : 8;
   const w = compact ? Math.min(320, view.w - 44) : Math.min(560, view.w - 120);
   const x = (view.w - w) / 2;
-  const y = compact ? 18 : 54;
+  const y = compact ? 30 : 54;
   const hf = clamp(e.hp / (e.maxHp || 1), 0, 1);
   ctx.save();
   textReset(ctx);

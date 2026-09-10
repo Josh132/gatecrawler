@@ -3001,11 +3001,29 @@ function hitEnemy(g, e, b) {
   // exists on the bullet, so a heavy connect just reads bigger + gold.
   if (b.from === 'player') {
     if (g.runStats) g.runStats.hits++;
-    const big = dmg >= 34;
-    pushFloat(
-      g, e.x + rr(-4, 4), e.y - e.r - 4, String(Math.max(1, Math.round(dmg))),
-      big ? '#ffd24a' : dmg < 6 ? '#ff8a7a' : '#ffffff', big ? 15 : dmg < 6 ? 9 : 11
-    );
+    const d = Math.max(1, Math.round(dmg));
+    // roll rapid consecutive hits on one enemy into a single running tick so a
+    // busy fight doesn't stack unreadable columns of "11 11 11"
+    if (e._dmgFloat && e._dmgFloat.t > 0.12) {
+      const f = e._dmgFloat;
+      f.sum += d;
+      f.big = f.big || dmg >= 34;
+      f.txt = String(f.sum);
+      f.color = f.big ? '#ffd24a' : '#ffffff';
+      f.size = f.big ? 15 : 11;
+      f.t = 0.75;
+    } else {
+      const big = dmg >= 34;
+      const f = pushFloat(
+        g, e.x + rr(-4, 4), e.y - e.r - 4, String(d),
+        big ? '#ffd24a' : dmg < 6 ? '#ff8a7a' : '#ffffff', big ? 15 : dmg < 6 ? 9 : 11
+      );
+      if (f) {
+        f.sum = d;
+        f.big = big;
+        e._dmgFloat = f;
+      }
+    }
   }
   if (e.kind === 'wraith') e.regenT = 0;
   if (e.state === 'idle' || e.state === 'dormant') {
@@ -8889,9 +8907,11 @@ function reduceFlash(g) {
 }
 // push a rising, fading tick at world (x,y). suppressed entirely by reduceFlash.
 function pushFloat(g, x, y, txt, color, size) {
-  if (!g.floats || reduceFlash(g)) return;
+  if (!g.floats || reduceFlash(g)) return null;
   if (g.floats.length > 40) g.floats.shift();
-  g.floats.push({ x, y, vy: -34, t: 0.75, txt, color: color || '#fff', size: size || 11 });
+  const o = { x, y, vy: -34, t: 0.75, txt, color: color || '#fff', size: size || 11 };
+  g.floats.push(o);
+  return o;
 }
 function updateFloats(g, dt) {
   const f = g.floats;

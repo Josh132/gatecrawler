@@ -49,7 +49,7 @@ timeout 30 chromium --headless --disable-gpu --no-sandbox --hide-scrollbars \
 - `?nofx` — skip the WebGL colour grade (swiftshader chokes on readback). Use always headless.
 - `?f=600` — frames to simulate before the shot (bot auto-plays toward the DHD).
 - `?hub` — land in the SGC hub floor. `?hub=<kind>` opens a station panel
-  (`workbench`, `operations`, `base`, `roster`, `research`, `infirmary`, `requisitions`).
+  (`workbench`, `operations`, `base`, `roster`, `research`, `infirmary`; `armory` opens the loadout panel).
 - `?hub&room=<kind>` — frame one named hub room (kinds in `src/hub.js` ROOMS).
 - `?panel` — open the inventory/panel UI.
 

@@ -16,7 +16,7 @@
   const qs = new URLSearchParams(location.search);
   const FRAMES = Number(qs.get('f') || 600);
   const PANEL = qs.has('panel');
-  const HUB = qs.get('hub'); // '', 'research', 'infirmary', 'requisitions'
+  const HUB = qs.get('hub'); // '', 'research', 'infirmary', 'workbench', 'operations', 'base', 'roster', 'armory'
   const canvas = document.getElementById('game');
   const api = createGame(canvas);
   initInput(canvas);

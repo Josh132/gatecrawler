@@ -209,6 +209,9 @@ function checkInvariants(g, label) {
   assert(g.enemies.length < 4000, `${label}: enemy count bounded (${g.enemies.length})`);
   assert(g.bullets.length < 6000, `${label}: bullet count bounded (${g.bullets.length})`);
   assert(g.particles.length < 20000, `${label}: particle count bounded (${g.particles.length})`);
+  assert(!g.grenades || g.grenades.length < 200, `${label}: grenade count bounded (${g.grenades && g.grenades.length})`);
+  assert(!g.hazards || g.hazards.length < 800, `${label}: hazard count bounded (${g.hazards && g.hazards.length})`);
+  assert(!g.floats || g.floats.length <= 64, `${label}: float count bounded (${g.floats && g.floats.length})`);
   if (g.world) {
     const W = g.world.W * TILE;
     const H = g.world.H * TILE;

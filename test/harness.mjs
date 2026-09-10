@@ -145,7 +145,7 @@ globalThis.AudioContext = class {
 };
 
 // ---------------------------------------------------------------- load game
-const { createGame } = await import('../src/game.js');
+const { createGame, defaultSave, normalizeSave } = await import('../src/game.js');
 const input = await import('../src/input.js');
 const { initInput } = input;
 const { TILE, tileAt } = await import('../src/worldgen.js');
@@ -1428,6 +1428,59 @@ section('finale: nexus is shielded until its pylons fall, then dies through 3 ph
   g.enemies.length = 0;
   g.bullets.length = 0;
   p.iframe = 0;
+}
+
+section('save: normalizeSave repairs partial / legacy / hostile blobs');
+{
+  const kind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+  const D = defaultSave();
+  // every default key must come back present, and same "kind" unless the default
+  // is null (inv — type deliberately unconstrained)
+  const shapeOK = (s) =>
+    Object.keys(D).every((k) => k in s && (kind(D[k]) === 'null' || kind(s[k]) === kind(D[k])));
+
+  const blobs = [
+    ['empty object', {}],
+    ['tech as string', { tech: 'xeno_naquadah' }],
+    ['known as string', { known: 'AUR-CRT-VIR-BOO-CEN-SER' }],
+    ['settings null', { settings: null }],
+    ['settings.binds null', { settings: { binds: null, shake: 0.5 } }],
+    ['campaign as array', { campaign: [] }],
+    ['weapons as array', { weapons: [] }],
+    ['bestiary as string', { bestiary: 'nope' }],
+    ['numbers as strings', { naquadah: '500', intel: '3' }],
+    ['v0-ish shape', { naq: 10, tech: null, unknownKey: 42 }],
+    ['deeply wrong', { campaign: { progress: 7, completed: 'x' }, roster: 'none', stash: null }],
+  ];
+  for (const [name, blob] of blobs) {
+    let s;
+    try {
+      s = normalizeSave(JSON.parse(JSON.stringify(blob)));
+    } catch (e) {
+      assert(false, `normalizeSave(${name}) threw: ${e && e.message}`);
+      continue;
+    }
+    assert(shapeOK(s), `normalizeSave(${name}) yields the default top-level shape`);
+    assert(Array.isArray(s.tech) && Array.isArray(s.known) && s.known.length >= 1, `normalizeSave(${name}) tech/known are non-empty-safe arrays`);
+    assert(s.settings && typeof s.settings === 'object' && typeof s.settings.binds === 'object', `normalizeSave(${name}) settings.binds is an object`);
+    assert(s.campaign && typeof s.campaign.progress === 'object' && Array.isArray(s.campaign.completed), `normalizeSave(${name}) campaign sub-shape intact`);
+    assert(s.schema === defaultSave().schema, `normalizeSave(${name}) stamps the current schema`);
+  }
+  // a hostile blob loaded through createGame must not crash a short run
+  localStorage.setItem('gatecrawler.save.v1', JSON.stringify({ tech: 'x', settings: { binds: null }, campaign: [], known: 5 }));
+  let ok = true;
+  try {
+    const h = createGame(new MockCanvas());
+    h.g.skipHub = true;
+    for (let i = 0; i < 200; i++) {
+      h.update(STEP);
+      h.render(STEP);
+    }
+  } catch (e) {
+    ok = false;
+    console.error('  ✗ hostile-save run threw: ' + (e && e.stack ? e.stack : e));
+  }
+  assert(ok, 'a run started from a hostile save blob survives 200 frames');
 }
 
 // ---------------------------------------------------------------- report

@@ -154,6 +154,7 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const SAVE_KEY = 'gatecrawler.save.v1';
+const SAVE_SCHEMA = 1; // bump when a real data migration is needed; normalizeSave stamps it
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
@@ -163,8 +164,9 @@ const ZOOM = 1.4;
 // ▸ save — defaultSave / normalizeSave / load / persist
 // ──────────────────────────────────────────────────────────────────────────
 
-function defaultSave() {
+export function defaultSave() {
   return {
+    schema: SAVE_SCHEMA,
     naquadah: 0,
     intel: 0,
     salvage: 0, // workbench currency from scrapping weapons; kept in full on death
@@ -199,19 +201,51 @@ function defaultSave() {
   };
 }
 
-// fill in any nested shape an older save is missing so downstream code never
-// hits an undefined branch
-function normalizeSave(s) {
+// one level of shape repair: keep the default's keys, take the save's value for
+// each only when it's present and type-compatible; recurse into nested plain
+// objects. a `null` default means "type unknown — pass whatever's there".
+function mergeShape(def, src) {
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return Object.assign({}, def);
+  const out = Object.assign({}, def);
+  for (const k of Object.keys(def)) {
+    const dv = def[k];
+    const sv = src[k];
+    if (sv == null) continue;
+    if (dv === null) out[k] = sv;
+    else if (Array.isArray(dv)) {
+      if (Array.isArray(sv)) out[k] = sv;
+    } else if (typeof dv === 'object') out[k] = mergeShape(dv, sv);
+    else if (typeof sv === typeof dv) out[k] = sv;
+  }
+  return out;
+}
+
+// repair a save blob of any shape (older version, partial, hand-edited, hostile)
+// into the current schema so downstream code never hits a wrong-typed branch.
+export function normalizeSave(s) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) s = {};
   const d = defaultSave();
   for (const k of Object.keys(d)) {
-    if (s[k] == null) s[k] = d[k];
-    else if (typeof d[k] === 'object' && !Array.isArray(d[k])) s[k] = Object.assign({}, d[k], s[k]);
+    const dv = d[k];
+    const sv = s[k];
+    if (sv == null) s[k] = dv;
+    else if (dv === null) continue; // default type unknown (inv) — accept as-is
+    else if (Array.isArray(dv)) {
+      if (!Array.isArray(sv)) s[k] = dv;
+    } else if (typeof dv === 'object') s[k] = mergeShape(dv, sv);
+    else if (typeof sv !== typeof dv) s[k] = dv; // e.g. tech saved as a string
   }
-  if (!s.campaign.progress) s.campaign.progress = {};
+  // structural guarantees downstream code relies on, after the generic pass
+  if (!s.campaign.progress || typeof s.campaign.progress !== 'object') s.campaign.progress = {};
   if (!Array.isArray(s.campaign.completed)) s.campaign.completed = [];
+  if (!Array.isArray(s.tech)) s.tech = [];
   if (!Array.isArray(s.roster)) s.roster = [];
   if (!Array.isArray(s.base)) s.base = [];
   if (!Array.isArray(s.stash)) s.stash = [];
+  if (!Array.isArray(s.known) || !s.known.length) s.known = [HOME];
+  if (!s.weapons || typeof s.weapons !== 'object' || Array.isArray(s.weapons)) s.weapons = {};
+  if (!s.bestiary || typeof s.bestiary !== 'object' || Array.isArray(s.bestiary)) s.bestiary = {};
+  s.schema = SAVE_SCHEMA;
   return s;
 }
 
@@ -311,7 +345,7 @@ function worldMods(g) {
 function loadSave() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) return normalizeSave(Object.assign(defaultSave(), JSON.parse(raw)));
+    if (raw) return normalizeSave(JSON.parse(raw));
   } catch (e) {
     /* ignore */
   }

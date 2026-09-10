@@ -4,7 +4,7 @@ import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
 import { TAU, clamp, glowCircle, figure, spider, critter, hexA, textReset, wrapLines, wrapText } from './draw.js';
 import { drawShadow, drawHumanoid, drawPlayer, drawEnemy } from './enemydraw.js';
-import { VERSION, versionLine } from './version.js';
+import { VERSION, BUILD, versionLine } from './version.js';
 import {
   renderRosterPanel, renderBasePanel, renderResearchPanel, renderInfirmaryPanel,
   renderOperationsPanel, renderWorkbenchPanel,
@@ -7396,11 +7396,10 @@ function renderMenu(g) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#7a9';
   ctx.font = '12px monospace';
-  ctx.fillText(
-    'P R O C E D U R A L   S G - 1   R O G U E L I T E      ·      v' + VERSION,
-    cx,
-    titleY + 24
-  );
+  ctx.fillText('P R O C E D U R A L   S G - 1   R O G U E L I T E', cx, titleY + 24);
+  ctx.fillStyle = '#6cf';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('v' + VERSION + '   ·   build ' + BUILD, cx, titleY + 42);
 
   // one-line campaign hook straight off the active Operation
   let hook = 'The System Lords are massing. Hold the line.';
@@ -7414,13 +7413,13 @@ function renderMenu(g) {
   } catch (e) {}
   ctx.fillStyle = '#e9b96a';
   ctx.font = '12px monospace';
-  ctx.fillText(hook, cx, titleY + 46);
+  ctx.fillText(hook, cx, titleY + 62);
 
   // --- vertical menu ---
   const mBtnW = 300;
   const mBtnH = 40;
   const gap = 8;
-  const startY = titleY + 78;
+  const startY = titleY + 90;
   ctx.textAlign = 'center';
   MENU_ITEMS.forEach((it, i) => {
     const by = startY + i * (mBtnH + gap);

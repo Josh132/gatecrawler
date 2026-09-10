@@ -163,6 +163,10 @@ function layout() {
   root._fs.style.top = m + 'px';
   root._fs.style.fontSize = clamp(font, 11, 14) + 'px';
   root._fs.style.padding = `${Math.round(S * 0.22)}px ${Math.round(S * 0.42)}px`;
+  // SKIP TIPS pill — bottom-right, just above the aim stick's rest zone
+  root._skip.style.bottom = Math.round(h * 0.30) + 'px';
+  root._skip.style.right = m + 'px';
+  root._skip.style.fontSize = clamp(font - 2, 9, 12) + 'px';
 }
 
 function buildOverlay() {
@@ -234,6 +238,27 @@ function buildOverlay() {
   }, { passive: false });
   root._fs.addEventListener('click', goFullscreen);
   root.appendChild(root._fs);
+
+  // SKIP TIPS — shown only while the first-run tutorial queue is up (the tip
+  // card itself isn't tappable on mobile because the sticks own the screen)
+  root._skip = el(
+    'button',
+    'position:fixed;right:12px;z-index:22;display:none;pointer-events:auto;cursor:pointer;' +
+      '-webkit-tap-highlight-color:transparent;touch-action:manipulation;' +
+      'font:700 11px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;' +
+      'color:#cdd;background:rgba(10,22,30,.8);border:1px solid rgba(150,170,190,.5);' +
+      'border-radius:8px;padding:9px 12px;',
+    'SKIP TIPS ✕'
+  );
+  root._skip.setAttribute('data-ui', '');
+  const doSkip = (e) => {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const g = game && game.g;
+    if (g) g._skipTips = true;
+  };
+  root._skip.addEventListener('touchend', doSkip, { passive: false });
+  root._skip.addEventListener('click', doSkip);
+  root.appendChild(root._skip);
 
   // portrait: the whole game is drawn for landscape — ask for a turn
   root._rot = el(
@@ -571,6 +596,9 @@ function syncActive() {
   show(root._hint, active ? 'block' : 'none');
   show(root._rot, !mouseMode && portrait ? 'flex' : 'none');
   show(root._fs, !mouseMode && fsSupported() && !fsEl() ? 'inline-flex' : 'none');
+  const g = game && game.g;
+  const tipsUp = !!(g && g.tips && g.tips.i < g.tips.list.length);
+  show(root._skip, active && tipsUp ? 'inline-flex' : 'none');
 }
 
 // the game's state changes on its own (a run ends, a panel opens) with no

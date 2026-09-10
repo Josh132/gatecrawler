@@ -1899,6 +1899,19 @@ section('panels: fit-scale on a small (mobile landscape) viewport keeps buttons 
     bad = g.buttons.filter((b) => b.x < -2 || b.x + b.w > W + 2);
     assert(bad.length === 0, `panels-fit: '${kind}' buttons fit the width (${bad.length} off)`);
   }
+  // a small top-right button exists that, clicked, closes a station panel
+  // (mobile has no Esc key) — smallest button nearest the panel's top-right
+  g.state = 'hub';
+  g.station = 'roster';
+  for (let f = 0; f < 2; f++) tick(gApi, g);
+  const corner = g.buttons
+    .filter((b) => b.w < 60 && b.h < 40)
+    .sort((a, b) => a.y - a.x - (b.y - b.x))[0];
+  assert(!!corner, 'panels-fit: station panel has a compact close control');
+  if (corner) {
+    fire(gameCanvas._l, 'click', { clientX: corner.x + corner.w / 2, clientY: corner.y + corner.h / 2 });
+    assert(g.station == null, 'panels-fit: clicking it closes the station panel');
+  }
   g.station = null;
 
   // restore

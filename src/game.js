@@ -6234,11 +6234,12 @@ function renderPanel(g) {
   ctx.fillStyle = '#678';
   ctx.font = '11px monospace';
   ctx.fillText('drag items between the grid, your gear slots and the hotbar   ·   TAB / ESC to close', lay.px + 24, lay.py + 52);
-  button(g, 'AUTO-SORT', lay.px + lay.panelW - 128, lay.py + 16, 104, 26, () => {
+  button(g, 'AUTO-SORT', lay.px + lay.panelW - 178, lay.py + 16, 104, 26, () => {
     sortInventory(g.inv);
     saveInv(g);
     g.message('Backpack sorted');
   });
+  button(g, '✕', lay.px + lay.panelW - 44, lay.py + 12, 32, 28, () => { g.panelOpen = false; });
 
   // STASH: the between-runs chest, unlocked by the Base Stores upgrade
   if (g.state === 'hub') {
@@ -6870,6 +6871,7 @@ function uiFrame(g, title, sub) {
     ctx.font = '11px monospace';
     ctx.fillText(sub, x + 26, y + 50);
   }
+  button(g, '✕', x + w - 42, y + 12, 30, 26, () => uiPop(g));
   return { x, y, w, h };
 }
 
@@ -7264,15 +7266,24 @@ function updateTips(g, dt) {
   }
   const T = g.tips;
   if (!T || T.i >= T.list.length) return;
+  // an explicit skip (X button / mobile SKIP TIPS) clears the whole queue
+  if (g._skipTips) {
+    g._skipTips = false;
+    T.i = T.list.length;
+    g.save.settings.seenTutorial = true;
+    persist(g.save);
+    return;
+  }
   T.t += dt;
   const tip = T.list[T.i];
   const dismissed =
     pressed('Space') || pressed('Enter') || pressed('Escape') ||
     keyHit(g, 'up', 'KeyW') || keyHit(g, 'down', 'KeyS') ||
     keyHit(g, 'left', 'KeyA') || keyHit(g, 'right', 'KeyD') ||
-    keyHit(g, 'interact', 'KeyE') || (mouse.down && !g.mouseWasDown);
+    keyHit(g, 'interact', 'KeyE') || g._tipTap || (mouse.down && !g.mouseWasDown);
+  g._tipTap = false;
   const auto = tip.check && tip.check(g) && T.t > 1.4;
-  if (T.t > 6 || auto || (dismissed && T.t > 0.35)) {
+  if (T.t > 4 || auto || (dismissed && T.t > 0.3)) {
     T.i++;
     T.t = 0;
     if (T.i >= T.list.length && T.final) {
@@ -7310,8 +7321,11 @@ function renderTips(g, dt) {
   ctx.fillStyle = '#567';
   ctx.font = '9px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText('any key →', bx + bw - 10, by + bh - 8);
+  ctx.fillText('tap / any key  →', bx + bw - 34, by + bh - 8);
   ctx.textAlign = 'left';
+  // tap the card to advance; the ✕ skips the rest
+  g.buttons.push({ x: bx, y: by, w: bw - 34, h: bh, fn: () => { g._tipTap = true; } });
+  button(g, '✕', bx + bw - 30, by + bh / 2 - 13, 26, 26, () => { g._skipTips = true; });
 }
 
 // ---- contextual field notes ----------------------------------------
@@ -7643,7 +7657,9 @@ export function panelFrame(g, title, sub) {
   ctx.fillStyle = '#8ef';
   ctx.font = '11px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 24, y + 34);
+  ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 48, y + 34);
+  ctx.textAlign = 'left';
+  button(g, '✕', x + w - 40, y + 10, 30, 26, () => { g.station = null; });
   return { x, y, w, h };
 }
 

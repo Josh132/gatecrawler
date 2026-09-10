@@ -58,12 +58,14 @@ its three-phase finale fight.
 
 ### Mobile
 
-Left thumb anywhere on the left half of the screen is a **movement stick**;
-right thumb on the right half is an **aim stick** that auto-fires while held.
-Edge buttons handle `ROLL` / `RLD` / `MED` / `NADE` / `SWAP` / `USE` / `ALT`,
-with pause and the bag in the top corners. A **FULLSCREEN** button sits at the
-top; the game is landscape-only, so a portrait phone shows a "rotate your
-device" prompt, and first-run tips can be dismissed with **SKIP TIPS**.
+Touch the left half of the screen anywhere for a floating **movement stick**;
+the right half is a floating **aim stick** that auto-fires while held. Edge
+buttons handle `ROLL` / `RLD` / `MED` on the right and `NADE` / `SWAP` / `USE`
+on the left, with `❚❚` pause, `BAG` and `ALT` in the top corners. A
+**FULLSCREEN** pill sits at the top; the game is landscape-only, so a portrait
+phone shows a "rotate your device" scrim, and first-run tips can be dismissed
+with **SKIP TIPS**. Every panel has an on-screen **✕** to close it — there is
+no `Esc` on a phone.
 
 ### The loop
 

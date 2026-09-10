@@ -106,7 +106,15 @@ export function createPostFX(src) {
     };
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    // a real 2-triangle quad covering exactly NDC [-1,1]². the old single
+    // oversized triangle ([-1,-1],[3,-1],[-1,3]) gets mis-clipped by some mobile
+    // GPUs (Adreno/Mali) after a fullscreen resize, leaving a black wedge in the
+    // top-right corner.
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+      gl.STATIC_DRAW
+    );
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     srcTex = gl.createTexture();
@@ -164,23 +172,28 @@ export function createPostFX(src) {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
 
         pass(progs.bright, srcTex, a);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         let p = pass(progs.blur, a.tex, b);
         gl.uniform2f(gl.getUniformLocation(p, 'dir'), 1 / a.w, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         p = pass(progs.blur, b.tex, a);
         gl.uniform2f(gl.getUniformLocation(p, 'dir'), 0, 1 / a.h);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         p = pass(progs.comp, srcTex, null);
+        // preserveDrawingBuffer is on and the quad covers every pixel, but a hard
+        // clear to the page background removes any chance of a stale wedge after
+        // a fullscreen resize on a flaky mobile GPU.
+        gl.clearColor(0.02, 0.027, 0.047, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, a.tex);
         gl.uniform1i(gl.getUniformLocation(p, 'b'), 1);
         gl.uniform1f(gl.getUniformLocation(p, 'time'), (time || 0) % 100);
         gl.uniform2f(gl.getUniformLocation(p, 'res'), w, h);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
         gl.activeTexture(gl.TEXTURE0);
       } catch (e) {
         dead = true;

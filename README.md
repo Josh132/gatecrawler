@@ -1,108 +1,158 @@
 # Gate Crawler
 
-A procedurally generated top-down SG-1 roguelite. Dial a gate address, fight
-through a generated world to its DHD, dial deeper for better loot, or dial home
-to bank your naquadah. Death keeps half.
+**A procedural top-down twin-stick roguelite — dial a Stargate, fight a seeded world to its DHD, dial deeper for loot or dial home to bank it.**
 
-**Vertical slice** — one biome (desert ruins), two factions (Jaffa, Wraith), a
-miniboss (Serpent Guard Prime), the P90 + a scavenged Staff Weapon, the seeded
-gate network, world modifiers, and meta progression (banked naquadah → +max HP).
+▶ **[Play it in your browser](https://josh132.github.io/gatecrawler/)** — no install, works on desktop and phones.
 
-## Run it
+![Gate Crawler main menu](docs/menu.png)
 
-```
-~/.local/share/gatecrawler/gatecrawler        # or launch "Gate Crawler" from the apps menu
-```
+## What it is
 
-Starts a tiny Python static server on `127.0.0.1:8777` and opens a Chromium app
-window. `GATECRAWLER_PORT` overrides the port.
+Gate Crawler is a from-scratch, vanilla-JavaScript canvas game — an unlicensed
+_Stargate SG-1_ homage built on the HTML5 2D canvas with plain ES modules and
+**no build step, no framework, no dependencies**. Clone it and open a file; that
+is the whole toolchain. It runs in any modern browser, including phones and
+tablets with on-screen twin-stick controls.
 
-## Controls
+You play SG-1 out of Stargate Command, Level 28: gear up at the SGC, walk into
+the gate, and push through an infinite, deterministically seeded gate network
+one world at a time — Jaffa garrisons, Wraith hives, Replicator clusters —
+recovering naquadah, intel and salvage to bring home.
 
-| | |
+## The premise — the Incursion
+
+Something on the far side of the network is dialling gates on its own and
+assimilating the worlds it reaches. Earth dials back. **The Incursion** is an
+eleven-Operation campaign that walks you deeper into contested space act by act
+— thinning Jaffa raids, breaking a Wraith hive, unmaking a Replicator nucleus —
+until the route to the **Incursion Nexus** is mapped and survivable.
+
+The Nexus is a gate that dials gates: the staging hub every incursion has been
+run from. It sits at one fixed address at maximum threat, guarded by a construct
+wearing all three factions at once. **Winning** means completing all eleven
+Operations, then walking through that address and destroying the Nexus core in
+its three-phase finale fight.
+
+## How to play
+
+![SGC hub](docs/hub.png)
+![DHD boss fight](docs/boss.png)
+
+### Desktop
+
+| Action | Key |
 |---|---|
-| WASD | move |
-| mouse | aim |
-| LMB | fire |
-| SPACE | dodge roll (i-frames) |
-| 1–4 | use hotbar consumable |
-| G | throw grenade (from grenade slot) |
-| Q | swap Weapon 1 / Weapon 2 |
-| TAB / I | open loadout panel (drag items to gear slots / hotbar) |
-| E | interact (DHD) |
-| Enter | start run / continue from menu & death |
+| Move | `W` `A` `S` `D` |
+| Aim | Mouse |
+| Fire | Left mouse |
+| Alt-fire (mod-unlocked, per weapon) | Right mouse |
+| Dodge roll (i-frames) | `Space` |
+| Reload | `R` |
+| Throw grenade | `G` |
+| Swap weapon | `X` / mouse wheel |
+| Quick heal | `Q` |
+| Inventory & stats | `Tab` / `I` |
+| Interact / dial the DHD | `E` |
+| Mute · volume | `M` · `[` `]` |
+| Pause & settings (rebind keys here) | `Esc` |
 
-Append `?debug` to the URL for an FPS / entity overlay.
+### Mobile
 
-## Gear
+Left thumb anywhere on the left half of the screen is a **movement stick**;
+right thumb on the right half is an **aim stick** that auto-fires while held.
+Edge buttons handle `ROLL` / `RLD` / `MED` / `NADE` / `SWAP` / `USE` / `ALT`,
+with pause and the bag in the top corners. A **FULLSCREEN** button sits at the
+top; the game is landscape-only, so a portrait phone shows a "rotate your
+device" prompt, and first-run tips can be dismissed with **SKIP TIPS**.
 
-Open the loadout panel with **TAB**. Drag items from the grid onto the paper-doll
-slots — **head / torso / legs / feet** armour (each cuts damage to hits that land
-on that region), **Weapon 1 / Weapon 2** (quick-swap with Q), and the **grenade**
-slot. Drop consumables onto the four hotbar slots and use them with 1–4:
+### The loop
 
-- **Field Dressing / Medkit** — heal
-- **Combat Stim** — +move speed, +fire rate for 6s
-- **Shield Cell** — regenerating overshield (absorbs before HP)
-- **Frag Grenade** — thrown, blast damage
+- **Hub.** Spend naquadah / intel / salvage at the SGC — research, loadout,
+  base upgrades, rescued teams — then walk into the gate.
+- **Dial.** The gate map shows seeded neighbour worlds with their threat,
+  faction and loot rating; Operations flag the worlds that advance them.
+- **Clear.** Fight room to room. Enemies wander until they see, hear or feel a
+  fight; line of sight is a cast visibility polygon, so fire comes from the dark.
+- **DHD boss.** The far room holds a faction boss on the Dial-Home Device.
+  Encounters roll one of three types — standard, **siege** (reinforcements keep
+  arriving until you dial out), or **vanguard** (a buffed champion that pushes
+  from the start).
+- **Dial deeper or dial home.** Deeper means higher threat, better loot and a
+  faster "hunt". Home banks your naquadah and ends the run. Death costs half
+  your _unbanked_ naquadah — equipped gear is safe.
 
-Enemies and floor caches drop items; most rooms hold a medical pickup. The boss
-drops a Staff Weapon, a heavy armour piece and medkits. Inventory persists
-between worlds and runs (saved to `localStorage`).
+## Features
 
-## Design notes
+![In-mission combat](docs/combat.png)
+![Gate map](docs/gatemap.png)
 
-- **The gate network is one fixed infinite graph.** A world's neighbours are a
-  pure function of its address (`src/address.js` → `neighbors`), so any address
-  always leads to the same worlds regardless of the path taken.
-- **Everything is derived from the address + hop distance** (`worldParams`):
-  faction, biome, threat level, modifiers, room count. `buildWorld` turns that
-  into a room graph and tile map; encounters scale with threat.
-- **Difficulty** rises with hop distance from home and the address's own danger
-  roll — more enemies, elites, bigger boss, better rewards.
-- **Modifiers** (`eclipse`, `naquadah-rich`, `ion-storm`) reroll per world to
-  keep infinite worlds from feeling same-y. `eclipse` tightens the sight radius.
-- **Line of sight** — you only see inside a 360° visibility polygon cast from the
-  player. Walls, pillars and doorways occlude it (`computeVisPoly` in `game.js`);
-  enemies, pickups and props outside it aren't drawn. Enemy fire still comes from
-  the dark.
-- **No spawn pop-in** — every room's occupants and loot are built when the world
-  loads (`populateWorld`). Enemies wander idle until they see you, hear a nearby
-  fight, or take a hit; then they engage. An enemy that chases far outside its
-  own room disengages and returns (leash) so the whole level doesn't pile into
-  the DHD room.
-- **Jaffa AI** — ~60% use cover: find a spot that breaks line of sight, tuck, and
-  lean out to fire, then tuck again; they drop cover and fight in the open once
-  you close the distance. The rest (and all DHD-room guards) push aggressively.
-  Wraith rush; the boss is a charging brawler.
-- **Items / gear** — `items.js` is the catalogue, `inventory.js` holds the grid /
-  equipment / hotbar state and the pure move/equip/derive logic. Armour DR is
-  regional: an incoming hit rolls a body region and that slot's piece absorbs.
+- **Infinite seeded gate network** — a world's neighbours, faction, biome,
+  threat, modifiers and room graph are a pure function of its address plus hop
+  distance, so any address always leads to the same worlds.
+- **~10 hand-painted procedural biomes** — temple, pyramid, desert, jungle,
+  savannah, Wraith hive, glacier, Replicator foundry, Atlantis city, catacomb.
+- **Three factions with distinct AI** — Jaffa use cover and lean-fire (DHD
+  guards push), Wraith rush, Replicators swarm and adapt.
+- **World modifiers** reroll per world — eclipse, ion-storm, naquadah-rich,
+  power-siphon, black-fog and more — so infinite worlds don't feel same-y.
+- **69-node research tree** across five branches (Field Ops, Armory, Gate
+  Science, Xenotech, SGC Support) with a mutually-exclusive keystone choice and
+  campaign-milestone-gated nodes.
+- **Weapon mastery + mods** — seven weapons (P90, Staff Weapon, Zat'nik'tel,
+  shotgun, burst rifle, grenade launcher, ion beam) earn mastery XP; salvage
+  fits mods, and a tier-2 mod unlocks that weapon's alt-fire.
+- **Rescuable SG teams** — bring captured teams home for permanent passives;
+  spend naquadah on base upgrades (infirmary, training range, salvage foundry…).
+- **Difficulty modes** — story / normal / hard, combat-and-HP tuning only,
+  never worldgen.
+- **11-Operation Incursion campaign** with a three-phase Nexus finale boss.
+- **Hand-synthesised audio** — every sound effect built from oscillators, plus
+  per-biome ambient beds and a slow-evolving reactive music drone. No audio
+  files.
 
-## Architecture
+## Run it locally
 
-Vanilla ES modules, no build step. Full detail — module map, data flow, the
-`g` object, invariants, and a "where to change what" table — is in
-[`ARCHITECTURE.md`](ARCHITECTURE.md). In short, `src/`:
-
-| file | role |
-|---|---|
-| `main.js` / `loop.js` | bootstrap + fixed-timestep frame runner |
-| `game.js` | the state machine + every gameplay/UI system (sectioned — search `// ▸ `) |
-| `address.js` / `worldgen.js` / `pathfind.js` | address → params → room graph → tile map + bake; enemy flow field |
-| `entities.js` | Player / Enemy / Bullet / … classes + `circleVsGrid` collision |
-| `weapons.js` / `weaponmods.js` / `items.js` / `inventory.js` | weapon table, mastery/mod maths, gear catalogue, inventory state |
-| `tech.js` / `campaign.js` / `roster.js` | research tree, the Incursion campaign, SG teams + base upgrades |
-| `hub.js` | the walkable SGC (layout, decor, consoles, crew) |
-| `draw.js` / `textures.js` / `icons.js` / `fx.js` / `vis.js` / `postfx.js` | canvas toolkit, procedural art, particles/decals, line of sight, WebGL grade |
-| `audio.js` / `input.js` / `rng.js` | synth audio, input capture, PRNG + hashing |
-
-## Tests
-
-```
-node test/harness.mjs           # headless: worldgen, determinism, full play loop,
-SEED=42 node test/harness.mjs   # deep descent, stress. ~86k assertions.
+```sh
+git clone https://github.com/Josh132/gatecrawler.git
+cd gatecrawler
+python3 server.py            # serves on http://127.0.0.1:8777
 ```
 
-`test/browser-selftest.html` and `test/play-shot.html` run the real modules in a
-browser (used for CI-style checks and screenshots).
+Then open <http://localhost:8777> (`GATECRAWLER_PORT` overrides the port). Any
+static file server works — `server.py` is just a zero-config `http.server`
+wrapper that adds no-cache headers.
+
+## Development
+
+There is no build step and there are no dependencies. `index.html` loads
+`src/main.js` as a module and everything else is `import`ed from there; edit a
+file and reload.
+
+```sh
+npm test                     # node test/harness.mjs — headless worldgen +
+                             # determinism + a full bot play-through, ~48k asserts
+npm run lint                 # node scripts/lint.mjs
+npm run sweep                # the harness across ten fixed seeds
+npm run stamp                # regenerate the version stamp from git
+npm run hooks                # install the pre-push hook (stamp must be fresh)
+```
+
+- **Architecture** is documented in [`ARCHITECTURE.md`](ARCHITECTURE.md) — the
+  module map, the long-lived `g` game object, the data flow of a run, and the
+  invariants the harness enforces (only five `g.state` values; every other
+  screen is a sub-mode flag; worldgen is seeded and never calls `Math.random`).
+- **`src/game.js`** is the large core file but it is sectioned: its header
+  comment is a table of contents, and you jump to a section by searching its
+  `// ▸ ` marker (`// ▸ combat`, `// ▸ enemy AI`, `// ▸ render`, …). Prefer
+  landing a change in a sibling module (`fx.js`, `vis.js`, `weapons.js`,
+  `worldgen.js`, `campaign.js`, …) when it fits one.
+- **Screenshots** are taken headless via `test/play-shot.html` (query params
+  `?nofx`, `?hub`, `?f=<frames>`, `?panel`).
+
+## Credits / disclaimer
+
+Unofficial fan project. _Stargate_, _Stargate SG-1_ and all related names,
+marks and concepts belong to Metro-Goldwyn-Mayer Studios Inc. and their
+respective owners; this project is not affiliated with, endorsed by, or
+sponsored by them, and it is non-commercial. All source code is the author's
+own.

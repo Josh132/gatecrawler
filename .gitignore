@@ -5,3 +5,6 @@ __pycache__/
 # local dev scratch pages (kept out of the tree, still work in place)
 _fig-debug.html
 biome-shot.html
+
+# agent worktrees
+.claude/worktrees/

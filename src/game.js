@@ -7736,7 +7736,7 @@ export function panelFrame(g, title, sub) {
   ctx.fillStyle = '#8ef';
   ctx.font = '11px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 48, y + 34);
+  ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 66, y + 34);
   ctx.textAlign = 'left';
   button(g, '✕', x + w - 52, y + 8, 44, 34, () => { g.station = null; });
   return { x, y, w, h };

@@ -2866,6 +2866,7 @@ function fireWeapon(g, p, wp, wid) {
     b.pierce = ws.pierce || 0;
     b.ricochet = ws.ricochet || 0;
     b._ap = ws.armorPierce || 0;
+    b._falloff = wp.falloff || null; // per-weapon range damage falloff (P90)
     b._onHit = ws.onHit && ws.onHit.length ? ws.onHit : null;
     g.bullets.push(b);
   }
@@ -3015,6 +3016,16 @@ function updateBullet(g, b, dt) {
 function hitEnemy(g, e, b) {
   let dmg = b.dmg;
   const dtype = b.energy ? 'energy' : 'kinetic';
+
+  // per-weapon range falloff (P90): full damage close, tapering to minMul far out
+  if (b._falloff && b.sx != null) {
+    const fo = b._falloff;
+    const d = Math.hypot(b.x - b.sx, b.y - b.sy);
+    if (d > fo.near) {
+      const t = Math.min(1, (d - fo.near) / (fo.far - fo.near));
+      dmg *= 1 + (fo.minMul - 1) * t;
+    }
+  }
 
   const ap = b._ap || 0; // armour-piercing mod: cuts into the frontal shrug-off
   // Jaffa (both) shrug off shots to the front — a real cut, not a brick wall

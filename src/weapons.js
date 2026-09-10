@@ -11,6 +11,9 @@ export const WEAPONS = {
     knockback: 40,
     color: '#cfe8ff',
     ammoMax: Infinity,
+    // the infinite-ammo default gun trades reach for uptime: full damage inside
+    // ~320px, falling to 55% past ~640px. data-driven so other guns can opt in.
+    falloff: { near: 320, far: 640, minMul: 0.55 },
   },
   staff: {
     name: 'Staff Weapon',

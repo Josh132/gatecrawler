@@ -247,6 +247,8 @@ export class Bullet {
     this.vy = vy;
     this.dmg = dmg;
     this.from = from; // 'player' | 'enemy'
+    this.sx = x; // muzzle position — for range falloff at hit time
+    this.sy = y;
     this.r = opt.r || 3;
     this.life = opt.life || 2.2;
     this.color = opt.color || '#fff';

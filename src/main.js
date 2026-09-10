@@ -2,12 +2,14 @@ import { initInput } from './input.js';
 import { initAudio, music } from './audio.js';
 import { startLoop } from './loop.js';
 import { createGame } from './game.js';
+import { initTouch } from './touch.js';
 
 const canvas = document.getElementById('game');
 window.DEBUG = new URLSearchParams(location.search).has('debug');
 
 const game = createGame(canvas);
 initInput(canvas);
+initTouch(canvas, game);
 
 // audio contexts need a user gesture to start
 const wake = () => {

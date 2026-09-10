@@ -6250,7 +6250,7 @@ function renderPanel(g) {
     saveInv(g);
     g.message('Backpack sorted');
   });
-  button(g, '✕', lay.px + lay.panelW - 44, lay.py + 12, 32, 28, () => { g.panelOpen = false; });
+  button(g, '✕', lay.px + lay.panelW - 54, lay.py + 10, 44, 34, () => { g.panelOpen = false; });
 
   // STASH: the between-runs chest, unlocked by the Base Stores upgrade
   if (g.state === 'hub') {
@@ -6660,6 +6660,11 @@ export function button(g, label, x, y, w, h, fn, enabled = true) {
     const hr = t
       ? { x: t.cx + (x - t.cx) * t.k, y: t.cy + (y - t.cy) * t.k, w: w * t.k, h: h * t.k }
       : { x, y, w, h };
+    // inflate the *hit* rect (not the paint) to a comfortable finger target —
+    // ≥40×40 screen-space, grown symmetrically around the drawn button
+    const MIN = 40;
+    if (hr.w < MIN) { hr.x -= (MIN - hr.w) / 2; hr.w = MIN; }
+    if (hr.h < MIN) { hr.y -= (MIN - hr.h) / 2; hr.h = MIN; }
     g.buttons.push({
       x: hr.x, y: hr.y, w: hr.w, h: hr.h,
       fn: () => {
@@ -6885,7 +6890,7 @@ function uiFrame(g, title, sub) {
     ctx.font = '11px monospace';
     ctx.fillText(sub, x + 26, y + 50);
   }
-  button(g, '✕', x + w - 42, y + 12, 30, 26, () => uiPop(g));
+  button(g, '✕', x + w - 52, y + 10, 44, 34, () => uiPop(g));
   return { x, y, w, h };
 }
 
@@ -6906,22 +6911,22 @@ function renderSettings(g) {
   const stepper = (label, val, dec, inc) => {
     if (sy > F.y + 40 && sy < F.y + F.h - 60) {
       row(label);
-      button(g, '–', sx + 250, sy - 12, 26, 22, dec);
+      button(g, '–', sx + 248, sy - 15, 34, 32, dec);
       ctx.fillStyle = '#dff';
       ctx.font = 'bold 12px monospace';
       ctx.textAlign = 'center';
       ctx.fillText(val, sx + 312, sy + 4);
       ctx.textAlign = 'left';
-      button(g, '+', sx + 344, sy - 12, 26, 22, inc);
+      button(g, '+', sx + 340, sy - 15, 34, 32, inc);
     }
-    sy += 34;
+    sy += 40;
   };
   const toggle = (label, on, fn) => {
     if (sy > F.y + 40 && sy < F.y + F.h - 60) {
       row(label);
-      button(g, on ? 'ON' : 'OFF', sx + 250, sy - 12, 120, 22, fn);
+      button(g, on ? 'ON' : 'OFF', sx + 248, sy - 15, 126, 32, fn);
     }
-    sy += 34;
+    sy += 40;
   };
 
   stepper(
@@ -6954,7 +6959,7 @@ function renderSettings(g) {
   if (sy > F.y + 40 && sy < F.y + F.h - 60) {
     const cur = st.difficulty || 'normal';
     row('Difficulty');
-    button(g, cur.toUpperCase(), sx + 250, sy - 12, 120, 22, () => {
+    button(g, cur.toUpperCase(), sx + 248, sy - 15, 126, 32, () => {
       st.difficulty = DIFFS[(DIFFS.indexOf(cur) + 1) % DIFFS.length];
       persist(g.save);
       g.message(
@@ -7690,7 +7695,7 @@ export function panelFrame(g, title, sub) {
   ctx.textAlign = 'right';
   ctx.fillText(`naquadah ${g.save.naquadah}   ·   intel ${g.save.intel || 0}`, x + w - 48, y + 34);
   ctx.textAlign = 'left';
-  button(g, '✕', x + w - 40, y + 10, 30, 26, () => { g.station = null; });
+  button(g, '✕', x + w - 52, y + 8, 44, 34, () => { g.station = null; });
   return { x, y, w, h };
 }
 

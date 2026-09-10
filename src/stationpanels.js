@@ -824,32 +824,13 @@ function renderWorkbenchPanel(g) {
   ctx.fillText('COMPATIBLE MODS  (click a filled slot to remove)', rx, ry);
   ry += 8;
   const fitting = modsForWeapon(key).filter((m) => state.mods.indexOf(m.id) === -1);
-  const rowH = 30;
+  const rowH = 40;
   const roomRows = Math.floor((fr.y + fr.h - 16 - ry) / rowH);
   const show = fitting.slice(0, Math.max(0, roomRows));
   for (const m of show) {
     const ci = canInstall(g.save, key, m.id, bonusSlots);
     const c = installCost(m.id);
-    ctx.fillStyle = 'rgba(20,28,40,0.65)';
-    ctx.fillRect(rx, ry, rw, rowH - 4);
-    ctx.strokeStyle = 'rgba(120,160,210,0.22)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rowH - 5);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = ci.ok ? '#dff' : '#9ab';
-    ctx.font = 'bold 9px monospace';
-    ctx.fillText(`[${m.slot}] ${m.name}`, rx + 6, ry + 11);
-    ctx.fillStyle = '#789';
-    ctx.font = '8px monospace';
-    const dm = Math.floor((rw - 150) / 4.6);
-    ctx.fillText(m.desc.length > dm ? m.desc.slice(0, dm - 1) + '…' : m.desc, rx + 6, ry + 22);
-    const cstr = `${salv(c)}s${c.naquadah ? ' +' + c.naquadah + 'n' : ''}`;
-    ctx.textAlign = 'right';
-    ctx.font = '9px monospace';
-    ctx.fillStyle = ci.ok ? '#9cd' : '#778';
-    ctx.fillText(cstr, rx + rw - 58, ry + 16);
-    ctx.textAlign = 'left';
-    button(g, 'FIT', rx + rw - 52, ry + 2, 48, rowH - 8, () => {
+    const install = () => {
       if (!canInstall(g.save, key, m.id, bonusSlots).ok) return;
       const cost = installCost(m.id);
       g.save.salvage = (g.save.salvage || 0) - salv(cost);
@@ -857,7 +838,26 @@ function renderWorkbenchPanel(g) {
       state.mods = [...state.mods, m.id];
       persist(g.save);
       g.message('Installed ' + m.name);
-    }, ci.ok);
+    };
+    // the whole row is the tap target — the small FIT chip alone was sub-40px
+    button(g, '', rx, ry, rw, rowH - 4, install, ci.ok);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = ci.ok ? '#dff' : '#9ab';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(`[${m.slot}] ${m.name}`, rx + 8, ry + 15);
+    ctx.fillStyle = '#89a';
+    ctx.font = '8px monospace';
+    const dm = Math.floor((rw - 150) / 4.6);
+    ctx.fillText(m.desc.length > dm ? m.desc.slice(0, dm - 1) + '…' : m.desc, rx + 8, ry + 27);
+    const cstr = `${salv(c)}s${c.naquadah ? ' +' + c.naquadah + 'n' : ''}`;
+    ctx.textAlign = 'right';
+    ctx.font = '9px monospace';
+    ctx.fillStyle = ci.ok ? '#9cd' : '#778';
+    ctx.fillText(cstr, rx + rw - 54, ry + 14);
+    ctx.fillStyle = ci.ok ? '#8fdcff' : '#667';
+    ctx.font = 'bold 9px monospace';
+    ctx.fillText(ci.ok ? 'FIT ▸' : 'LOCKED', rx + rw - 12, ry + 28);
+    ctx.textAlign = 'left';
     ry += rowH;
   }
   if (fitting.length > show.length) {

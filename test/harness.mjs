@@ -1905,7 +1905,7 @@ section('panels: fit-scale on a small (mobile landscape) viewport keeps buttons 
   g.station = 'roster';
   for (let f = 0; f < 2; f++) tick(gApi, g);
   const corner = g.buttons
-    .filter((b) => b.w < 60 && b.h < 40)
+    .filter((b) => b.w < 60 && b.h <= 44)
     .sort((a, b) => a.y - a.x - (b.y - b.x))[0];
   assert(!!corner, 'panels-fit: station panel has a compact close control');
   if (corner) {

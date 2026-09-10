@@ -316,10 +316,28 @@ function drawEnemy(ctx, e, t, cbTags) {
       const hy = e.y + Math.sin(a) * d - (wind ? 4 : 0);
       glowCircle(ctx, hx, hy, wind ? 4.6 : 4, flash ? '#fff' : '#ff8a3c', wind ? 14 : 10);
     }
-    if (snip && e.aimT > 0 && !dormant) {
-      // charge bloom on the barrel tip
+    if (snip) {
+      // always-on tell: a hard scope glint on the weapon so a sniper is
+      // pickable out of a brown Jaffa cluster before it fires
       const m = O.muzzle;
-      glowCircle(ctx, m.x, m.y, 1.6 + 2.6 * O.charge, hexA('#ffd27a', 0.35 + 0.35 * O.charge), 16);
+      if (m) {
+        const gx = m.x - Math.cos(e.facing) * 6;
+        const gy = m.y - Math.sin(e.facing) * 6;
+        ctx.fillStyle = flash ? '#fff' : '#bfe8ff';
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1.5, 0, TAU);
+        ctx.fill();
+        if (e.aimT > 0 && !dormant) {
+          // charge bloom on the barrel tip + a taut aiming thread to the target
+          glowCircle(ctx, m.x, m.y, 1.6 + 2.6 * O.charge, hexA('#ffd27a', 0.35 + 0.35 * O.charge), 16);
+          ctx.strokeStyle = hexA('#ff9a5c', 0.18 + 0.3 * O.charge);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(m.x, m.y);
+          ctx.lineTo(m.x + Math.cos(e.facing) * 220, m.y + Math.sin(e.facing) * 220);
+          ctx.stroke();
+        }
+      }
     }
   } else if (kind === 'wraith' || kind === 'wraith_drone' || kind === 'wraith_stalker') {
     const drone = kind === 'wraith_drone';
@@ -352,6 +370,18 @@ function drawEnemy(ctx, e, t, cbTags) {
       drawHumanoid(ctx, e.x + jx, e.y + jy, e.facing, s, wc, '#d7ffda', O);
       ctx.globalAlpha = a0;
     } else {
+      if (stalk && !dormant) {
+        // always-on tell: a thin teal blink-ring under it, tightening as the
+        // next phase-jump nears, so a stalker is readable inside a wraith pack
+        const near = e.nextPhase > 0 ? clamp(1 - (e.phaseCd || 0) / e.nextPhase, 0, 1) : 0.3;
+        ctx.strokeStyle = hexA('#7fe0c8', 0.18 + 0.4 * near);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 4]);
+        ctx.beginPath();
+        ctx.arc(e.x + jx, e.y + jy, 12 - 5 * near, 0, TAU);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       drawHumanoid(ctx, e.x + jx, e.y + jy, e.facing, s, wc, flash ? '#fff' : '#d7ffda', O);
       // just-materialised flash
       if (stalk && e.nextPhase > 0 && e.phaseCd > e.nextPhase - 0.3) {

@@ -4956,6 +4956,7 @@ function render(g, dt) {
   }
 
   ctx.clearRect(0, 0, view.w, view.h);
+  ctx.beginPath(); // never inherit a stray sub-path across frames
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic'; // never inherit a stray alignment across frames
   g.buttons = [];
@@ -7358,21 +7359,21 @@ function renderMenu(g) {
   const titleY = Math.min(view.h * 0.36, 250);
   ctx.textAlign = 'center';
 
-  // gate-iris motif behind the wordmark: nested chevron rings, slowly turning
+  // gate-iris motif behind the wordmark: three concentric chevron rings, turning
   ctx.save();
   ctx.translate(cx, titleY - 6);
-  ctx.rotate(g.time * 0.08);
+  ctx.lineWidth = 2;
   for (let r = 0; r < 3; r++) {
     const rad = 118 - r * 26;
-    ctx.strokeStyle = `rgba(120,200,255,${0.05 + r * 0.03})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+    ctx.strokeStyle = `rgba(120,200,255,${0.06 + r * 0.03})`;
     for (let k = 0; k < 9; k++) {
-      const a0 = (k / 9) * TAU + (r % 2 ? 0.16 : 0);
+      const a0 = (k / 9) * TAU + g.time * 0.08 + (r % 2 ? 0.16 : 0);
+      ctx.beginPath();
       ctx.arc(0, 0, rad, a0 + 0.05, a0 + TAU / 9 - 0.05);
+      ctx.stroke();
     }
-    ctx.stroke();
   }
+  ctx.beginPath(); // don't leave the last arc dangling in the path
   ctx.restore();
 
   // wordmark — heavy serif for contrast against the all-monospace UI, tracked wide

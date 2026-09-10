@@ -11,6 +11,17 @@ const game = createGame(canvas);
 initInput(canvas);
 initTouch(canvas, game);
 
+// the WebGL colour-grade is a real per-frame cost on phones (a full-canvas
+// texture upload + four passes) and has shown GPU artifacts in fullscreen on
+// some mobile drivers — skip it on coarse-pointer devices; the plain 2D frame
+// is crisp. `?fx` in the URL forces it back on for testing.
+try {
+  const coarse = matchMedia('(any-pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  if (coarse && !new URLSearchParams(location.search).has('fx')) game.g.postfx = false;
+} catch (e) {
+  /* no matchMedia — leave the grade on */
+}
+
 // audio contexts need a user gesture to start — run once, then unbind so the
 // handler doesn't re-fire for the life of the page
 let woke = false;

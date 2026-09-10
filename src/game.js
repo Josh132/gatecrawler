@@ -454,6 +454,7 @@ export function createGame(canvas) {
     panelOpen: false,
     drag: null, // { from:{kind,i,key}, id, count }
     pmouse: { x: 0, y: 0 },
+    uiXform: null, // active full-screen-panel scale transform on small viewports
     panelHit: [], // [{x,y,w,h, loc}]
     cam: { x: 0, y: 0 },
     shake: 0,
@@ -6048,7 +6049,10 @@ function panelLayout(g) {
   const scrap = { x: gx, y: gy + gridH + 10, w: gridW, h: 30 };
   cells.push({ loc: { kind: 'scrap' }, x: scrap.x, y: scrap.y, w: scrap.w, h: scrap.h });
 
-  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells, scrap, stashToggle, stashOn };
+  // uniform shrink so the whole window fits a small (mobile landscape) viewport
+  const k = Math.min(1, (view.w - 12) / (panelW + 24), (view.h - 12) / (panelH + 24));
+
+  return { px, py, panelW, panelH, S, cells, dollX, dollY, hbY, gx, gy, reqX, reqW, reqCells, scrap, stashToggle, stashOn, k };
 }
 
 function invRef(g, loc) {
@@ -6093,6 +6097,17 @@ function scrapValue(stack) {
   return Math.max(1, Math.round(per * rMul) * (stack.count || 1));
 }
 
+// screen -> natural mouse under the loadout panel's fit-scale (lay.k). uiXform
+// is only live during render, so panelPick/panelDrop derive it from lay.k.
+function panelPm(g, k) {
+  if (!k || k >= 1) return g.pmouse;
+  const { view } = g;
+  return {
+    x: view.w / 2 + (g.pmouse.x - view.w / 2) / k,
+    y: view.h / 2 + (g.pmouse.y - view.h / 2) / k,
+  };
+}
+
 function panelPick(g) {
   if (g.drag) return;
   // the panel eats the DOM `click` event (it drives drag/drop off mousedown), so
@@ -6104,17 +6119,18 @@ function panelPick(g) {
     }
   }
   const lay = panelLayout(g);
+  const pm = panelPm(g, lay.k);
   // BACKPACK <-> STASH toggle
   if (lay.stashToggle) {
     const b = lay.stashToggle;
-    if (g.pmouse.x >= b.x && g.pmouse.x <= b.x + b.w && g.pmouse.y >= b.y && g.pmouse.y <= b.y + b.h) {
+    if (pm.x >= b.x && pm.x <= b.x + b.w && pm.y >= b.y && pm.y <= b.y + b.h) {
       g.stashView = !g.stashView;
       return;
     }
   }
   // requisition strip: click a chip to draw one of that unlocked weapon
   for (const rc of lay.reqCells) {
-    if (g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h) {
+    if (pm.x >= rc.x && pm.x <= rc.x + rc.w && pm.y >= rc.y && pm.y <= rc.y + rc.h) {
       const left = invAdd(g.inv, rc.id, 1);
       if (left) g.message('No room in your pack');
       else {
@@ -6126,10 +6142,10 @@ function panelPick(g) {
   }
   for (const c of lay.cells) {
     if (
-      g.pmouse.x >= c.x &&
-      g.pmouse.x <= c.x + c.w &&
-      g.pmouse.y >= c.y &&
-      g.pmouse.y <= c.y + c.h
+      pm.x >= c.x &&
+      pm.x <= c.x + c.w &&
+      pm.y >= c.y &&
+      pm.y <= c.y + c.h
     ) {
       const st = invRef(g, c.loc);
       if (!st) return;
@@ -6145,13 +6161,14 @@ function panelDrop(g) {
   g.drag = null;
   if (!d) return;
   const lay = panelLayout(g);
+  const pm = panelPm(g, lay.k);
   let target = null;
   for (const c of lay.cells) {
     if (
-      g.pmouse.x >= c.x &&
-      g.pmouse.x <= c.x + c.w &&
-      g.pmouse.y >= c.y &&
-      g.pmouse.y <= c.y + c.h
+      pm.x >= c.x &&
+      pm.x <= c.x + c.w &&
+      pm.y >= c.y &&
+      pm.y <= c.y + c.h
     ) {
       target = c.loc;
       break;
@@ -6195,6 +6212,14 @@ function renderPanel(g) {
   ctx.fillRect(0, 0, view.w, view.h);
 
   const lay = panelLayout(g);
+  ctx.save();
+  if (lay.k < 1) {
+    ctx.translate(view.w / 2, view.h / 2);
+    ctx.scale(lay.k, lay.k);
+    ctx.translate(-view.w / 2, -view.h / 2);
+    g.uiXform = { k: lay.k, cx: view.w / 2, cy: view.h / 2 };
+  }
+  const pm = uiUnmap(g, g.pmouse.x, g.pmouse.y);
   ctx.fillStyle = 'rgba(12,17,26,0.96)';
   ctx.fillRect(lay.px, lay.py, lay.panelW, lay.panelH);
   ctx.strokeStyle = 'rgba(120,170,220,0.4)';
@@ -6221,7 +6246,7 @@ function renderPanel(g) {
     if (stashCap(g) > 0) {
       const tg = lay.stashToggle;
       if (tg) {
-        const over = g.pmouse.x >= tg.x && g.pmouse.x <= tg.x + tg.w && g.pmouse.y >= tg.y && g.pmouse.y <= tg.y + tg.h;
+        const over = pm.x >= tg.x && pm.x <= tg.x + tg.w && pm.y >= tg.y && pm.y <= tg.y + tg.h;
         ctx.fillStyle = over ? 'rgba(40,90,140,0.5)' : 'rgba(20,28,40,0.7)';
         ctx.fillRect(tg.x, tg.y, tg.w, tg.h);
         ctx.strokeStyle = '#6cf';
@@ -6316,7 +6341,7 @@ function renderPanel(g) {
       label = String(c.loc.i + 1);
       border = 'rgba(255,220,120,0.4)';
     }
-    const hover = g.pmouse.x >= c.x && g.pmouse.x <= c.x + c.w && g.pmouse.y >= c.y && g.pmouse.y <= c.y + c.h;
+    const hover = pm.x >= c.x && pm.x <= c.x + c.w && pm.y >= c.y && pm.y <= c.y + c.h;
     drawSlot(ctx, c.x, c.y, c.w, st, { label, border: hover ? '#cfe8ff' : border });
   }
 
@@ -6333,7 +6358,7 @@ function renderPanel(g) {
   }
   for (const rc of lay.reqCells) {
     const def = ITEMS[rc.id];
-    const hover = g.pmouse.x >= rc.x && g.pmouse.x <= rc.x + rc.w && g.pmouse.y >= rc.y && g.pmouse.y <= rc.y + rc.h;
+    const hover = pm.x >= rc.x && pm.x <= rc.x + rc.w && pm.y >= rc.y && pm.y <= rc.y + rc.h;
     ctx.fillStyle = hover ? 'rgba(40,90,140,0.5)' : 'rgba(20,28,40,0.7)';
     ctx.fillRect(rc.x, rc.y, rc.w, rc.h);
     ctx.strokeStyle = (RARITY_COLOR && RARITY_COLOR[rarityOf(rc.id)]) || 'rgba(120,160,210,0.4)';
@@ -6351,7 +6376,7 @@ function renderPanel(g) {
   // scrap bar — drag any item here to break it down for naquadah
   {
     const sc = lay.scrap;
-    const over = g.pmouse.x >= sc.x && g.pmouse.x <= sc.x + sc.w && g.pmouse.y >= sc.y && g.pmouse.y <= sc.y + sc.h;
+    const over = pm.x >= sc.x && pm.x <= sc.x + sc.w && pm.y >= sc.y && pm.y <= sc.y + sc.h;
     const armed = !!g.drag && over;
     ctx.fillStyle = armed ? 'rgba(120,60,40,0.55)' : over ? 'rgba(50,40,36,0.7)' : 'rgba(28,24,22,0.6)';
     ctx.fillRect(sc.x, sc.y, sc.w, sc.h);
@@ -6373,7 +6398,7 @@ function renderPanel(g) {
   textReset(ctx); // the scrap bar above left textAlign on 'center'
   for (const c of lay.cells) {
     if (c.loc.kind === 'scrap') continue;
-    const hover = g.pmouse.x >= c.x && g.pmouse.x <= c.x + c.w && g.pmouse.y >= c.y && g.pmouse.y <= c.y + c.h;
+    const hover = pm.x >= c.x && pm.x <= c.x + c.w && pm.y >= c.y && pm.y <= c.y + c.h;
     if (!hover) continue;
     const st = invRef(g, c.loc);
     if (!st || !ITEMS[st.id]) break;
@@ -6414,12 +6439,14 @@ function renderPanel(g) {
   if (g.drag && ITEMS[g.drag.id]) {
     const def = ITEMS[g.drag.id];
     ctx.globalAlpha = 0.9;
-    drawSlot(ctx, g.pmouse.x - lay.S / 2, g.pmouse.y - lay.S / 2, lay.S, { id: g.drag.id, count: g.drag.count, rarity: g.drag.rarity }, {
+    drawSlot(ctx, pm.x - lay.S / 2, pm.y - lay.S / 2, lay.S, { id: g.drag.id, count: g.drag.count, rarity: g.drag.rarity }, {
       bg: 'rgba(30,40,55,0.9)',
       border: def.color,
     });
     ctx.globalAlpha = 1;
   }
+  ctx.restore(); // matches the ctx.save() at the top (scaled or not)
+  g.uiXform = null;
 }
 
 function drawMinimap(g) {
@@ -6564,6 +6591,38 @@ function drawBossIntro(g) {
   ctx.restore();
 }
 
+// ---- adaptive UI scaling ------------------------------------------------
+// full-screen panels are laid out at a fixed "natural" size for desktop. On a
+// smaller viewport (mobile landscape) the whole panel is drawn through a uniform
+// scale transform so nothing is clipped. g.uiXform carries the active transform
+// so button() can store screen-space hit rects and the mouse can be un-mapped.
+function applyUiScale(g, natW, natH) {
+  const { ctx, view } = g;
+  // full-screen dim, UNscaled, so the corners are always covered
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,6,12,0.9)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.restore();
+  const k = Math.min(1, (view.w - 12) / natW, (view.h - 12) / natH);
+  g.uiXform = { k, cx: view.w / 2, cy: view.h / 2 };
+  ctx.save();
+  ctx.translate(view.w / 2, view.h / 2);
+  ctx.scale(k, k);
+  ctx.translate(-view.w / 2, -view.h / 2);
+  return k;
+}
+function endUiScale(g) {
+  if (!g.uiXform) return;
+  g.ctx.restore();
+  g.uiXform = null;
+}
+// screen point -> natural (panel) point under the active UI scale
+function uiUnmap(g, sx, sy) {
+  const t = g.uiXform;
+  if (!t) return { x: sx, y: sy };
+  return { x: t.cx + (sx - t.cx) / t.k, y: t.cy + (sy - t.cy) / t.k };
+}
+
 export function button(g, label, x, y, w, h, fn, enabled = true) {
   const { ctx } = g;
   ctx.save();
@@ -6580,8 +6639,14 @@ export function button(g, label, x, y, w, h, fn, enabled = true) {
   ctx.textBaseline = 'alphabetic';
   ctx.restore();
   if (enabled) {
+    // store a SCREEN-space hit rect so the plain click handler + panelPick work
+    // whether or not a UI scale transform is active
+    const t = g.uiXform;
+    const hr = t
+      ? { x: t.cx + (x - t.cx) * t.k, y: t.cy + (y - t.cy) * t.k, w: w * t.k, h: h * t.k }
+      : { x, y, w, h };
     g.buttons.push({
-      x, y, w, h,
+      x: hr.x, y: hr.y, w: hr.w, h: hr.h,
       fn: () => {
         try {
           if (sfx.uiClick) sfx.uiClick();
@@ -6655,11 +6720,12 @@ function renderPause(g) {
     renderUiScreen(g);
     return;
   }
+  applyUiScale(g, 740, 480);
   textReset(ctx);
   ctx.fillStyle = 'rgba(4,6,12,0.82)';
   ctx.fillRect(0, 0, view.w, view.h);
-  const w = Math.min(720, view.w - 80);
-  const h = Math.min(460, view.h - 60);
+  const w = 720;
+  const h = 460;
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
   ctx.fillStyle = 'rgba(12,17,26,0.98)';
@@ -6712,6 +6778,7 @@ function renderPause(g) {
     ctx.fillText(v, cx + 140, cy);
     cy += 18;
   }
+  endUiScale(g);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -6750,10 +6817,12 @@ function uiScroll(g, d) {
 }
 function renderUiScreen(g) {
   const top = g.uiStack[g.uiStack.length - 1];
+  applyUiScale(g, 800, 580);
   if (top === 'settings') renderSettings(g);
   else if (top === 'rebind') renderRebind(g);
   else if (top === 'codex') renderCodex(g);
   else uiPop(g);
+  endUiScale(g);
 }
 
 function updateMenu(g) {
@@ -6783,8 +6852,8 @@ function uiFrame(g, title, sub) {
   ctx.fillStyle = 'rgba(4,6,12,0.94)';
   ctx.fillRect(0, 0, view.w, view.h);
   starfield(g);
-  const w = Math.min(760, view.w - 60);
-  const h = Math.min(560, view.h - 48);
+  const w = 760;
+  const h = 560;
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
   ctx.fillStyle = 'rgba(10,14,22,0.96)';
@@ -7552,8 +7621,8 @@ export function panelFrame(g, title, sub) {
   const { ctx, view } = g;
   ctx.fillStyle = 'rgba(4,6,12,0.93)';
   ctx.fillRect(0, 0, view.w, view.h);
-  const w = Math.min(760, view.w - 80);
-  const h = Math.min(520, view.h - 80);
+  const w = 760;
+  const h = 520;
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
   ctx.fillStyle = 'rgba(12,17,26,0.97)';
@@ -7579,13 +7648,15 @@ export function panelFrame(g, title, sub) {
 }
 
 function renderStationPanel(g) {
+  if (!g.station || g.station === 'armory') { g.station = null; return; }
+  applyUiScale(g, 800, 560); // shrink the whole panel to fit a small viewport
   if (g.station === 'research') renderResearchPanel(g);
   else if (g.station === 'infirmary') renderInfirmaryPanel(g);
   else if (g.station === 'workbench') renderWorkbenchPanel(g);
   else if (g.station === 'operations') renderOperationsPanel(g);
   else if (g.station === 'roster') renderRosterPanel(g);
   else if (g.station === 'base') renderBasePanel(g);
-  else g.station = null;
+  endUiScale(g);
 }
 
 function renderGateMap(g) {
@@ -7805,33 +7876,38 @@ function drawBossBar(g) {
   const name = nexus ? 'THE INCURSION NEXUS' : (BOSS_NAME[v] || 'BOSS').toUpperCase();
   const sub = nexus ? 'ASSIMILATION CORE' : (BOSS_SUB[v] || '').toUpperCase();
   const tint = nexus ? '#8fe4ff' : (BOSS_TINT[v] || '#ffb347');
-  const w = Math.min(560, view.w - 120);
+  // compact on a small (mobile landscape) viewport — thinner, higher, no subtitle
+  const compact = Math.min(view.w, view.h) < 460;
+  const barH = compact ? 5 : 8;
+  const w = compact ? Math.min(320, view.w - 44) : Math.min(560, view.w - 120);
   const x = (view.w - w) / 2;
-  const y = 54;
+  const y = compact ? 18 : 54;
   const hf = clamp(e.hp / (e.maxHp || 1), 0, 1);
   ctx.save();
   textReset(ctx);
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(6,8,12,0.66)';
-  ctx.fillRect(x - 6, y - 16, w + 12, 34);
+  ctx.fillStyle = compact ? 'rgba(6,8,12,0.5)' : 'rgba(6,8,12,0.66)';
+  ctx.fillRect(x - 6, y - (compact ? 12 : 16), w + 12, compact ? 22 : 34);
   const segs = 24;
   const sw = w / segs;
   for (let i = 0; i < segs; i++) {
     ctx.fillStyle = i / segs < hf ? tint : 'rgba(255,255,255,0.10)';
-    ctx.fillRect(x + i * sw + 1, y, sw - 2, 8);
+    ctx.fillRect(x + i * sw + 1, y, sw - 2, barH);
   }
   ctx.strokeStyle = hexA(tint, 0.7);
   ctx.lineWidth = 1;
-  ctx.strokeRect(x, y, w, 8);
+  ctx.strokeRect(x, y, w, barH);
   if (e.shield > 0) {
     const smax = nexus ? 240 : (v === 'jaffa' ? 90 : 70);
     ctx.fillStyle = 'rgba(125,211,252,0.85)';
     ctx.fillRect(x, y - 3, w * clamp(e.shield / smax, 0, 1), 3);
   }
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 12px monospace';
-  ctx.fillText(name, view.w / 2, y - 4);
-  if (sub) {
+  ctx.font = compact ? 'bold 9px monospace' : 'bold 12px monospace';
+  const imm = (nexus || v === 'replicator') && e.immuneType && (e.shield > 0 || !nexus)
+    ? (e.immuneType === 'kinetic' ? '  ·  KINETIC-IMMUNE' : '  ·  ENERGY-IMMUNE') : '';
+  ctx.fillText(name + (compact ? imm : ''), view.w / 2, y - 4);
+  if (sub && !compact) {
     ctx.fillStyle = hexA(tint, 0.85);
     ctx.font = '9px monospace';
     ctx.fillText(sub, view.w / 2, y + 17);
@@ -7841,13 +7917,13 @@ function drawBossBar(g) {
   for (let i = 0; i < phases; i++) {
     ctx.fillStyle = i < cur ? tint : 'rgba(255,255,255,0.18)';
     ctx.beginPath();
-    ctx.arc(x + w + 10 + i * 9, y + 4, 3, 0, TAU);
+    ctx.arc(x + w + 9 + i * 8, y + barH / 2, compact ? 2.4 : 3, 0, TAU);
     ctx.fill();
   }
-  if ((nexus || v === 'replicator') && e.immuneType && (e.shield > 0 || !nexus)) {
+  if (imm && !compact) {
     ctx.fillStyle = e.immuneType === 'kinetic' ? '#ff9678' : '#96c8ff';
     ctx.font = '9px monospace';
-    ctx.fillText(e.immuneType === 'kinetic' ? 'KINETIC-IMMUNE' : 'ENERGY-IMMUNE', view.w / 2, y + 28);
+    ctx.fillText(imm.replace('  ·  ', ''), view.w / 2, y + 28);
   }
   ctx.restore();
   textReset(ctx);

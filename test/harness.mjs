@@ -1869,6 +1869,46 @@ section('panels: every station panel + menu sub-screen renders and its buttons f
   }
 }
 
+section('panels: fit-scale on a small (mobile landscape) viewport keeps buttons on-screen');
+{
+  const W = 720, H = 350;
+  globalThis.innerWidth = W;
+  globalThis.innerHeight = H;
+  fire(listeners, 'resize', {});
+  assert(g.view.w === W && g.view.h === H, `panels-fit: view resized to ${W}x${H} (${g.view.w}x${g.view.h})`);
+
+  const onScreen = (b, yslack) =>
+    b.x >= -2 && b.x + b.w <= W + 2 && b.y >= -2 && b.y + b.h <= H + yslack;
+
+  // loadout panel — the whole window must fit (this is the one that was clipped)
+  g.state = 'hub';
+  g.panelOpen = true;
+  g.station = null;
+  g.uiStack = [];
+  for (let f = 0; f < 2; f++) tick(gApi, g);
+  let bad = g.buttons.filter((b) => !onScreen(b, 2));
+  assert(bad.length === 0, `panels-fit: loadout window fits ${W}x${H} (${bad.length} off: ${JSON.stringify(bad[0] || {})})`);
+  g.panelOpen = false;
+
+  // station panels — the frame + its controls must fit horizontally; dense trees
+  // (research) can still overflow the bottom into a scroll region, so give y slack
+  for (const kind of ['research', 'workbench', 'operations', 'roster', 'base', 'infirmary']) {
+    g.state = 'hub';
+    g.station = kind;
+    for (let f = 0; f < 2; f++) tick(gApi, g);
+    bad = g.buttons.filter((b) => b.x < -2 || b.x + b.w > W + 2);
+    assert(bad.length === 0, `panels-fit: '${kind}' buttons fit the width (${bad.length} off)`);
+  }
+  g.station = null;
+
+  // restore
+  globalThis.innerWidth = 960;
+  globalThis.innerHeight = 600;
+  fire(listeners, 'resize', {});
+  g.state = 'menu';
+  g.uiStack = [];
+}
+
 // ---------------------------------------------------------------- report
 console.log('\n----------------------------------------');
 console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}   max enemies-in-wall: ${maxEnemyInWall}`);

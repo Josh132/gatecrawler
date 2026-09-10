@@ -7284,7 +7284,7 @@ function updateTips(g, dt) {
     pressed('Space') || pressed('Enter') || pressed('Escape') ||
     keyHit(g, 'up', 'KeyW') || keyHit(g, 'down', 'KeyS') ||
     keyHit(g, 'left', 'KeyA') || keyHit(g, 'right', 'KeyD') ||
-    keyHit(g, 'interact', 'KeyE') || g._tipTap || (mouse.down && !g.mouseWasDown);
+    keyHit(g, 'interact', 'KeyE') || g._tipTap;
   g._tipTap = false;
   const auto = tip.check && tip.check(g) && T.t > 1.4;
   if (T.t > 4 || auto || (dismissed && T.t > 0.3)) {
@@ -7304,11 +7304,13 @@ function renderTips(g, dt) {
   textReset(ctx);
   const tip = T.list[T.i];
   ctx.font = '12px monospace';
-  const tw = Math.min(view.w - 80, ctx.measureText(tip.txt).width + 40);
-  const bw = Math.max(260, tw);
-  const bh = 52;
+  // width caps to the viewport; body text wraps and the card grows to fit so
+  // long tips never spill off a phone screen
+  const bw = Math.min(420, Math.max(260, view.w - 48));
+  const lines = wrapLines(ctx, tip.txt, bw - 52);
+  const bh = 26 + lines.length * 16;
   const bx = (view.w - bw) / 2;
-  const by = view.h - 132;
+  const by = view.h - 96 - bh;
   ctx.fillStyle = 'rgba(8,12,20,0.92)';
   ctx.fillRect(bx, by, bw, bh);
   ctx.strokeStyle = 'rgba(120,200,255,0.6)';
@@ -7317,19 +7319,19 @@ function renderTips(g, dt) {
   ctx.fillStyle = '#8ef';
   ctx.font = 'bold 9px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(`TIP ${T.i + 1}/${T.list.length}`, bx + 12, by + 15);
+  ctx.fillText(`TIP ${T.i + 1}/${T.list.length}`, bx + 12, by + 14);
   ctx.fillStyle = '#dff';
   ctx.font = '12px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(tip.txt, view.w / 2, by + 33);
+  lines.forEach((ln, i) => ctx.fillText(ln, view.w / 2, by + 26 + i * 16));
   ctx.fillStyle = '#567';
   ctx.font = '9px monospace';
   ctx.textAlign = 'right';
-  ctx.fillText('tap / any key  →', bx + bw - 34, by + bh - 8);
+  ctx.fillText('tap / any key  →', bx + bw - 40, by + 14);
   ctx.textAlign = 'left';
   // tap the card to advance; the ✕ skips the rest
-  g.buttons.push({ x: bx, y: by, w: bw - 34, h: bh, fn: () => { g._tipTap = true; } });
-  button(g, '✕', bx + bw - 30, by + bh / 2 - 13, 26, 26, () => { g._skipTips = true; });
+  g.buttons.push({ x: bx, y: by, w: bw - 40, h: bh, fn: () => { g._tipTap = true; } });
+  button(g, '✕', bx + bw - 34, by + bh / 2 - 17, 30, 34, () => { g._skipTips = true; });
 }
 
 // ---- contextual field notes ----------------------------------------

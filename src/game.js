@@ -3262,11 +3262,13 @@ function lineBlocked(g, x0, y0, x1, y1) {
 // without the whole level conga-lining into the DHD room.
 const LEASH_DIST = 380;
 
-// the gate room is a sanctuary — enemies that don't live there won't cross into
-// it, so the player can always fall back to the gate. They hold at the threshold.
+// the gate room is a soft threshold, not a safe zone: guards still on post
+// ('idle') hold at the doorway so stepping through the gate isn't an instant
+// firefight — but once an enemy is engaged ('active') it will follow the player
+// anywhere, gate room included. Routing enemies flee through it freely.
 function keepOutOfGateRoom(g, e) {
   const gr = g.world.gateRoom;
-  if (!gr || e._room === gr || e.rout > 0) return;
+  if (!gr || e._room === gr || e.rout > 0 || e.state === 'active') return;
   const r = gr.rectPx;
   const m = 6;
   if (e.x < r.x - m || e.x > r.x + r.w + m || e.y < r.y - m || e.y > r.y + r.h + m) return;

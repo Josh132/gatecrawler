@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse to push if src/version.js doesn't match HEAD — so the version string on
+# the main menu always matches what GitHub Pages deploys.
+# Install:  npm run hooks   (copies this into .git/hooks/)
+exec node "$(git rev-parse --show-toplevel)/scripts/stamp-version.mjs" --check

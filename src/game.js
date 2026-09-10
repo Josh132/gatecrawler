@@ -4,6 +4,7 @@ import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
 import { TAU, clamp, glowCircle, figure, spider, critter, hexA, textReset, wrapLines, wrapText } from './draw.js';
 import { drawShadow, drawHumanoid, drawPlayer, drawEnemy } from './enemydraw.js';
+import { VERSION, versionLine } from './version.js';
 import {
   renderRosterPanel, renderBasePanel, renderResearchPanel, renderInfirmaryPanel,
   renderOperationsPanel, renderWorkbenchPanel,
@@ -163,7 +164,6 @@ import {
 
 const SAVE_KEY = 'gatecrawler.save.v1';
 const SAVE_SCHEMA = 1; // bump when a real data migration is needed; normalizeSave stamps it
-const BUILD_TAG = 'build 2026.09 · save v1'; // shown small on the menu; bump on notable releases
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
@@ -7396,7 +7396,11 @@ function renderMenu(g) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#7a9';
   ctx.font = '12px monospace';
-  ctx.fillText('P R O C E D U R A L   S G - 1   R O G U E L I T E', cx, titleY + 24);
+  ctx.fillText(
+    'P R O C E D U R A L   S G - 1   R O G U E L I T E      ·      v' + VERSION,
+    cx,
+    titleY + 24
+  );
 
   // one-line campaign hook straight off the active Operation
   let hook = 'The System Lords are massing. Hold the line.';
@@ -7445,9 +7449,9 @@ function renderMenu(g) {
     view.h - 26
   );
   ctx.textAlign = 'right';
-  ctx.fillStyle = '#456';
-  ctx.font = '9px monospace';
-  ctx.fillText(BUILD_TAG, view.w - 10, view.h - 10);
+  ctx.fillStyle = '#5a7690';
+  ctx.font = '10px monospace';
+  ctx.fillText(versionLine(), view.w - 10, view.h - 10);
   textReset(ctx);
 }
 

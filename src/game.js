@@ -4993,7 +4993,8 @@ function render(g, dt) {
     if (g.panelOpen) renderPanel(g);
     if (g.station) renderStationPanel(g);
   } else {
-    renderPlay(g, false, cbTags);
+    // dim the world (and drop the live HUD / crosshair) behind the debrief
+    renderPlay(g, g.state === 'dead', cbTags);
     if (g.panelOpen) renderPanel(g);
     if (g.state === 'dead') renderDead(g);
   }
@@ -5778,19 +5779,28 @@ function drawPickup(ctx, pk, playerNear) {
 
 function drawCrosshair(g) {
   const { ctx } = g;
+  const path = () => {
+    ctx.beginPath();
+    ctx.arc(mouse.x, mouse.y, 7, 0, TAU);
+    ctx.moveTo(mouse.x - 12, mouse.y);
+    ctx.lineTo(mouse.x - 4, mouse.y);
+    ctx.moveTo(mouse.x + 4, mouse.y);
+    ctx.lineTo(mouse.x + 12, mouse.y);
+    ctx.moveTo(mouse.x, mouse.y - 12);
+    ctx.lineTo(mouse.x, mouse.y - 4);
+    ctx.moveTo(mouse.x, mouse.y + 4);
+    ctx.lineTo(mouse.x, mouse.y + 12);
+  };
   ctx.save();
-  ctx.strokeStyle = 'rgba(180,240,255,0.85)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(mouse.x, mouse.y, 7, 0, TAU);
-  ctx.moveTo(mouse.x - 12, mouse.y);
-  ctx.lineTo(mouse.x - 4, mouse.y);
-  ctx.moveTo(mouse.x + 4, mouse.y);
-  ctx.lineTo(mouse.x + 12, mouse.y);
-  ctx.moveTo(mouse.x, mouse.y - 12);
-  ctx.lineTo(mouse.x, mouse.y - 4);
-  ctx.moveTo(mouse.x, mouse.y + 4);
-  ctx.lineTo(mouse.x, mouse.y + 12);
+  ctx.lineJoin = 'round';
+  // dark outline first so the reticle reads over pale sand and bright muzzle flash alike
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 4;
+  path();
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(200,245,255,0.95)';
+  ctx.lineWidth = 2;
+  path();
   ctx.stroke();
   ctx.restore();
 }
@@ -6755,11 +6765,11 @@ function renderPause(g) {
     renderUiScreen(g);
     return;
   }
-  applyUiScale(g, 740, 480);
+  applyUiScale(g, 640, 480);
   textReset(ctx);
   ctx.fillStyle = 'rgba(4,6,12,0.82)';
   ctx.fillRect(0, 0, view.w, view.h);
-  const w = 720;
+  const w = 620;
   const h = 460;
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
@@ -6881,13 +6891,15 @@ function updateMenu(g) {
   }
 }
 
-function uiFrame(g, title, sub) {
+function uiFrame(g, title, sub, narrowW) {
   const { ctx, view } = g;
   textReset(ctx);
   ctx.fillStyle = 'rgba(4,6,12,0.94)';
   ctx.fillRect(0, 0, view.w, view.h);
   starfield(g);
-  const w = 760;
+  // sparse screens (settings, key bindings) don't need the full width the codex
+  // uses for its lore column — a tighter frame keeps the eye on the content
+  const w = narrowW || 760;
   const h = 560;
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
@@ -6913,7 +6925,7 @@ function uiFrame(g, title, sub) {
 function renderSettings(g) {
   const { ctx } = g;
   const st = g.save.settings;
-  const F = uiFrame(g, 'SETTINGS', g.uiRoot === 'pause' ? 'run paused' : '');
+  const F = uiFrame(g, 'SETTINGS', g.uiRoot === 'pause' ? 'run paused' : '', 560);
   const sx = F.x + 30;
   let sy = F.y + 70 - g.settingsScroll;
   const clampv = (v) => Math.max(0, Math.min(1, Math.round(v * 20) / 20));
@@ -7660,22 +7672,38 @@ function renderHub(g) {
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
+  const hs = view.hud || 1;
+  const ms = (g.save.campaign && g.save.campaign.milestone) || 0;
+  // a dark plate so the header reads over the bright, high-contrast base floor
+  const plateW = Math.min(560 * hs, view.w);
+  const clipTo = (txt, px, fpx) => {
+    const cap = Math.max(6, Math.floor((plateW - px - 8) / (fpx * 0.62)));
+    return txt.length > cap ? txt.slice(0, cap - 1) + '…' : txt;
+  };
+  ctx.fillStyle = 'rgba(6,10,16,0.66)';
+  ctx.fillRect(0, 0, plateW, 76 * hs);
   ctx.fillStyle = '#9cf';
-  ctx.font = 'bold 15px monospace';
-  ctx.fillText('STARGATE COMMAND', 20, 28);
-  ctx.font = '12px monospace';
+  ctx.font = `bold ${Math.round(15 * hs)}px monospace`;
+  ctx.fillText(clipTo(`STARGATE COMMAND   ·   MILESTONE ${ms}`, 20 * hs, 15 * hs), 20 * hs, 28 * hs);
+  ctx.font = `${Math.round(12 * hs)}px monospace`;
   ctx.fillStyle = '#8ef';
   ctx.fillText(
-    `naquadah ${g.save.naquadah}     intel ${g.save.intel || 0}     sorties ${g.save.runs}     deepest threat ${g.save.deepestThreat}`,
-    20,
-    48
+    clipTo(
+      `naquadah ${g.save.naquadah}     intel ${g.save.intel || 0}     sorties ${g.save.runs}     deepest threat ${g.save.deepestThreat}`,
+      20 * hs, 12 * hs
+    ),
+    20 * hs,
+    48 * hs
   );
-  ctx.fillStyle = '#567';
+  ctx.fillStyle = '#89a';
   ctx.fillText(
-    (g._hubRoom ? g._hubRoom.name.toLowerCase() + '   ·   ' : '') +
-      'E at a station   ·   dial from the gate or the control room   ·   TAB gear   ·   Q heal',
-    20,
-    66
+    clipTo(
+      (g._hubRoom ? g._hubRoom.name.toLowerCase() + '   ·   ' : '') +
+        'E at a station   ·   dial from the gate or the control room   ·   TAB gear   ·   Q heal',
+      20 * hs, 12 * hs
+    ),
+    20 * hs,
+    66 * hs
   );
 
   renderMessages(g);

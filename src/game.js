@@ -6571,7 +6571,10 @@ function drawBossIntro(g) {
   const inP = clamp((3.4 - T) / 0.6, 0, 1);
   const out = clamp(T / 1.0, 0, 1);
   const a = Math.min(inP, out);
-  const cy = view.h * 0.32;
+  // on a small screen the banner sits high so it never covers the player
+  // fighting the boss directly below it
+  const small = Math.min(view.w, view.h) < 520;
+  const cy = view.h * (small ? 0.16 : 0.32);
   const tint = BOSS_TINT[v] || '#ffb347';
   ctx.save();
   ctx.textAlign = 'center';
@@ -6579,7 +6582,7 @@ function drawBossIntro(g) {
   // banner bars
   ctx.globalAlpha = a * 0.9;
   ctx.fillStyle = 'rgba(6,8,12,0.72)';
-  const bw = view.w * (0.3 + 0.5 * inP);
+  const bw = Math.min(view.w - 32, 520) * (0.375 + 0.625 * inP);
   ctx.fillRect(view.w / 2 - bw / 2, cy - 34, bw, 68);
   ctx.strokeStyle = tint;
   ctx.lineWidth = 2;

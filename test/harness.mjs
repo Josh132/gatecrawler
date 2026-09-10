@@ -515,7 +515,7 @@ for (let i = 0; i < 60 * 240 && worldsVisited < MAX_WORLDS; i++) {
   } else if (g.state === 'gatemap') {
     reachedGatemap++;
     // click the first destination node button
-    const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+    const node = g.buttons.find((b) => b._node);
     if (node) {
       clickAt(node.x + node.w / 2, node.y + node.h / 2);
       worldsVisited++;
@@ -601,7 +601,7 @@ section('gameplay: descend hop 0 -> 14 through the real gate map, invariants eac
     assert(g.state === 'gatemap', `deep hop ${lastHop}: DHD opens the gate map`);
     if (g.state !== 'gatemap') break;
     tick(gApi, g); // render map -> buttons
-    const node = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+    const node = g.buttons.find((b) => b._node);
     assert(!!node, `deep hop ${lastHop}: gate map offers a destination`);
     if (!node) break;
     node.fn(); // descend one hop
@@ -1272,7 +1272,7 @@ section('hub: walkable SGC, station panels, deploy via the gate, persistence');
   tick(gApi, g);
   assert(g.state === 'gatemap' && g.launching, `stepping into the gate opens the launch map (state=${g.state})`);
   tick(gApi, g);
-  const dest = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+  const dest = g.buttons.find((b) => b._node);
   assert(!!dest, 'launch map offers a destination');
   if (dest) clickAt(dest.x + dest.w / 2, dest.y + dest.h / 2);
   tick(gApi, g);
@@ -1610,7 +1610,7 @@ section('roster: the Jaffa grenadier displacer exists and appears in worlds');
     }
     if (g.state === 'gatemap') {
       tick(gApi, g);
-      const dest = g.buttons.find((b) => b.w >= 100 && b.h <= 60);
+      const dest = g.buttons.find((b) => b._node);
       if (dest) dest.fn();
       tick(gApi, g);
     }

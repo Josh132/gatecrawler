@@ -4993,8 +4993,12 @@ function render(g, dt) {
     if (g.state === 'dead') renderDead(g);
   }
   drawUnlockCard(g, dt); // sliding reward card — above everything but postfx
-  if ((g.state === 'play' || g.state === 'hub') && !g.paused) renderTips(g, dt);
-  if (!g.paused && !g.panelOpen && !g.station && !g.uiStack.length) renderHint(g);
+  if (
+    (g.state === 'play' || g.state === 'hub') &&
+    !g.paused && !g.panelOpen && !g.station && !(g.uiStack && g.uiStack.length)
+  )
+    renderTips(g, dt);
+  if (!g.paused && !g.panelOpen && !g.station && !g.uiStack.length && g.state !== 'gatemap') renderHint(g);
   if (g.paused) renderPause(g);
 
   // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
@@ -7692,17 +7696,25 @@ function renderStationPanel(g) {
 
 function renderGateMap(g) {
   const { ctx, view } = g;
+  // drawn through applyUiScale for a fixed 920×560 natural box — its unscaled
+  // 0.9 dim also covers the "PRESS E TO DIAL" / ghost text bleeding through from
+  // the dimmed world behind
+  const NW = 920;
+  const NH = 560;
+  applyUiScale(g, NW, NH);
+  const top = view.h / 2 - NH / 2;
   const cx = view.w / 2;
-  const cy = view.h / 2 - 10;
+  const cy = top + NH / 2 + 6;
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#8cf';
   ctx.font = 'bold 22px monospace';
-  ctx.fillText(g.launching ? 'DIAL OUT — CHOOSE FIRST DESTINATION' : 'GATE NETWORK — SELECT DESTINATION', cx, 56);
+  ctx.fillText(g.launching ? 'DIAL OUT — CHOOSE FIRST DESTINATION' : 'GATE NETWORK — SELECT DESTINATION', cx, top + 32);
 
   glowCircle(ctx, cx, cy, 10, '#6cf', 14);
   ctx.fillStyle = '#9cf';
   ctx.font = '11px monospace';
-  ctx.fillText((g.launching ? 'SGC' : g.params.address) + '  (here)', cx, cy + 26);
+  ctx.fillText((g.launching ? 'SGC' : g.params.address) + '  (here)', cx, cy + 24);
 
   const eff = fx(g);
   const wm = worldMods(g);
@@ -7718,12 +7730,12 @@ function renderGateMap(g) {
     ctx.fillText(
       dialCost > 0 ? `powering the gate: ${dialCost} naquadah  (you have ${g.runNaq})` : 'dial is free',
       cx,
-      cy + 42
+      cy + 40
     );
   }
 
   const n = g.mapNodes.length || 1;
-  const R = Math.min(view.w, view.h) * 0.3;
+  const R = 196; // fixed natural radius — applyUiScale handles the fit
   g.mapNodes.forEach((node, i) => {
     const a = -Math.PI / 2 + (i / n) * TAU;
     const x = cx + Math.cos(a) * R;
@@ -7743,21 +7755,21 @@ function renderGateMap(g) {
     glowCircle(ctx, x, y, 14, afford ? col : '#556', afford ? 12 : 4);
     ctx.fillStyle = afford ? '#cde' : '#889';
     ctx.font = 'bold 11px monospace';
-    ctx.fillText(node.addr, x, y - 24);
+    ctx.fillText(node.addr, x, y - 22);
     ctx.fillStyle = '#9ab';
     ctx.font = '10px monospace';
     if (canSee) {
       const loot = pr.threat >= 6 ? 'rich' : pr.threat >= 3 ? 'good' : 'light';
-      ctx.fillText(`threat ${pr.threat}  ·  ${pr.faction}  ·  loot ${loot}`, x, y + 30);
+      ctx.fillText(clip(`threat ${pr.threat} · ${pr.faction} · loot ${loot}`, 26), x, y + 28);
       if (pr.mods.length) {
         ctx.fillStyle = '#fd6';
-        ctx.fillText('[ ' + modLabels(pr.mods).join('  ') + ' ]', x, y + 44);
+        ctx.fillText(clip('[ ' + modLabels(pr.mods).join(' ') + ' ]', 26), x, y + 40);
       }
     } else {
       const band = pr.threat >= 7 ? 'high threat' : pr.threat >= 4 ? 'moderate threat' : 'low threat';
-      ctx.fillText(`${pr.faction}  ·  ${band}`, x, y + 30);
+      ctx.fillText(clip(`${pr.faction} · ${band}`, 26), x, y + 28);
       ctx.fillStyle = '#678';
-      ctx.fillText('exact readout: research Forward Telemetry', x, y + 44);
+      ctx.fillText('research Forward Telemetry', x, y + 40);
     }
     // campaign markers: an amber flag on worlds that feed the active op, and a
     // red capstone for the fixed finale address once it's unlocked
@@ -7785,30 +7797,37 @@ function renderGateMap(g) {
       ctx.fillText('THE INCURSION NEXUS', x, y - 36);
     }
     if (afford) {
-      g.buttons.push({
-        x: x - 62,
-        y: y - 20,
-        w: 124,
-        h: 44,
-        fn: () => {
-          if (g.launching) {
-            launchRun(g, node.addr);
-          } else {
-            g.runNaq = Math.max(0, g.runNaq - dialCost);
-            g.heat += 0.6 * (eff.heatMul || 1) * wm.heatMul; // pushing deeper stokes the hunt
-            startWorld(g, node.addr, targetHop);
-          }
-        },
-      });
+      const fn = () => {
+        if (g.launching) {
+          launchRun(g, node.addr);
+        } else {
+          g.runNaq = Math.max(0, g.runNaq - dialCost);
+          g.heat += 0.6 * (eff.heatMul || 1) * wm.heatMul; // pushing deeper stokes the hunt
+          startWorld(g, node.addr, targetHop);
+        }
+      };
+      // hit rect must be screen-space while applyUiScale is active (mirrors button())
+      const t = g.uiXform;
+      const bx = x - 62;
+      const by = y - 20;
+      g.buttons.push(
+        t
+          ? { x: t.cx + (bx - t.cx) * t.k, y: t.cy + (by - t.cy) * t.k, w: 124 * t.k, h: 44 * t.k, _node: true, fn }
+          : { x: bx, y: by, w: 124, h: 44, _node: true, fn }
+      );
     }
   });
 
   if (g.launching) {
-    button(g, 'CANCEL  (Esc)', cx - 90, view.h - 68, 180, 40, () => {
+    button(g, 'CANCEL  (Esc)', cx - 90, top + NH - 58, 180, 40, () => {
       g.launching = false;
       enterHub(g);
     });
   } else {
+    // an out — the DHD is not a commitment; sits under the title, not over it
+    button(g, '‹ STAY ON THIS FLOOR  (Esc)', cx - 130, top + 46, 260, 26, () => {
+      g.state = 'play';
+    });
     // the decision, spelled out
     ctx.textAlign = 'center';
     ctx.font = '11px monospace';
@@ -7820,16 +7839,14 @@ function renderGateMap(g) {
       `DESCEND — ${costTxt}heat rises, ${threatTxt}, better loot` +
         `      ·      DIAL HOME — keep it all, run ends`,
       cx,
-      view.h - 84
+      top + NH - 74
     );
-    button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah  +  ${g.runIntel} intel`, cx - 210, view.h - 68, 420, 40, () =>
+    button(g, `DIAL HOME  —  bank ${g.runNaq} naquadah  +  ${g.runIntel} intel`, cx - 210, top + NH - 58, 420, 40, () =>
       dialHome(g)
     );
-    // an out — the DHD is not a commitment; you can always step away
-    button(g, '‹ STAY ON THIS FLOOR  (Esc)', 24, 40, 230, 30, () => {
-      g.state = 'play';
-    });
   }
+  textReset(ctx);
+  endUiScale(g);
 }
 
 // nicer names for the debrief bestiary / kill breakdown; falls back to prettify

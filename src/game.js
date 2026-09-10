@@ -204,18 +204,24 @@ export function defaultSave() {
 // one level of shape repair: keep the default's keys, take the save's value for
 // each only when it's present and type-compatible; recurse into nested plain
 // objects. a `null` default means "type unknown — pass whatever's there".
+function isPlainObj(v) {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
 function mergeShape(def, src) {
-  if (!src || typeof src !== 'object' || Array.isArray(src)) return Object.assign({}, def);
+  if (!isPlainObj(src)) return Object.assign({}, def);
   const out = Object.assign({}, def);
   for (const k of Object.keys(def)) {
     const dv = def[k];
     const sv = src[k];
     if (sv == null) continue;
-    if (dv === null) out[k] = sv;
+    if (dv === null) out[k] = sv; // type unknown — pass whatever's there
     else if (Array.isArray(dv)) {
       if (Array.isArray(sv)) out[k] = sv;
-    } else if (typeof dv === 'object') out[k] = mergeShape(dv, sv);
-    else if (typeof sv === typeof dv) out[k] = sv;
+    } else if (isPlainObj(dv)) {
+      // an EMPTY default object is an open-ended map (progress, …) — keep the
+      // save's contents wholesale; a non-empty one has a known sub-shape to repair
+      out[k] = Object.keys(dv).length === 0 ? (isPlainObj(sv) ? sv : {}) : mergeShape(dv, sv);
+    } else if (typeof sv === typeof dv) out[k] = sv;
   }
   return out;
 }
@@ -232,8 +238,11 @@ export function normalizeSave(s) {
     else if (dv === null) continue; // default type unknown (inv) — accept as-is
     else if (Array.isArray(dv)) {
       if (!Array.isArray(sv)) s[k] = dv;
-    } else if (typeof dv === 'object') s[k] = mergeShape(dv, sv);
-    else if (typeof sv !== typeof dv) s[k] = dv; // e.g. tech saved as a string
+    } else if (isPlainObj(dv)) {
+      // empty default = open-ended map (weapons, bestiary, hints): keep the
+      // save's data if it's an object, else reset. non-empty = repair sub-shape.
+      s[k] = Object.keys(dv).length === 0 ? (isPlainObj(sv) ? sv : {}) : mergeShape(dv, sv);
+    } else if (typeof sv !== typeof dv) s[k] = dv; // e.g. tech saved as a string
   }
   // structural guarantees downstream code relies on, after the generic pass
   if (!s.campaign.progress || typeof s.campaign.progress !== 'object') s.campaign.progress = {};

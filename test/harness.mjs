@@ -1482,6 +1482,25 @@ section('save: normalizeSave repairs partial / legacy / hostile blobs');
     assert(s.campaign && typeof s.campaign.progress === 'object' && Array.isArray(s.campaign.completed), `normalizeSave(${name}) campaign sub-shape intact`);
     assert(s.schema === defaultSave().schema, `normalizeSave(${name}) stamps the current schema`);
   }
+  // a valid save's real data must survive normalization untouched
+  {
+    const good = normalizeSave({
+      naquadah: 1234,
+      tech: ['xeno_naquadah', 'arm_startmod'],
+      weapons: { w_p90: { level: 5, xp: 900, mods: ['m_x'] } },
+      bestiary: { jaffa: { seen: 4, killed: 3 } },
+      campaign: { op: 'op_first', progress: { kills: 12 }, completed: ['op_zero'], milestone: 2 },
+      settings: { shake: 0.5, binds: { dodge: 'ShiftLeft' } },
+      known: ['AUR-CRT-VIR-BOO-CEN-SER', 'AUR-CRT-VIR-BOO-CEN-XXX'],
+    });
+    assert(good.naquadah === 1234 && good.tech.length === 2, 'normalizeSave keeps valid scalars/arrays');
+    assert(good.weapons.w_p90 && good.weapons.w_p90.level === 5 && good.weapons.w_p90.xp === 900, 'normalizeSave keeps the whole weapons mastery map');
+    assert(good.bestiary.jaffa && good.bestiary.jaffa.killed === 3, 'normalizeSave keeps the bestiary map');
+    assert(good.campaign.op === 'op_first' && good.campaign.progress.kills === 12 && good.campaign.completed[0] === 'op_zero', 'normalizeSave keeps campaign sub-shape + progress map');
+    assert(good.settings.shake === 0.5 && good.settings.binds.dodge === 'ShiftLeft', 'normalizeSave keeps settings + nested binds');
+    assert(good.known.length === 2, 'normalizeSave keeps a multi-entry known list');
+  }
+
   // a hostile blob loaded through createGame must not crash a short run
   localStorage.setItem('gatecrawler.save.v1', JSON.stringify({ tech: 'x', settings: { binds: null }, campaign: [], known: 5 }));
   let ok = true;

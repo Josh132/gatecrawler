@@ -9,8 +9,8 @@
 // and the pre-push hook refuses to push if they're stale — so the string on the
 // main menu always matches the commit that's actually deployed.
 export const VERSION = '0.1.0';
-export const BUILD = 150;
+export const BUILD = 152;
 export const BUILD_DATE = '2026-09-10';
-export const BUILD_REV = 'v0.1.0-25-g2602050';
+export const BUILD_REV = 'v0.1.0-27-g7b763a7';
 
 export const versionLine = () => `v${VERSION}  ·  build ${BUILD}  ·  ${BUILD_DATE}  ·  ${BUILD_REV}`;

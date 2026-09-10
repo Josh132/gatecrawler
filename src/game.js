@@ -6630,7 +6630,10 @@ function applyUiScale(g, natW, natH) {
   ctx.fillStyle = 'rgba(4,6,12,0.9)';
   ctx.fillRect(0, 0, view.w, view.h);
   ctx.restore();
-  const k = Math.min(1, (view.w - 12) / natW, (view.h - 12) / natH);
+  // never below what fits the viewport; on a big desktop screen allow the modal
+  // to grow with the HUD scale (capped at 1.4x) so it isn't marooned in the middle
+  const grow = Math.min(view.hud || 1, 1.4);
+  const k = Math.min(grow, (view.w - 12) / natW, (view.h - 12) / natH);
   g.uiXform = { k, cx: view.w / 2, cy: view.h / 2 };
   ctx.save();
   ctx.translate(view.w / 2, view.h / 2);
@@ -8127,7 +8130,53 @@ function renderDebrief(g) {
 
   const kia = d.outcome === 'KIA';
   const w = Math.min(900, view.w - 60);
-  const h = Math.min(612, view.h - 60);
+  const pad = 28;
+  const iw = w - pad * 2;
+  const colGap = 22;
+  const colW = (iw - colGap * 2) / 3;
+
+  // build the three column lists up front so the box can be sized to its
+  // content instead of leaving a dead gap above the button on a tall screen
+  const combat = [{ t: 'Kills  ' + d.killsTotal }];
+  for (const k of d.topKinds) combat.push({ t: '  ' + k.name + ' x' + k.n, c: '#9ab' });
+  combat.push({ t: 'Bosses down  ' + d.bosses });
+  combat.push({ t: 'Damage taken  ' + d.dmgTaken });
+  combat.push({ t: 'Shots on target  ' + d.hits });
+  combat.push({ t: 'Best kill streak  ' + d.bestStreak });
+
+  const rec = [
+    { t: 'Naquadah  +' + d.naqGain, c: '#8ef' },
+    { t: 'Intel  +' + d.intelGain, c: '#b6f0ff' },
+  ];
+  if (d.salvGain) rec.push({ t: 'Salvage  +' + d.salvGain, c: '#dca' });
+  rec.push({ t: 'Items carried out  ' + d.itemsFound });
+  if (kia && d.lost) rec.push({ t: 'Backpack lost  ' + d.lost + ' items', c: '#e88' });
+  rec.push({ t: 'Banked naquadah', c: '#9ab' });
+  rec.push({ t: '  ' + d.bankedBefore + '  ->  ' + d.bankedAfter, c: '#8ef' });
+
+  const inc = [];
+  if (d.opName) inc.push({ t: d.opName, c: '#9cf' });
+  if (d.opDeltas.length) {
+    for (const o of d.opDeltas) {
+      inc.push({ t: (o.done ? '[x] ' : '[ ] ') + o.label, c: o.done ? '#7fe0a0' : '#cde' });
+      inc.push({ t: '     ' + o.before + ' -> ' + o.after + ' / ' + o.need, c: '#9ab' });
+    }
+  } else {
+    inc.push({ t: 'No active operation.', c: '#9ab' });
+  }
+  if (d.opJustCompleted) inc.push({ t: 'Claim the reward at the SGC Operations desk.', c: '#7fe0a0' });
+  if (d.newBestiary.length) {
+    inc.push({ t: 'New in the codex:', c: '#cda' });
+    inc.push({ t: '  ' + d.newBestiary.join(', '), c: '#9ab' });
+  }
+  for (const s of d.special) inc.push({ t: '- ' + s, c: '#bda' });
+
+  ctx.font = '11px monospace';
+  const wl = (list) => list.reduce((n, ln) => n + wrapLines(ctx, ln.t, colW).length, 0);
+  const bodyLines = Math.max(wl(combat), wl(rec), wl(inc));
+  const headZone = 46 + 22 + (d.opJustCompleted ? 34 : 8);
+  const contentHeight = headZone + 22 /* heading */ + bodyLines * 16;
+  const h = Math.max(Math.min(340, view.h - 60), Math.min(560, view.h - 60, contentHeight + 96));
   const x = (view.w - w) / 2;
   const y = (view.h - h) / 2;
   ctx.fillStyle = 'rgba(10,14,22,0.97)';
@@ -8136,9 +8185,7 @@ function renderDebrief(g) {
   ctx.lineWidth = 2;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-  const pad = 28;
   const ix = x + pad;
-  const iw = w - pad * 2;
   let hy = y + 46;
   ctx.textAlign = 'left';
   ctx.fillStyle = kia ? '#e8564d' : '#5ec86a';
@@ -8167,8 +8214,6 @@ function renderDebrief(g) {
     hy += 8;
   }
 
-  const colGap = 22;
-  const colW = (iw - colGap * 2) / 3;
   const colX = [ix, ix + colW + colGap, ix + (colW + colGap) * 2];
   const colTop = hy;
   const lh = 16;
@@ -8194,43 +8239,10 @@ function renderDebrief(g) {
   };
 
   heading(colX[0], 'COMBAT');
-  const combat = [{ t: 'Kills  ' + d.killsTotal }];
-  for (const k of d.topKinds) combat.push({ t: '  ' + k.name + ' x' + k.n, c: '#9ab' });
-  combat.push({ t: 'Bosses down  ' + d.bosses });
-  combat.push({ t: 'Damage taken  ' + d.dmgTaken });
-  combat.push({ t: 'Shots on target  ' + d.hits });
-  combat.push({ t: 'Best kill streak  ' + d.bestStreak });
   rows(colX[0], combat);
-
   heading(colX[1], 'RECOVERED');
-  const rec = [
-    { t: 'Naquadah  +' + d.naqGain, c: '#8ef' },
-    { t: 'Intel  +' + d.intelGain, c: '#b6f0ff' },
-  ];
-  if (d.salvGain) rec.push({ t: 'Salvage  +' + d.salvGain, c: '#dca' });
-  rec.push({ t: 'Items carried out  ' + d.itemsFound });
-  if (kia && d.lost) rec.push({ t: 'Backpack lost  ' + d.lost + ' items', c: '#e88' });
-  rec.push({ t: 'Banked naquadah', c: '#9ab' });
-  rec.push({ t: '  ' + d.bankedBefore + '  ->  ' + d.bankedAfter, c: '#8ef' });
   rows(colX[1], rec);
-
   heading(colX[2], 'THE INCURSION');
-  const inc = [];
-  if (d.opName) inc.push({ t: d.opName, c: '#9cf' });
-  if (d.opDeltas.length) {
-    for (const o of d.opDeltas) {
-      inc.push({ t: (o.done ? '[x] ' : '[ ] ') + o.label, c: o.done ? '#7fe0a0' : '#cde' });
-      inc.push({ t: '     ' + o.before + ' -> ' + o.after + ' / ' + o.need, c: '#9ab' });
-    }
-  } else {
-    inc.push({ t: 'No active operation.', c: '#9ab' });
-  }
-  if (d.opJustCompleted) inc.push({ t: 'Claim the reward at the SGC Operations desk.', c: '#7fe0a0' });
-  if (d.newBestiary.length) {
-    inc.push({ t: 'New in the codex:', c: '#cda' });
-    inc.push({ t: '  ' + d.newBestiary.join(', '), c: '#9ab' });
-  }
-  for (const s of d.special) inc.push({ t: '- ' + s, c: '#bda' });
   rows(colX[2], inc);
 
   const bw = 300;

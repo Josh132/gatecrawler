@@ -1521,6 +1521,72 @@ section('save: normalizeSave repairs partial / legacy / hostile blobs');
   assert(ok, 'a run started from a hostile save blob survives 200 frames');
 }
 
+// every station panel + every menu sub-screen must render, and its buttons must
+// fire, without throwing — the bot only ever opens the research panel + menu, so
+// this is the guard that a game.js -> module split didn't strand a reference.
+// Runs last: it fires buttons freely (spending, navigating) and does not restore.
+section('panels: every station panel + menu sub-screen renders and its buttons fire');
+{
+  g.skipHub = false;
+  g.state = 'menu';
+  keyDown('Enter');
+  tick(gApi, g);
+  assert(g.state === 'hub', `panels: reached the hub (state=${g.state})`);
+  g.save.naquadah = 8000;
+  g.save.intel = 300;
+  g.save.salvage = 400;
+
+  const backToHub = () => {
+    g.paused = false;
+    g.panelOpen = false;
+    g.uiStack = [];
+    if (g.state !== 'hub') {
+      g.state = 'menu';
+      keyDown('Enter');
+      tick(gApi, g);
+    }
+  };
+
+  for (const kind of ['research', 'infirmary', 'workbench', 'operations', 'roster', 'base']) {
+    backToHub();
+    g.station = kind;
+    let threw = false;
+    for (let f = 0; f < 3; f++) if (!tick(gApi, g)) threw = true;
+    assert(!threw && Array.isArray(g.buttons), `station panel '${kind}' renders without throwing`);
+    for (const b of g.buttons.slice()) {
+      try {
+        b.fn();
+      } catch (e) {
+        assert(false, `station panel '${kind}' button threw: ${e && e.message}`);
+      }
+      backToHub();
+      g.station = kind;
+      if (!tick(gApi, g)) assert(false, `station panel '${kind}' threw re-rendering after a button`);
+    }
+  }
+  backToHub();
+
+  for (const screen of ['settings', 'rebind', 'codex']) {
+    g.state = 'menu';
+    g.uiStack = [screen];
+    g.uiRoot = 'menu';
+    let threw = false;
+    for (let f = 0; f < 3; f++) if (!tick(gApi, g)) threw = true;
+    assert(!threw, `menu screen '${screen}' renders without throwing`);
+    for (const b of g.buttons.slice()) {
+      try {
+        b.fn();
+      } catch (e) {
+        assert(false, `menu screen '${screen}' button threw: ${e && e.message}`);
+      }
+      g.state = 'menu';
+      g.uiStack = g.uiStack.length ? g.uiStack : [screen];
+      g.uiRoot = 'menu';
+      if (!tick(gApi, g)) assert(false, `menu screen '${screen}' threw re-rendering after a button`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- report
 console.log('\n----------------------------------------');
 console.log(`checks: ${checks}   failures: ${failures}   frames simulated: ${frames}`);

@@ -163,6 +163,7 @@ import {
 
 const SAVE_KEY = 'gatecrawler.save.v1';
 const SAVE_SCHEMA = 1; // bump when a real data migration is needed; normalizeSave stamps it
+const BUILD_TAG = 'build 2026.09 · save v1'; // shown small on the menu; bump on notable releases
 
 // world-render zoom — how close the camera sits to the character. Everything in
 // world space is drawn through this; screen-space HUD is drawn after the reset.
@@ -207,6 +208,7 @@ export function defaultSave() {
       cbPalette: false, // colour-blind faction tagging (HUD legend note — see TODO)
       aimAssist: false, // gamepad: snap pad-aim toward the nearest enemy
       seenTutorial: false, // first-run corner tips have been shown
+      difficulty: 'normal', // 'story' | 'normal' | 'hard' — combat/HP tuning only, never worldgen
     },
   };
 }
@@ -293,6 +295,18 @@ export function fx(g) {
   g._eff = e;
   g._effDirty = false;
   return e;
+}
+
+// player-facing difficulty knob (Settings). combat/HP tuning ONLY — never touches
+// worldgen or any seeded stream. 'normal' is all-1s so it's a no-op by default.
+const DIFF = {
+  story: { taken: 0.7, dealt: 1.15, heat: 0.85 },
+  normal: { taken: 1, dealt: 1, heat: 1 },
+  hard: { taken: 1.25, dealt: 0.9, heat: 1.18 },
+};
+function diffMul(g, which) {
+  const d = (g.save && g.save.settings && g.save.settings.difficulty) || 'normal';
+  return (DIFF[d] || DIFF.normal)[which];
 }
 // call after any tech / roster / base-upgrade purchase (or campaign reset)
 export function markEffDirty(g) {
@@ -1361,7 +1375,7 @@ function updateGrenades(g, dt) {
 function updateHeatAndStreak(g, dt) {
   const p = g.player;
   // heat: the longer a run goes, the harder the faction hunts you
-  g.heat += dt * 0.048 * (fx(g).heatMul || 1) * worldMods(g).heatMul;
+  g.heat += dt * 0.048 * (fx(g).heatMul || 1) * worldMods(g).heatMul * diffMul(g, 'heat');
   if (g.heat >= 0.8 && !(g.save.hints && g.save.hints.heat))
     hint(g, 'heat', 'The faction has noticed you. The hunt only grows while a run goes on — at SWARM a Hunter starts tracking you across the whole map. Clear fast, or dial out.');
   if (!g.hunterSpawned && g.heat >= 2) spawnHunter(g);
@@ -3063,6 +3077,7 @@ function hitEnemy(g, e, b) {
     if (b.from === 'player') pushFloat(g, e.x + rr(-6, 6), e.y - e.r - 4, 'SHIELDED', '#8fe4ff', 9);
     return;
   }
+  dmg *= diffMul(g, 'dealt'); // difficulty knob: story hits harder, hard hits softer
   if (e.kind === 'boss' && e.shield > 0) {
     e.shield -= dmg;
     e.shieldT = 0;
@@ -3142,7 +3157,7 @@ function damagePlayer(g, amount, vx, vy) {
   if (p.iframe > 0 || p.dodge > 0) return;
   const region = rollHitRegion(Math.random);
   const dr = region === 'none' ? 0 : regionDR(g.inv)[region] || 0;
-  let dmg = amount * (1 - dr);
+  let dmg = amount * (1 - dr) * diffMul(g, 'taken');
   g.lastHitRegion = region;
   if (p.shield > 0) {
     const absorbed = Math.min(p.shield, dmg);
@@ -6793,6 +6808,23 @@ function renderSettings(g) {
   toggle('Colour-blind faction tags', !!st.cbPalette, () => { st.cbPalette = !st.cbPalette; persist(g.save); });
   toggle('Gamepad aim-assist', !!st.aimAssist, () => { st.aimAssist = !st.aimAssist; persist(g.save); });
 
+  const DIFFS = ['story', 'normal', 'hard'];
+  if (sy > F.y + 40 && sy < F.y + F.h - 60) {
+    const cur = st.difficulty || 'normal';
+    row('Difficulty');
+    button(g, cur.toUpperCase(), sx + 250, sy - 12, 120, 22, () => {
+      st.difficulty = DIFFS[(DIFFS.indexOf(cur) + 1) % DIFFS.length];
+      persist(g.save);
+      g.message(
+        'Difficulty: ' +
+          (st.difficulty === 'story' ? 'STORY — you take less, hit harder'
+            : st.difficulty === 'hard' ? 'HARD — enemies hit harder, the hunt builds faster'
+            : 'NORMAL')
+      );
+    });
+  }
+  sy += 34;
+
   sy += 6;
   if (sy > F.y + 40 && sy < F.y + F.h - 60) {
     button(g, 'KEY BINDINGS →', sx, sy - 14, 200, 28, () => uiPush(g, 'rebind'));
@@ -7269,15 +7301,46 @@ function renderMenu(g) {
 
   const titleY = Math.min(view.h * 0.36, 250);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#8cf';
-  ctx.shadowBlur = 24;
+
+  // gate-iris motif behind the wordmark: nested chevron rings, slowly turning
+  ctx.save();
+  ctx.translate(cx, titleY - 6);
+  ctx.rotate(g.time * 0.08);
+  for (let r = 0; r < 3; r++) {
+    const rad = 118 - r * 26;
+    ctx.strokeStyle = `rgba(120,200,255,${0.05 + r * 0.03})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let k = 0; k < 9; k++) {
+      const a0 = (k / 9) * TAU + (r % 2 ? 0.16 : 0);
+      ctx.arc(0, 0, rad, a0 + 0.05, a0 + TAU / 9 - 0.05);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // wordmark — heavy serif for contrast against the all-monospace UI, tracked wide
+  ctx.save();
+  ctx.shadowBlur = 26;
   ctx.shadowColor = '#39f';
-  ctx.font = 'bold 54px monospace';
-  ctx.fillText('GATE  CRAWLER', cx, titleY);
+  ctx.fillStyle = '#cfeaff';
+  ctx.font = '900 52px Georgia, "Times New Roman", serif';
+  const word = 'GATE CRAWLER';
+  // manual letter-spacing so it reads as an emblem, not a headline
+  const tw = ctx.measureText(word).width;
+  const track = 6;
+  let lx = cx - (tw + track * (word.length - 1)) / 2;
+  ctx.textAlign = 'left';
+  for (const ch of word) {
+    ctx.fillText(ch, lx, titleY);
+    lx += ctx.measureText(ch).width + track;
+  }
+  ctx.restore();
+  ctx.textAlign = 'center';
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#7a9';
-  ctx.font = '13px monospace';
-  ctx.fillText('a procedural top-down SG-1 roguelite', cx, titleY + 24);
+  ctx.font = '12px monospace';
+  ctx.fillText('P R O C E D U R A L   S G - 1   R O G U E L I T E', cx, titleY + 24);
 
   // one-line campaign hook straight off the active Operation
   let hook = 'The System Lords are massing. Hold the line.';
@@ -7325,6 +7388,11 @@ function renderMenu(g) {
     cx,
     view.h - 26
   );
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#456';
+  ctx.font = '9px monospace';
+  ctx.fillText(BUILD_TAG, view.w - 10, view.h - 10);
+  textReset(ctx);
 }
 
 // ---- the SGC hub -------------------------------------------------------------

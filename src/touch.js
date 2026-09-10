@@ -12,10 +12,13 @@
 //   edge buttons-> injectPress(code) -> dodge / reload / heal / nade / swap /
 //                                       interact / inventory / pause
 //
-// NOTHING is built and NO overlay exists until the first real `touchstart`, so
-// a plain desktop (mouse only) is completely untouched. On a hybrid machine the
-// overlay hides again the moment a real mouse move is seen, and returns on the
-// next touch.
+// It also hangs two chrome pieces off the same overlay: a FULLSCREEN button
+// (a real <button>, so the tap is a genuine user gesture) and a portrait
+// "rotate your device" scrim, since the game is laid out for landscape.
+//
+// NOTHING is built on a plain mouse-only desktop (no touch, no coarse pointer),
+// which is left completely untouched. On a hybrid machine the touch UI hides
+// again the moment a real mouse is used, and returns on the next touch.
 //
 // While a menu / panel / debrief is up the overlay hides itself and taps on the
 // canvas are forwarded as synthetic mouse events, which drive every existing
@@ -110,10 +113,11 @@ function placeButton(e, side, slot) {
 }
 
 function buildOverlay() {
+  // the container itself never eats input — only its children opt back in
   root = el(
     'div',
     'position:fixed;inset:0;z-index:5;pointer-events:none;touch-action:none;' +
-      'display:none;overscroll-behavior:none;'
+      'overscroll-behavior:none;'
   );
   root.id = 'touch';
 
@@ -149,15 +153,87 @@ function buildOverlay() {
 
   root._hint = el(
     'div',
-    'position:fixed;left:50%;top:10px;transform:translateX(-50%);pointer-events:none;' +
-      'font:500 12px/1.4 ui-monospace,Menlo,monospace;color:#bfefff;text-align:center;' +
-      'background:rgba(8,16,22,.6);border:1px solid rgba(94,239,255,.3);border-radius:6px;' +
-      'padding:6px 12px;transition:opacity .6s;white-space:nowrap;',
+    'position:fixed;left:50%;bottom:150px;transform:translateX(-50%);pointer-events:none;' +
+      'display:none;font:500 12px/1.4 ui-monospace,Menlo,monospace;color:#bfefff;' +
+      'text-align:center;background:rgba(8,16,22,.6);border:1px solid rgba(94,239,255,.3);' +
+      'border-radius:6px;padding:6px 12px;transition:opacity .6s;white-space:nowrap;',
     'left thumb: move   ·   right thumb: aim + auto-fire'
   );
   root.appendChild(root._hint);
 
+  // FULLSCREEN — a real <button> so requestFullscreen() sees a user gesture
+  root._fs = el(
+    'button',
+    'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:22;' +
+      'display:none;align-items:center;justify-content:center;pointer-events:auto;' +
+      'cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;' +
+      'font:600 13px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;' +
+      'color:#bfefff;background:rgba(10,22,30,.66);border:1px solid rgba(94,239,255,.5);' +
+      'border-radius:8px;padding:11px 18px;',
+    '⛶  FULLSCREEN'
+  );
+  root._fs.setAttribute('data-ui', '');
+  const fsGo = (e) => {
+    if (e) e.preventDefault();
+    goFullscreen();
+  };
+  root._fs.addEventListener('click', fsGo);
+  root._fs.addEventListener('touchend', fsGo, { passive: false });
+  root.appendChild(root._fs);
+
+  // portrait: the whole game is drawn for landscape — ask for a turn
+  root._rot = el(
+    'div',
+    'position:fixed;inset:0;z-index:20;display:none;pointer-events:auto;' +
+      'flex-direction:column;align-items:center;justify-content:center;gap:16px;' +
+      'background:rgba(4,7,12,.95);color:#cfefff;text-align:center;padding:24px;' +
+      'font:600 16px/1.5 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;'
+  );
+  root._rot.setAttribute('data-ui', '');
+  root._rot.appendChild(
+    el('div', 'font-size:60px;line-height:1;transform:rotate(-90deg);opacity:.85;', '📱')
+  );
+  root._rot.appendChild(el('div', '', 'ROTATE YOUR DEVICE'));
+  root._rot.appendChild(
+    el('div', 'font-weight:400;opacity:.65;font-size:13px;', 'Gate Crawler plays in landscape')
+  );
+  root.appendChild(root._rot);
+
   document.body.appendChild(root);
+}
+
+// ---------------------------------------------------------------- fullscreen
+function fsEl() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+function fsSupported() {
+  const d = document.documentElement;
+  return !!(document.fullscreenEnabled || d.requestFullscreen || d.webkitRequestFullscreen);
+}
+function goFullscreen() {
+  if (fsEl()) return;
+  const d = document.documentElement;
+  const req = d.requestFullscreen || d.webkitRequestFullscreen || d.mozRequestFullScreen;
+  if (!req) return;
+  try {
+    const r = req.call(d);
+    if (r && r.then) r.then(lockLandscape, () => {});
+    else lockLandscape();
+  } catch (e) {
+    /* user-gesture / not-supported — nothing to do */
+  }
+}
+function lockLandscape() {
+  try {
+    const o = screen.orientation;
+    if (o && o.lock) o.lock('landscape').catch(() => {});
+  } catch (e) {
+    /* orientation lock unsupported (iOS, desktop) */
+  }
+  setTimeout(() => dispatchEvent(new Event('resize')), 120);
+}
+function isPortrait() {
+  return (window.innerHeight || 0) > (window.innerWidth || 0) + 1;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -211,8 +287,10 @@ function onTouchStart(ev) {
     // a menu / panel is up — the canvas shim turns this tap into a mouse event
     return;
   }
+  if (!ev.changedTouches) return;
   for (const t of ev.changedTouches) {
-    const bx = t.target && t.target.closest && t.target.closest('[data-code]');
+    const tgt = t.target;
+    const bx = tgt && tgt.closest && tgt.closest('[data-code]');
     if (bx) {
       pointers.set(t.identifier, { role: 'btn', code: bx.dataset.code });
       bx.style.background = 'rgba(94,239,255,.3)';
@@ -221,6 +299,8 @@ function onTouchStart(ev) {
       ev.preventDefault();
       continue;
     }
+    // fullscreen button / rotate scrim carry their own handlers — not a stick
+    if (tgt && tgt.closest && tgt.closest('[data-ui]')) continue;
     const leftSide = t.clientX < window.innerWidth * 0.5;
     const role = leftSide ? 'move' : 'aim';
     let owned = false;
@@ -244,6 +324,7 @@ function onTouchStart(ev) {
 
 function onTouchMove(ev) {
   if (!active) return;
+  if (!ev.changedTouches) return;
   let touched = false;
   for (const t of ev.changedTouches) {
     const rec = pointers.get(t.identifier);
@@ -271,6 +352,7 @@ function onTouchMove(ev) {
 }
 
 function onTouchEnd(ev) {
+  if (!ev.changedTouches) return;
   for (const t of ev.changedTouches) {
     const rec = pointers.get(t.identifier);
     if (!rec) continue;
@@ -353,11 +435,12 @@ function shimEnd(e) {
 // from a gesture handler as well as from the rAF poll.
 function syncActive() {
   if (!engaged) return;
-  // on a hybrid device a real mouse takes the screen back from touch
-  const want = !mouseMode && gameplayActive();
+  const portrait = isPortrait();
+  // on a hybrid device a real mouse takes the screen back from touch; portrait
+  // parks the sticks behind the rotate scrim
+  const want = !mouseMode && !portrait && gameplayActive();
   if (want !== active) {
     active = want;
-    root.style.display = want ? 'block' : 'none';
     if (!want) {
       pointers.clear();
       root._lStick.style.display = root._rStick.style.display = 'none';
@@ -372,6 +455,9 @@ function syncActive() {
   } else {
     for (const c in btnEls) btnEls[c].style.display = 'none';
   }
+  root._hint.style.display = active ? 'block' : 'none';
+  root._rot.style.display = !mouseMode && portrait ? 'flex' : 'none';
+  root._fs.style.display = !mouseMode && fsSupported() && !fsEl() ? 'inline-flex' : 'none';
 }
 
 // the game's state changes on its own (a run ends, a panel opens) with no
@@ -406,18 +492,39 @@ export function initTouch(cnv, gameApi) {
   canvas.addEventListener('touchcancel', shimEnd, opt);
 
   // a genuine mouse (not one we synthesised) means "this is a mouse now" — the
-  // overlay hides until the next real touch. only matters on hybrid 2-in-1s.
+  // touch UI hides until the next real touch. only matters on hybrid 2-in-1s.
   const sawMouse = () => {
-    if (!synthMouse && engaged) mouseMode = true;
+    if (synthMouse || !engaged || mouseMode) return;
+    mouseMode = true;
+    syncActive(); // don't wait for the next poll
   };
   addEventListener('mousemove', sawMouse, true);
   addEventListener('mousedown', sawMouse, true);
+
+  // entering / leaving fullscreen resizes the viewport and changes the button
+  const onFs = () => {
+    syncActive();
+    setTimeout(() => dispatchEvent(new Event('resize')), 60);
+  };
+  addEventListener('fullscreenchange', onFs);
+  addEventListener('webkitfullscreenchange', onFs);
 
   // keep the 2D canvas fitted when the mobile URL bar shows / hides / rotates
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => dispatchEvent(new Event('resize')));
   }
-  addEventListener('orientationchange', () =>
-    setTimeout(() => dispatchEvent(new Event('resize')), 120)
-  );
+  addEventListener('orientationchange', () => {
+    syncActive();
+    setTimeout(() => {
+      dispatchEvent(new Event('resize'));
+      syncActive();
+    }, 120);
+  });
+
+  // a touch device (phone / tablet) gets the overlay up front, so FULLSCREEN
+  // and the rotate hint are there on the start screen — no first tap needed
+  if (typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse)').matches) {
+    ensureEngaged();
+    syncActive();
+  }
 }

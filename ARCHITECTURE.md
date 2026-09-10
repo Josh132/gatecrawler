@@ -17,6 +17,8 @@ drain the accumulator, then `render(dt)` once. All simulation is in `update`;
 |---|---|
 | `main.js` | bootstrap: make the game, start input/audio/loop |
 | `game.js` | the state machine + every gameplay and UI **system** (see below) |
+| `enemydraw.js` | the figure/shadow render cluster: `drawShadow`, `drawHumanoid`, `drawPlayer`, `drawEnemy`, `enemyBuilds`, `FACTION_TINT` (one-way: game.js imports it) |
+| `stationpanels.js` | the between-runs SGC console screens (roster / base ops / research / infirmary / operations + war map / workbench). `renderStationPanel` in game.js routes here; game.js ↔ this file is a render-time-only import cycle |
 | `address.js` | gate glyphs, seed hashing, `neighbors(addr)`, `worldParams(addr, hop)` |
 | `worldgen.js` | `worldParams` → room graph (`buildWorld`) → tile map → offscreen `bakeWorld`; the `BIOMES` table; `TILE` / `WALL_H` |
 | `pathfind.js` | BFS flow field the enemy AI steers along |
@@ -40,7 +42,7 @@ drain the accumulator, then `render(dt)` once. All simulation is in `update`;
 | `input.js` | keyboard/mouse/gamepad capture + per-frame edge detection |
 | `loop.js` | the fixed-timestep frame runner |
 
-`game.js` is still the big one (~9k lines) but it is sectioned: open it and
+`game.js` is still the big one (~8k lines) but it is sectioned: open it and
 search for the `// ▸ ` markers. The header comment lists every section and
 restates the hard rules.
 
@@ -55,7 +57,9 @@ address string ──worldParams(addr,hop)──▶ params {faction,biome,threat
                                               │
                                      populateWorld(g)  ──▶ enemies / loot / hazards / specials
                                               │
-   update ─▶ updatePlay: input ▸ combat ▸ enemy AI ▸ specials ▸ camera ▸ audio
+   update ─▶ updatePlay: movement ▸ combat ▸ flow/room ▸ grenades ▸ heat ▸
+                         hazards ▸ enemies ▸ projectiles ▸ compact ▸ room-clears ▸
+                         camera ▸ combat-audio  (each an `update*` sub-function)
    render ─▶ computeVisPoly ▸ world bake ▸ decals ▸ entities ▸ fog ▸ lights ▸ HUD
 ```
 
@@ -121,12 +125,12 @@ done
 | add a weapon | `weapons.js`, `items.js` (the `w_*` item), `weaponmods.js` (mod list), `tech.js` (unlock node), `audio.js` (`sfx.fire` voice), `game.js ▸ combat` (`fireWeapon` if it needs special handling) |
 | add / rebalance gear | `items.js`; icon in `icons.js` |
 | change enemy behaviour | `game.js ▸ enemy AI` / `▸ new enemy kinds` / `▸ squad AI` |
-| add an enemy kind | `entities.js` (`ENEMY_KIND` + `Enemy` fields), `game.js ▸ enemy AI` (an `update<Kind>`), `game.js ▸ render` (`drawEnemy` case), `game.js` spawn tables |
+| add an enemy kind | `entities.js` (`ENEMY_KIND` + `Enemy` fields), `game.js ▸ enemy AI` (an `update<Kind>`), `enemydraw.js` (`drawEnemy` case), `game.js` spawn tables |
 | add a biome | `worldgen.js` (`BIOMES` + room dressing), `textures.js`, `audio.js` (an ambient bed), `fx.js` (`BIOME_IMPACT` entry) |
 | add a research node | `tech.js` (`TECH` + `EFFECT_APPLY`), and mirror any new default in the harness `DEFAULTS` |
 | add a campaign operation | `campaign.js` (`OPERATIONS`) |
 | tweak the SGC layout / props | `hub.js` |
 | tune particles / shake / decals | `fx.js` |
 | touch line of sight / fog | `vis.js` |
-| add a between-runs panel | `game.js ▸ roster / base ops / …` next to the existing `render<Name>Panel` |
+| add a between-runs panel | `stationpanels.js` next to the existing `render<Name>Panel`; route it in `game.js` `renderStationPanel` |
 | a new full-screen UI | **not** a new `g.state` — add a sub-mode flag and branch inside `menu`/`play`, like `renderCodex` / the pause overlay |

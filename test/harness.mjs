@@ -204,7 +204,8 @@ function checkInvariants(g, label) {
   assert(Number.isFinite(p.hp), `${label}: player hp finite`);
   assert(Number.isFinite(p.kx) && Number.isFinite(p.ky), `${label}: player knockback finite`);
   assert(Number.isFinite(p.aim), `${label}: player aim finite`);
-  assert(['menu', 'play', 'gatemap', 'dead'].includes(g.state), `${label}: valid state (${g.state})`);
+  assert(['menu', 'play', 'hub', 'gatemap', 'dead'].includes(g.state), `${label}: valid state (${g.state})`);
+  if (g.state === 'hub') assert(g.enemies.length === 0, `${label}: hub carries no enemies (${g.enemies.length})`);
   assert(g.enemies.length < 4000, `${label}: enemy count bounded (${g.enemies.length})`);
   assert(g.bullets.length < 6000, `${label}: bullet count bounded (${g.bullets.length})`);
   assert(g.particles.length < 20000, `${label}: particle count bounded (${g.particles.length})`);
@@ -966,7 +967,8 @@ section('hub: walkable SGC, station panels, deploy via the gate, persistence');
   g.state = 'menu';
   keyDown('Enter');
   tick(gApi, g);
-  assert(g.state === 'hub' && g.hub, `Enter from menu enters the hub (state=${g.state})`);
+  assert(g.state === 'hub', `Enter from menu enters the hub (state=${g.state})`);
+  checkInvariants(g, 'hub');
   assert(g.world && g.world.isHub && Array.isArray(g.world.stations) && g.world.stations.length >= 3, 'hub world has stations');
 
   // open a station panel by teleporting next to it and pressing E
@@ -1010,7 +1012,7 @@ section('hub: walkable SGC, station panels, deploy via the gate, persistence');
   assert(!!dest, 'launch map offers a destination');
   if (dest) clickAt(dest.x + dest.w / 2, dest.y + dest.h / 2);
   tick(gApi, g);
-  assert(g.state === 'play' && !g.hub, `picking a destination deploys into a run (state=${g.state})`);
+  assert(g.state === 'play', `picking a destination deploys into a run (state=${g.state})`);
   checkInvariants(g, 'hub-deploy');
   g.skipHub = true;
 }

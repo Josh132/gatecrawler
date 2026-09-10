@@ -73,7 +73,7 @@ export function addFlash(g, x, y, r, color, life) {
 // warzone. `casing` skips the local density cap; everything else thins out so
 // marks don't pile on one spot.
 export function addDecal(g, kind, x, y, r, color, ang) {
-  if (g.hub) return;
+  if (g.state === 'hub') return;
   if (kind !== 'casing') {
     let near = 0;
     for (let i = g.decals.length - 1; i >= 0 && i > g.decals.length - 40; i--) {

@@ -142,9 +142,9 @@ import {
 //    ▸ debrief            floating combat text, boss bar, unlock cards, run debrief
 //
 //  ── RULES (do not break — the harness enforces the first two) ─────────────
-//   • g.state ∈ {menu, play, gatemap, dead} ONLY. Every other screen (pause,
-//     debrief, roster, research…) is a SUB-MODE: a flag on `g` read inside an
-//     existing state, never a new g.state string.
+//   • g.state ∈ {menu, play, hub, gatemap, dead} ONLY ('hub' = walkable SGC,
+//     no enemies). Every other screen (pause, debrief, roster, research…) is a
+//     SUB-MODE: a flag on `g` read inside an existing state — add no more states.
 //   • Worldgen is seeded + deterministic. Never use Math.random() (or fx.js's
 //     `rr`) in worldgen — use the address hash stream.
 //   • ctx.textAlign / textBaseline leak between frames; render() resets them —
@@ -507,7 +507,6 @@ function enterHub(g) {
   g.decals = [];
   g.pickups = [];
   g.particles = [];
-  g.hub = true;
   g.station = null;
   g.launching = false;
   g.panelOpen = false;
@@ -571,7 +570,6 @@ function launchRun(g, addr) {
     const reg = ITEMS[e.startArmor].region;
     if (reg && !g.inv.equip[reg]) g.inv.equip[reg] = { id: e.startArmor, count: 1 };
   }
-  g.hub = false;
   g.launching = false;
   g._hubDecor = null; // drop the baked SGC dressing canvas for the run
   g.runNaq = 0;
@@ -632,7 +630,6 @@ function startWorld(g, addr, hop) {
   g.panelOpen = false;
   g.drag = null;
   g.hunterSpawned = false;
-  g.hub = false;
   // (deep-dial heat bump is applied by the gate-map dial handler)
   g._firstWorld = false;
   g.save.lastAddress = worldParams(addr, hop).address;
@@ -2030,7 +2027,7 @@ function buyFromVendor(g, v, i) {
 
 // runs from updatePlay each frame — allocation-free hot path.
 function updateSpecials(g, dt) {
-  if (!g.world || g.hub || !g.dataCores) return;
+  if (!g.world || g.state === 'hub' || !g.dataCores) return;
   const p = g.player;
   const w = g.world;
 
@@ -4745,7 +4742,7 @@ function render(g, dt) {
     else renderMenu(g);
   } else if (g.state === 'gatemap') {
     // dialling out of the hub keeps SGC behind the launch overlay, not a bare grid
-    if (g.hub) {
+    if (g.state === 'hub') {
       renderHub(g);
       ctx.fillStyle = 'rgba(4,6,12,0.72)';
       ctx.fillRect(0, 0, view.w, view.h);
@@ -5218,7 +5215,7 @@ function rarityRank(r) {
 }
 
 function drawPlayer(ctx, p, t, g) {
-  const hub = g && g.hub;
+  const hub = g && g.state === 'hub';
   // always-on locator so you never lose yourself in a busy frame
   ctx.save();
   const rg = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, p.r + 16);
@@ -6318,7 +6315,7 @@ function panelLayout(g) {
   const gx = px + panelW - gridW - 40;
   const gy = py + 70;
   const sCap = stashCap(g);
-  const stashOn = !!g.hub && !!g.stashView && sCap > 0;
+  const stashOn = g.state === 'hub' && !!g.stashView && sCap > 0;
   const rightKind = stashOn ? 'stash' : 'grid';
   const rightN = stashOn ? sCap : GRID_COLS * GRID_ROWS;
   for (let i = 0; i < rightN; i++) {
@@ -6327,7 +6324,7 @@ function panelLayout(g) {
     cells.push({ loc: { kind: rightKind, i }, x: cx, y: cy, w: S, h: S });
   }
   // BACKPACK <-> STASH toggle — only in the SGC, only once Base Stores is built
-  const stashToggle = g.hub && sCap > 0 ? { x: gx, y: py + 16, w: 150, h: 22 } : null;
+  const stashToggle = g.state === 'hub' && sCap > 0 ? { x: gx, y: py + 16, w: 150, h: 22 } : null;
 
   // requisition strip in the middle gap — draw one of each weapon unlocked in
   // Research (folded in from the old Requisitions console)
@@ -6455,7 +6452,7 @@ function panelDrop(g) {
   // scrap: break the held stack down for naquadah — the item is gone for good
   if (target && target.kind === 'scrap') {
     const gain = scrapValue({ id: d.id, count: d.count, rarity: d.rarity });
-    if (g.hub || g.state === 'hub') g.save.naquadah += gain;
+    if (g.state === 'hub') g.save.naquadah += gain;
     else g.runNaq = (g.runNaq || 0) + gain;
     sfx.scrap ? sfx.scrap() : sfx.pickup();
     g.message('Scrapped ' + (ITEMS[d.id] ? ITEMS[d.id].name : d.id) + (d.count > 1 ? ' ×' + d.count : '') + '  →  +' + gain + ' naquadah');
@@ -6511,7 +6508,7 @@ function renderPanel(g) {
   });
 
   // STASH: the between-runs chest, unlocked by the Base Stores upgrade
-  if (g.hub) {
+  if (g.state === 'hub') {
     ctx.textAlign = 'left';
     if (stashCap(g) > 0) {
       const tg = lay.stashToggle;
@@ -8816,7 +8813,7 @@ function drawFloatText(g) {
 
 // ---- boss / nexus health bar ---------------------------------------------
 function drawBossBar(g) {
-  if (!g.world || g.hub) return;
+  if (!g.world || g.state === 'hub') return;
   let e = null;
   for (const en of g.enemies) {
     if (en.alive && (en.kind === 'boss' || en.kind === 'nexus') && en.state !== 'idle') { e = en; break; }

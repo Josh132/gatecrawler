@@ -58,7 +58,7 @@ function gameplayActive() {
 }
 function inHub() {
   const g = game && game.g;
-  return !!(g && (g.state === 'hub' || g.hub));
+  return !!(g && g.state === 'hub');
 }
 
 // ---------------------------------------------------------------- DOM build

@@ -72,10 +72,11 @@ so two people can work without colliding in `game.js`.
 
 ## Architecture rules (do not break)
 
-- `checkInvariants` asserts `g.state ∈ {menu, play, gatemap, dead}` **only**. Any new UI
-  screen (pause, debrief, roster, stash, research tabs…) must be a **sub-mode** — a flag
-  on `g` read inside an existing state — never a new `g.state` string. Debrief folds onto
-  `'dead'` and reads outcome from `g.debrief`.
+- `checkInvariants` asserts `g.state ∈ {menu, play, hub, gatemap, dead}` **only**
+  (`'hub'` = the walkable SGC, no enemies). Any new UI screen (pause, debrief, roster,
+  stash, research tabs…) must be a **sub-mode** — a flag on `g` read inside an existing
+  state — never a new `g.state` string. Debrief folds onto `'dead'` and reads outcome
+  from `g.debrief`.
 - Worldgen is seeded + deterministic: `worldParams(addr, hop)`, `neighbors(addr, count)`,
   `buildWorld` → room graph, `bakeWorld` → offscreen canvas. Never introduce
   `Math.random()` into worldgen — use the address hash stream (`hashStr`). `rr` (from

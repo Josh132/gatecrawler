@@ -74,10 +74,12 @@ systems, no event bus.
 
 ## Invariants (the test harness enforces the first three)
 
-- **`g.state ∈ {menu, play, gatemap, dead}` — only.** Every other screen (pause,
-  debrief, roster, research tabs, workbench, gate map overlay…) is a **sub-mode**:
-  a flag on `g` (`g.paused`, `g.station`, `g.panelOpen`, `g.debrief`, …) read
-  inside one of those four states. The post-run debrief folds onto `'dead'`.
+- **`g.state ∈ {menu, play, hub, gatemap, dead}` — only.** Every other screen
+  (pause, debrief, roster, research tabs, workbench, gate map overlay…) is a
+  **sub-mode**: a flag on `g` (`g.paused`, `g.station`, `g.panelOpen`,
+  `g.debrief`, …) read inside one of those five states. The post-run debrief
+  folds onto `'dead'`. `'hub'` is the walkable SGC (no enemies) — the only
+  full state added past the original four; do not add more.
 - **Worldgen is seeded and deterministic.** Never call `Math.random()` — or
   `fx.js`'s `rr` — anywhere that feeds worldgen. Use the address hash stream
   (`hashStr` / `makeRng` / `rngHelpers`). `rr` is for cosmetic jitter only.

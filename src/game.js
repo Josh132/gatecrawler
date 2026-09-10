@@ -411,6 +411,7 @@ export function createGame(canvas) {
     grenades: [],
     blocks: [],
     hazards: [],
+    traps: [], // startWorld re-inits; declared here so a pre-first-world render can't trip
     flashes: [], // transient light pops (muzzle, blast) — render only
     decals: [],
     pickups: [],
@@ -4823,8 +4824,9 @@ function render(g, dt) {
     if (g.uiStack.length && g.uiRoot === 'menu') renderUiScreen(g);
     else renderMenu(g);
   } else if (g.state === 'gatemap') {
-    // dialling out of the hub keeps SGC behind the launch overlay, not a bare grid
-    if (g.state === 'hub') {
+    // dialling out of the hub (g.launching) keeps SGC behind the launch overlay;
+    // the in-run DHD map dims the world instead
+    if (g.launching) {
       renderHub(g);
       ctx.fillStyle = 'rgba(4,6,12,0.72)';
       ctx.fillRect(0, 0, view.w, view.h);

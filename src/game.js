@@ -116,6 +116,8 @@ import {
 //    icons.js       procedural item icons + rarity colour/label tables
 //    draw.js        low-level canvas toolkit (shapes, figures, text/colour utils)
 //    textures.js    procedural wall/floor/prop textures for the world bake
+//    enemydraw.js   drawShadow / drawHumanoid / drawPlayer / drawEnemy
+//    stationpanels.js  the between-runs SGC console screens (game.js routes them)
 //    fx.js          particles, screen shake, flashes, battlefield decals
 //    vis.js         line of sight, the 360° visibility polygon, fog
 //    audio.js       synth sfx + ambient beds + the music bed
@@ -128,6 +130,7 @@ import {
 //    ▸ createGame         the game object `g`, its shape, the public API
 //    ▸ run lifecycle      enterHub / launchRun / startWorld / dialHome / onDeath
 //    ▸ update             the top-level tick + updateHub + updatePlay
+//                         (updatePlay is a thin sequence of update* sub-fns)
 //    ▸ spawning           worldgen population: rooms, enemies, loot, hazards
 //    ▸ special rooms      data cores, vaults, arenas, vendors, captive escort
 //    ▸ combat             firing, bullets, alt-fires, hitEnemy, damagePlayer, kills

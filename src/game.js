@@ -1080,10 +1080,25 @@ function updateHub(g, dt) {
 }
 
 function updatePlay(g, dt) {
+  const eff = fx(g);
+  updatePlayerMovement(g, dt, eff);
+  updatePlayerCombat(g, dt, eff);
+  updateFlowAndRoom(g, dt);
+  updateGrenades(g, dt);
+  updateHeatAndStreak(g, dt);
+  updateFieldHazards(g, dt);
+  updateReformDebris(g, dt);
+  updateEnemyTick(g, dt);
+  updateProjectilesAndPickups(g, dt);
+  compactPlayEntities(g, dt);
+  updateRoomClears(g, dt);
+  updatePlayCamera(g, dt);
+  updateCombatAudio(g, dt);
+}
+
+function updatePlayerMovement(g, dt, eff) {
   const p = g.player;
   const w = g.world;
-  const eff = fx(g);
-
   // charge-based dodge: dodgeMax charges (tech), one refills every dodgeGap secs
   if (p.dodgeMax == null) p.dodgeMax = eff.dodgeCharges || 1;
   if (p.dodgeCharge == null) p.dodgeCharge = p.dodgeMax;
@@ -1174,7 +1189,12 @@ function updatePlay(g, dt) {
   } else {
     g._stepT = 0;
   }
+}
 
+function updatePlayerCombat(g, dt, eff) {
+  const p = g.player;
+  const w = g.world;
+  const stim = p.stimT > 0; // recomputed from the (unchanged) timer set in updatePlayerMovement
   // hotbar consumables / quick-heal / weapon swap / grenade
   for (let i = 0; i < HOTBAR; i++) if (pressed('Digit' + (i + 1))) useHotbar(g, i);
   if (keyHit(g, 'heal', 'KeyQ')) quickHeal(g);
@@ -1277,7 +1297,11 @@ function updatePlay(g, dt) {
       }
     }
   }
+}
 
+function updateFlowAndRoom(g, dt) {
+  const p = g.player;
+  const w = g.world;
   // flow field toward player
   g.flowT -= dt;
   if (g.flowT <= 0) {
@@ -1300,7 +1324,10 @@ function updatePlay(g, dt) {
     }
   }
   if (g.bossIntroT > 0) g.bossIntroT -= dt;
+}
 
+function updateGrenades(g, dt) {
+  const p = g.player;
   // grenades
   for (const gr of g.grenades) {
     gr.fuse -= dt;
@@ -1322,7 +1349,10 @@ function updatePlay(g, dt) {
       gr.alive = false;
     }
   }
+}
 
+function updateHeatAndStreak(g, dt) {
+  const p = g.player;
   // heat: the longer a run goes, the harder the faction hunts you
   g.heat += dt * 0.048 * (fx(g).heatMul || 1) * worldMods(g).heatMul;
   if (g.heat >= 0.8 && !(g.save.hints && g.save.hints.heat))
@@ -1333,7 +1363,10 @@ function updatePlay(g, dt) {
     g.killStreakT -= dt;
     if (g.killStreakT <= 0) g.killStreak = 0;
   }
+}
 
+function updateFieldHazards(g, dt) {
+  const p = g.player;
   // area hazards: grenadier plasma pools + the per-biome field hazards.
   // p._slow is rebuilt here every frame; player/enemy movement reads it next tick.
   p._slow = 1;
@@ -1409,7 +1442,10 @@ function updatePlay(g, dt) {
     }
   }
   updateTraps(g, dt);
+}
 
+function updateReformDebris(g, dt) {
+  const p = g.player;
   // reassembly debris from Replicator brutes
   for (const bl of g.blocks) {
     bl.mergeT -= dt;
@@ -1443,7 +1479,11 @@ function updatePlay(g, dt) {
       }
     }
   }
+}
 
+function updateEnemyTick(g, dt) {
+  const p = g.player;
+  const w = g.world;
   // squad coordination: rebuilt once per frame, drives per-enemy modifiers
   updateSquads(g, dt);
 
@@ -1515,7 +1555,10 @@ function updatePlay(g, dt) {
       migrants[i].cover = null;
     }
   }
+}
 
+function updateProjectilesAndPickups(g, dt) {
+  const p = g.player;
   for (const b of g.bullets) updateBullet(g, b, dt);
 
   for (const pk of g.pickups) {
@@ -1535,7 +1578,10 @@ function updatePlay(g, dt) {
   // hard cap — many simultaneous blasts (grenade spam, a brute shattering in a
   // crowd) can otherwise spike this into the tens of thousands. keep the newest.
   if (g.particles.length > 3000) g.particles.splice(0, g.particles.length - 3000);
+}
 
+function compactPlayEntities(g, dt) {
+  const p = g.player;
   updateSpecials(g, dt);
 
   g.enemies = g.enemies.filter((e) => e.alive);
@@ -1549,7 +1595,11 @@ function updatePlay(g, dt) {
   g.particles = g.particles.filter((x) => x.alive);
   for (const f of g.flashes) f.t -= dt;
   g.flashes = g.flashes.filter((f) => f.t > 0);
+}
 
+function updateRoomClears(g, dt) {
+  const p = g.player;
+  const w = g.world;
   // room-cleared checks
   for (const rm of w.rooms) {
     if (rm.populated && !rm.cleared && !g.enemies.some((e) => e._room === rm)) {
@@ -1588,7 +1638,10 @@ function updatePlay(g, dt) {
   }
 
   if (p.hp <= 0 && p.alive) onDeath(g);
+}
 
+function updatePlayCamera(g, dt) {
+  const p = g.player;
   // camera look-ahead: blend where you're aiming with where you're moving so
   // the view leads the action without snapping around every time you flick aim
   const camSpd = Math.hypot(p.vx || 0, p.vy || 0);
@@ -1603,7 +1656,11 @@ function updatePlay(g, dt) {
   if (g.shake < 0.2) g.shake = 0;
 
   updateFloats(g, dt); // rising damage / reward ticks
+}
 
+function updateCombatAudio(g, dt) {
+  const p = g.player;
+  const w = g.world;
   // audio: ambient bed tracks the threat, plus a low-HP heartbeat.
   // inputs: heat, whether we're actively fighting, nearby active enemy count,
   // a live boss (floors intensity), and standing on an un-dialled DHD.

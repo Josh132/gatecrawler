@@ -188,6 +188,8 @@ export function defaultSave() {
     campaign: { op: null, progress: {}, completed: [], milestone: 0, won: false },
     // { [enemyKind]: { seen: n, killed: n } }
     bestiary: {},
+    // contextual first-encounter field notes already shown: { [hintId]: true }
+    hints: {},
     // key rebinds + a couple of toggles; audio volume persists separately
     settings: {
       binds: {}, // { action: KeyboardEvent.code }
@@ -598,6 +600,8 @@ function enterHub(g) {
   }
   persist(g.save);
   queueTips(g, HUB_TIPS, 'hub', false); // first-run tutorial: hub orientation prompt
+  if ((g.save.runs || 0) === 0)
+    hint(g, 'run101', 'This is the SGC. Gear up at the consoles (walk over, press E), then step into the gate. A run is: fight room to room, clear the DHD, then dial DEEPER for reward or HOME to bank it. Naquadah buys research and base upgrades; intel unlocks deeper tech; salvage (from scrapped weapons) buys weapon mods.');
   g.message(g.save.runs > 0 ? 'Welcome back to Stargate Command — Level 28' : 'Stargate Command — Level 28');
 }
 
@@ -917,6 +921,7 @@ function update(g, dt) {
   }
 
   if ((g.state === 'play' || g.state === 'hub') && !g.panelOpen && !g.station) updateTips(g, dt);
+  updateHint(g, dt);
   feedAimAssist(g);
 
   g.mouseWasDown = mouse.down;
@@ -1049,6 +1054,8 @@ function updateHub(g, dt) {
       // operations each open their own station panel (renderStationPanel routes)
       if (near.kind === 'armory') g.panelOpen = true;
       else g.station = near.kind;
+      if (near.kind === 'workbench') hint(g, 'workbench', 'The Workbench spends SALVAGE to raise weapon mastery and fit mods. Salvage comes from scrapping duplicate weapons in the Armory loadout screen. A tier-2 mod unlocks that weapon\u2019s alt-fire (right-click / the ALT button on touch).');
+      if (near.kind === 'research') hint(g, 'research', 'Research is permanent and shared across every run. Tier gates open as you complete campaign Operations \u2014 check the Briefing Room for the current objective.');
     } else if (g._atGate || g._atDialer) {
       g.launching = true;
       buildGateMap(g);
@@ -1316,6 +1323,8 @@ function updatePlay(g, dt) {
 
   // heat: the longer a run goes, the harder the faction hunts you
   g.heat += dt * 0.048 * (fx(g).heatMul || 1) * worldMods(g).heatMul;
+  if (g.heat >= 0.8 && !(g.save.hints && g.save.hints.heat))
+    hint(g, 'heat', 'The faction has noticed you. The hunt only grows while a run goes on — at SWARM a Hunter starts tracking you across the whole map. Clear fast, or dial out.');
   if (!g.hunterSpawned && g.heat >= 2) spawnHunter(g);
 
   if (g.killStreakT > 0) {
@@ -1547,6 +1556,7 @@ function updatePlay(g, dt) {
       if (rm.kind === 'dhd') {
         g.dhdActive = true;
         g.message('DHD online — approach and press E to dial');
+        hint(g, 'dhd', 'At the DHD, press E to open the gate map. Dial DEEPER for higher threat, better loot and more heat — or HOME to bank your naquadah and end the run. Death only costs half your unbanked naquadah; equipped gear is safe.');
         sfx.pickup();
       } else {
         g.message('Sector clear');
@@ -2152,6 +2162,7 @@ function updateSpecials(g, dt) {
     if (!a.locked && a.wave === 0 && inside) {
       a.locked = true;
       a.wave = 1;
+      hint(g, 'special', 'Some rooms are set-pieces: an arena locks you in until you survive its waves (then drops a cache), a vault has a timed seal, a vendor sells gear for naquadah. Clear-room rewards beat waiting one out.');
       a.t = 0;
       for (let k = 0; k < g.enemies.length; k++) {
         const e = g.enemies[k];
@@ -2224,6 +2235,7 @@ function updateSpecials(g, dt) {
         cap.freed = true;
         cap.follow = true;
         g.message(cap.name + ' — on your six');
+        hint(g, 'captive', 'Escort this operative to the gate room alive and dial out — you permanently recover their SG team as a passive bonus. They can take fire, so keep them behind you.');
         if (sfx.pickup) sfx.pickup();
       }
       continue;
@@ -4813,6 +4825,7 @@ function render(g, dt) {
   }
   drawUnlockCard(g, dt); // sliding reward card — above everything but postfx
   if ((g.state === 'play' || g.state === 'hub') && !g.paused) renderTips(g, dt);
+  if (!g.paused && !g.panelOpen && !g.station && !g.uiStack.length) renderHint(g);
   if (g.paused) renderPause(g);
 
   // final grade — bloom, filmic tone, vignette, grain — on a stacked gl canvas.
@@ -7570,6 +7583,51 @@ function renderTips(g, dt) {
   ctx.textAlign = 'right';
   ctx.fillText('any key →', bx + bw - 10, by + bh - 8);
   ctx.textAlign = 'left';
+}
+
+// ---- contextual field notes ----------------------------------------
+// one-shot prompts fired the first time the player meets a system. Keyed by id
+// on g.save.hints so each shows exactly once, ever — independent of the
+// seenTutorial one-shot gate above.
+function hint(g, id, txt) {
+  if (!g.save.hints || typeof g.save.hints !== 'object') g.save.hints = {};
+  if (g.save.hints[id]) return;
+  g.save.hints[id] = true;
+  persist(g.save);
+  g.hintCard = { txt, t: 9 };
+}
+function updateHint(g, dt) {
+  if (!g.hintCard) return;
+  g.hintCard.t -= dt;
+  if (g.hintCard.t <= 0 || pressed('Escape') || pressed('Enter')) g.hintCard = null;
+}
+function renderHint(g) {
+  const c = g.hintCard;
+  if (!c) return;
+  const { ctx, view } = g;
+  textReset(ctx);
+  ctx.font = '12px monospace';
+  const bw = Math.min(560, view.w - 60);
+  const lines = wrapLines(ctx, c.txt, bw - 28);
+  const bh = 30 + lines.length * 16;
+  const bx = (view.w - bw) / 2;
+  const by = 70;
+  ctx.globalAlpha = Math.max(0, Math.min(1, c.t) * Math.min(1, (9 - c.t) * 3));
+  ctx.fillStyle = 'rgba(8,14,22,0.95)';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = 'rgba(255,200,110,0.75)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = '#fd9';
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('FIELD NOTE', bx + 12, by + 15);
+  ctx.fillStyle = '#eef';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  lines.forEach((ln, i) => ctx.fillText(ln, view.w / 2, by + 30 + i * 16));
+  ctx.globalAlpha = 1;
+  textReset(ctx);
 }
 
 // ---- reset campaign ---------------------------------------------------

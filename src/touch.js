@@ -3,12 +3,19 @@
 //
 // This module owns NO game state. It translates gestures into the exact same
 // `keys` / `mouse` primitives the keyboard+mouse path already writes, plus
-// `injectPress()` for one-frame button taps — so game.js needs no changes.
+// `injectPress()` for one-frame button taps — so game.js barely changes.
 //
 //   left  half  -> movement stick   -> latches WASD in `keys`
 //   right half  -> aim stick        -> parks a synthetic cursor + holds fire
+//                                      (game.js reads touchFiring() so every
+//                                       weapon auto-fires while it's held)
 //   edge buttons-> injectPress(code) -> dodge / reload / heal / nade / swap /
 //                                       interact / inventory / pause
+//
+// NOTHING is built and NO overlay exists until the first real `touchstart`, so
+// a plain desktop (mouse only) is completely untouched. On a hybrid machine the
+// overlay hides again the moment a real mouse move is seen, and returns on the
+// next touch.
 //
 // While a menu / panel / debrief is up the overlay hides itself and taps on the
 // canvas are forwarded as synthetic mouse events, which drive every existing
@@ -19,26 +26,25 @@ import { keys, mouse, injectPress } from './input.js';
 const MOVE_ON = 0.30; // stick magnitude that latches a direction key
 const STICK_R = 62; // px travel that = full deflection
 const AIM_DIR = { x: 1, y: 0 }; // last aim direction (kept after release)
+const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
 
 let game = null;
 let canvas = null;
-let root = null; // the #touch overlay container
+let root = null; // the #touch overlay container (built lazily)
+let engaged = false; // has a real touch ever happened?
 let active = false; // is the overlay currently shown / capturing?
-const btnEls = {}; // code -> element
-const MOVE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+let aimFiring = false; // an aim finger is down -> hold fire
+let mouseMode = false; // a real mouse is in use -> keep the overlay hidden
+let synthMouse = false; // set while we dispatch our own mouse events (menu shim)
+const btnEls = {};
+const pointers = new Map(); // touch identifier -> { role, ... }
 
-// live pointer bookkeeping (multi-touch): identifier -> role record
-const pointers = new Map();
-
-function isTouchDevice() {
-  return (
-    (typeof matchMedia === 'function' && matchMedia('(any-pointer: coarse)').matches) ||
-    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
-    'ontouchstart' in window
-  );
+// game.js imports this: true while the aim stick is being held
+export function touchFiring() {
+  return aimFiring;
 }
 
-// gameplay = twin-stick is meaningful (world is being driven directly)
+// gameplay = the twin-stick is meaningful (world is driven directly)
 function gameplayActive() {
   const g = game && game.g;
   if (!g) return false;
@@ -61,42 +67,45 @@ function el(tag, css, txt) {
 }
 
 const BTN_CSS =
-  'position:fixed;display:flex;align-items:center;justify-content:center;' +
-  'width:58px;height:58px;border-radius:50%;pointer-events:auto;' +
-  'font:600 15px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.02em;' +
-  'color:#bfefff;background:rgba(10,22,30,.44);border:1px solid rgba(94,239,255,.45);' +
+  'position:fixed;display:none;align-items:center;justify-content:center;' +
+  'width:56px;height:56px;border-radius:50%;pointer-events:auto;' +
+  'font:600 13px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.03em;' +
+  'color:#bfefff;background:rgba(10,22,30,.42);border:1px solid rgba(94,239,255,.42);' +
   'box-shadow:0 0 12px rgba(0,0,0,.35);user-select:none;-webkit-user-select:none;' +
-  'text-align:center;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);' +
+  'text-align:center;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);' +
   'transition:background .08s,transform .08s;touch-action:none;';
 
-// [code, label, corner, stackIndex, onlyPlay]
+// [code, label, side, slot, onlyPlay]
+//   side: 'tl' 'tr' top corners · 'rc' right-edge column · 'lc' left-edge column
 const BUTTONS = [
   ['Escape', '❚❚', 'tl', 0, false],
   ['Tab', 'BAG', 'tr', 0, false],
-  ['KeyE', 'USE', 'bl', 0, false],
-  ['KeyX', 'SWP', 'bl', 1, true],
-  ['KeyG', 'NADE', 'bl', 2, true],
-  ['Space', 'ROLL', 'br', 0, true],
-  ['KeyR', 'RLD', 'br', 1, true],
-  ['KeyQ', 'MED', 'br', 2, true],
+  ['Space', 'ROLL', 'rc', 0, true],
+  ['KeyR', 'RLD', 'rc', 1, true],
+  ['KeyQ', 'MED', 'rc', 2, true],
+  ['KeyG', 'NADE', 'lc', 0, true],
+  ['KeyX', 'SWAP', 'lc', 1, true],
+  ['KeyE', 'USE', 'lc', 2, false],
 ];
 
-function placeButton(e, corner, i) {
-  const gap = 70;
-  const m = 14;
+function placeButton(e, side, slot) {
+  const m = 12;
+  const step = 64;
   e.style.left = e.style.right = e.style.top = e.style.bottom = 'auto';
-  if (corner === 'tl') {
+  if (side === 'tl') {
     e.style.left = m + 'px';
     e.style.top = m + 'px';
-  } else if (corner === 'tr') {
+  } else if (side === 'tr') {
     e.style.right = m + 'px';
     e.style.top = m + 'px';
-  } else if (corner === 'bl') {
-    e.style.left = m + i * gap + 'px';
-    e.style.bottom = m + 'px';
+  } else if (side === 'rc') {
+    // right edge, a column starting a little above vertical centre — clear of
+    // where a thumb naturally rests to work the aim stick (bottom-right)
+    e.style.right = m + 'px';
+    e.style.top = `calc(42% + ${slot * step}px)`;
   } else {
-    e.style.right = m + i * gap + 'px';
-    e.style.bottom = m + 'px';
+    e.style.left = m + 'px';
+    e.style.top = `calc(42% + ${slot * step}px)`;
   }
 }
 
@@ -108,25 +117,21 @@ function buildOverlay() {
   );
   root.id = 'touch';
 
-  // faint "home" rings hint where the two sticks live
   const ringCss =
-    'position:fixed;bottom:26px;width:118px;height:118px;border-radius:50%;' +
-    'border:1px dashed rgba(120,200,225,.22);pointer-events:none;';
-  root._lHint = el('div', ringCss + 'left:26px;');
-  root._rHint = el('div', ringCss + 'right:26px;');
-  root.appendChild(root._lHint);
-  root.appendChild(root._rHint);
+    'position:fixed;bottom:24px;width:116px;height:116px;border-radius:50%;' +
+    'border:1px dashed rgba(120,200,225,.20);pointer-events:none;';
+  root.appendChild(el('div', ringCss + 'left:24px;'));
+  root.appendChild(el('div', ringCss + 'right:24px;'));
 
-  // live stick knobs (shown only while a finger drives them)
   const knobCss =
-    'position:fixed;width:118px;height:118px;margin:-59px 0 0 -59px;border-radius:50%;' +
-    'border:1px solid rgba(94,239,255,.4);background:rgba(10,22,30,.28);' +
+    'position:fixed;width:116px;height:116px;margin:-58px 0 0 -58px;border-radius:50%;' +
+    'border:1px solid rgba(94,239,255,.38);background:rgba(10,22,30,.26);' +
     'pointer-events:none;display:none;';
-  root._lStick = el('div', knobCss);
-  root._rStick = el('div', knobCss);
   const dotCss =
     'position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;' +
-    'border-radius:50%;background:rgba(94,239,255,.28);border:1px solid rgba(94,239,255,.6);';
+    'border-radius:50%;background:rgba(94,239,255,.26);border:1px solid rgba(94,239,255,.6);';
+  root._lStick = el('div', knobCss);
+  root._rStick = el('div', knobCss);
   root._lStick._dot = el('div', dotCss);
   root._rStick._dot = el('div', dotCss);
   root._lStick.appendChild(root._lStick._dot);
@@ -134,21 +139,21 @@ function buildOverlay() {
   root.appendChild(root._lStick);
   root.appendChild(root._rStick);
 
-  for (const [code, label, corner, i] of BUTTONS) {
+  for (const [code, label, side, slot] of BUTTONS) {
     const b = el('div', BTN_CSS, label);
     b.dataset.code = code;
-    placeButton(b, corner, i);
+    placeButton(b, side, slot);
     btnEls[code] = b;
     root.appendChild(b);
   }
 
   root._hint = el(
     'div',
-    'position:fixed;left:50%;top:12px;transform:translateX(-50%);pointer-events:none;' +
+    'position:fixed;left:50%;top:10px;transform:translateX(-50%);pointer-events:none;' +
       'font:500 12px/1.4 ui-monospace,Menlo,monospace;color:#bfefff;text-align:center;' +
       'background:rgba(8,16,22,.6);border:1px solid rgba(94,239,255,.3);border-radius:6px;' +
       'padding:6px 12px;transition:opacity .6s;white-space:nowrap;',
-    'left thumb — move    ·    right thumb — aim & fire'
+    'left thumb: move   ·   right thumb: aim + auto-fire'
   );
   root.appendChild(root._hint);
 
@@ -171,9 +176,12 @@ function releaseAll() {
   for (const k of MOVE_KEYS) keys.delete(k);
   mouse.down = false;
   mouse.right = false;
-  for (const c in btnEls) btnEls[c].style.background = 'rgba(10,22,30,.44)';
+  aimFiring = false;
+  for (const c in btnEls) {
+    btnEls[c].style.background = 'rgba(10,22,30,.42)';
+    btnEls[c].style.transform = 'scale(1)';
+  }
 }
-
 function applyAim() {
   const w = window.innerWidth || 960;
   const h = window.innerHeight || 600;
@@ -181,67 +189,88 @@ function applyAim() {
   mouse.x = w / 2 + AIM_DIR.x * reach;
   mouse.y = h / 2 + AIM_DIR.y * reach;
 }
+function anyAim() {
+  for (const p of pointers.values()) if (p.role === 'aim') return true;
+  return false;
+}
 
 // ---------------------------------------------------------------- gestures
-function onStart(ev) {
-  if (!active) return;
+function ensureEngaged() {
+  if (engaged) return;
+  engaged = true;
+  buildOverlay();
+  requestAnimationFrame(refresh);
+}
+
+function onTouchStart(ev) {
+  mouseMode = false;
+  ensureEngaged();
+  syncActive(); // flip the overlay on *now*, not one rAF later, so this very
+  //              first touch already lands on a stick
+  if (!active) {
+    // a menu / panel is up — the canvas shim turns this tap into a mouse event
+    return;
+  }
   for (const t of ev.changedTouches) {
     const bx = t.target && t.target.closest && t.target.closest('[data-code]');
     if (bx) {
-      const code = bx.dataset.code;
-      pointers.set(t.identifier, { role: 'btn', code });
+      pointers.set(t.identifier, { role: 'btn', code: bx.dataset.code });
       bx.style.background = 'rgba(94,239,255,.3)';
       bx.style.transform = 'scale(.92)';
-      injectPress(code);
+      injectPress(bx.dataset.code);
       ev.preventDefault();
       continue;
     }
     const leftSide = t.clientX < window.innerWidth * 0.5;
-    // one finger per stick — a second touch on an owned side is ignored
-    const owned = [...pointers.values()].some((p) => p.role === (leftSide ? 'move' : 'aim'));
+    const role = leftSide ? 'move' : 'aim';
+    let owned = false;
+    for (const p of pointers.values()) if (p.role === role) owned = true;
     if (owned) continue;
-    const rec = { role: leftSide ? 'move' : 'aim', ox: t.clientX, oy: t.clientY };
-    pointers.set(t.identifier, rec);
+    pointers.set(t.identifier, { role, ox: t.clientX, oy: t.clientY });
     const stick = leftSide ? root._lStick : root._rStick;
     stick.style.left = t.clientX + 'px';
     stick.style.top = t.clientY + 'px';
     stick.style.display = 'block';
     stick._dot.style.transform = 'translate(0,0)';
-    if (!leftSide) mouse.down = true;
+    if (!leftSide) {
+      aimFiring = true;
+      mouse.down = true;
+      applyAim();
+    }
     ev.preventDefault();
   }
   fadeHint();
 }
 
-function onMove(ev) {
+function onTouchMove(ev) {
   if (!active) return;
   let touched = false;
   for (const t of ev.changedTouches) {
     const rec = pointers.get(t.identifier);
     if (!rec || rec.role === 'btn') continue;
     touched = true;
-    let dx = t.clientX - rec.ox;
-    let dy = t.clientY - rec.oy;
+    const dx = t.clientX - rec.ox;
+    const dy = t.clientY - rec.oy;
     const len = Math.hypot(dx, dy) || 1;
     const cl = Math.min(len, STICK_R);
-    const nx = (dx / len) * (cl / STICK_R);
-    const ny = (dy / len) * (cl / STICK_R);
     const stick = rec.role === 'move' ? root._lStick : root._rStick;
     stick._dot.style.transform = `translate(${(dx / len) * cl}px,${(dy / len) * cl}px)`;
     if (rec.role === 'move') {
-      setMoveKeys(nx, ny);
+      setMoveKeys((dx / len) * (cl / STICK_R), (dy / len) * (cl / STICK_R));
     } else {
       if (len > 8) {
         AIM_DIR.x = dx / len;
         AIM_DIR.y = dy / len;
       }
+      aimFiring = true;
+      mouse.down = true;
       applyAim();
     }
   }
   if (touched) ev.preventDefault();
 }
 
-function onEnd(ev) {
+function onTouchEnd(ev) {
   for (const t of ev.changedTouches) {
     const rec = pointers.get(t.identifier);
     if (!rec) continue;
@@ -249,34 +278,40 @@ function onEnd(ev) {
     if (rec.role === 'btn') {
       const b = btnEls[rec.code];
       if (b) {
-        b.style.background = 'rgba(10,22,30,.44)';
+        b.style.background = 'rgba(10,22,30,.42)';
         b.style.transform = 'scale(1)';
       }
-      continue;
-    }
-    if (rec.role === 'move') {
+    } else if (rec.role === 'move') {
       for (const k of MOVE_KEYS) keys.delete(k);
-      root._lStick.style.display = 'none';
+      if (root) root._lStick.style.display = 'none';
     } else {
-      root._rStick.style.display = 'none';
-      // fire stays down only while some aim finger remains
-      if (![...pointers.values()].some((p) => p.role === 'aim')) mouse.down = false;
+      if (root) root._rStick.style.display = 'none';
+      if (!anyAim()) {
+        aimFiring = false;
+        mouse.down = false;
+      }
     }
   }
   if (ev.cancelable) ev.preventDefault();
 }
 
 // ---------------------------------------------------------------- menu shim
-// while the overlay is hidden, forward canvas taps as synthetic mouse events
+// while the overlay is not capturing, forward canvas taps as synthetic mouse
+// events so every existing click / panelPick / panelDrop / pmouse path works.
 let shimId = null;
 let lastShimY = 0;
 function dispatchMouse(type, x, y) {
+  synthMouse = true;
   canvas.dispatchEvent(
     new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true })
   );
+  synthMouse = false;
 }
 function shimStart(e) {
-  if (active || gameplayActive()) return;
+  mouseMode = false;
+  ensureEngaged();
+  syncActive();
+  if (active) return; // overlay owns the screen
   const t = e.changedTouches[0];
   if (!t) return;
   shimId = t.identifier;
@@ -314,14 +349,17 @@ function shimEnd(e) {
 }
 
 // ---------------------------------------------------------------- lifecycle
-function refresh() {
-  const want = gameplayActive();
+// decide whether the overlay is shown / capturing. safe to call synchronously
+// from a gesture handler as well as from the rAF poll.
+function syncActive() {
+  if (!engaged) return;
+  // on a hybrid device a real mouse takes the screen back from touch
+  const want = !mouseMode && gameplayActive();
   if (want !== active) {
     active = want;
     root.style.display = want ? 'block' : 'none';
-    root.style.pointerEvents = want ? 'auto' : 'none';
     if (!want) {
-      for (const id of [...pointers.keys()]) pointers.delete(id);
+      pointers.clear();
       root._lStick.style.display = root._rStick.style.display = 'none';
       releaseAll();
     }
@@ -331,7 +369,16 @@ function refresh() {
     for (const [code, , , , onlyPlay] of BUTTONS) {
       btnEls[code].style.display = onlyPlay && hub ? 'none' : 'flex';
     }
+  } else {
+    for (const c in btnEls) btnEls[c].style.display = 'none';
   }
+}
+
+// the game's state changes on its own (a run ends, a panel opens) with no
+// gesture to react to, so poll once per frame too.
+function refresh() {
+  if (!engaged) return;
+  syncActive();
   requestAnimationFrame(refresh);
 }
 
@@ -339,47 +386,38 @@ function fadeHint() {
   if (!root._hint || root._hint._done) return;
   root._hint._done = true;
   setTimeout(() => {
-    root._hint.style.opacity = '0';
+    if (root._hint) root._hint.style.opacity = '0';
   }, 3500);
 }
 
 export function initTouch(cnv, gameApi) {
   canvas = cnv;
   game = gameApi;
-  if (!isTouchDevice()) {
-    // still arm a one-shot: a hybrid device may touch later
-    const arm = () => {
-      removeEventListener('touchstart', arm);
-      startTouch();
-    };
-    addEventListener('touchstart', arm, { passive: true });
-    return;
-  }
-  startTouch();
-}
-
-let started = false;
-function startTouch() {
-  if (started) return;
-  started = true;
-  buildOverlay();
 
   const opt = { passive: false };
-  root.addEventListener('touchstart', onStart, opt);
-  root.addEventListener('touchmove', onMove, opt);
-  root.addEventListener('touchend', onEnd, opt);
-  root.addEventListener('touchcancel', onEnd, opt);
+  addEventListener('touchstart', onTouchStart, opt);
+  addEventListener('touchmove', onTouchMove, opt);
+  addEventListener('touchend', onTouchEnd, opt);
+  addEventListener('touchcancel', onTouchEnd, opt);
 
   canvas.addEventListener('touchstart', shimStart, opt);
   canvas.addEventListener('touchmove', shimMove, opt);
   canvas.addEventListener('touchend', shimEnd, opt);
   canvas.addEventListener('touchcancel', shimEnd, opt);
 
-  // keep the 2D canvas fitted when the mobile URL bar shows / hides
+  // a genuine mouse (not one we synthesised) means "this is a mouse now" — the
+  // overlay hides until the next real touch. only matters on hybrid 2-in-1s.
+  const sawMouse = () => {
+    if (!synthMouse && engaged) mouseMode = true;
+  };
+  addEventListener('mousemove', sawMouse, true);
+  addEventListener('mousedown', sawMouse, true);
+
+  // keep the 2D canvas fitted when the mobile URL bar shows / hides / rotates
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => dispatchEvent(new Event('resize')));
   }
-  addEventListener('orientationchange', () => setTimeout(() => dispatchEvent(new Event('resize')), 120));
-
-  requestAnimationFrame(refresh);
+  addEventListener('orientationchange', () =>
+    setTimeout(() => dispatchEvent(new Event('resize')), 120)
+  );
 }

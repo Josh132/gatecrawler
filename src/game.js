@@ -1,4 +1,5 @@
 import { keys, mouse, pressed, endFrameInput, captureNextKey, setAimAssistTargets } from './input.js';
+import { touchFiring } from './touch.js';
 import { WEAPONS } from './weapons.js';
 import { sfx, music, ambient, setSfxVolume, getSfxVolume, toggleMute, isMuted } from './audio.js';
 import { TAU, clamp, glowCircle, shade, figure, spider, critter, hexA, textReset, wrapLines, wrapText } from './draw.js';
@@ -1171,7 +1172,8 @@ function updatePlay(g, dt) {
   } else {
     if (p.beam && p.beam.on) { sfx.beam(false); p.beam.on = false; }
     const mdEdge = mouse.down && !g.mouseWasDown;
-    const wantFire = wp.auto ? mouse.down : mdEdge;
+    // the touch aim-stick has no separate trigger — holding it fires every weapon
+    const wantFire = wp.auto || touchFiring() ? mouse.down : mdEdge;
     const blocked = g.emp && wp.energy;
     const canAct = p.cool <= 0 && p.dodge <= 0 && p.stun <= 0 && p.reloadT <= 0;
     const ammoOK = hasMag ? (p.mag[wid] || 0) > 0 : wp.ammoMax === Infinity || (p.ammo[wid] || 0) > 0;
